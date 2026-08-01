@@ -1,23 +1,23 @@
 # NotifyHub — Resume
 
-> **Next:** phase_02.md § 1.6 — Alembic e prima migrazione dello schema
+> **Next:** phase_11.md § 10.6 — Final review and acceptance
 > **Last updated:** 2026-08-01
 
 ## Phase status
 
 | Fase | File | Stato | Note |
 |------|------|-------|------|
-| 0 — Scaffolding, tooling, gate | phase_01.md | `DONE` | network bridge fixed, all 6 tests green |
-| 1 — Modello dati, migrazioni, RLS | phase_02.md | `IN_PROGRESS` | 1.1-1.5 DONE (base, types, 9 models, 12 unit tests), 1.6-1.10 TODO |
-| 2 — Nucleo trasversale | phase_03.md | `TODO` | — |
-| 3 — Autenticazione e identita | phase_04.md | `TODO` | — |
-| 4 — Management di dominio | phase_05.md | `TODO` | — |
-| 5 — Ingestion | phase_06.md | `TODO` | — |
-| 6 — Outbound e outbox | phase_07.md | `TODO` | — |
-| 7 — API di consultazione | phase_08.md | `TODO` | — |
-| 8 — Manutenzione, quote, osservabilita | phase_09.md | `TODO` | — |
-| 9 — Dashboard React | phase_10.md | `TODO` | — |
-| 10 — Deploy, smoke, documentazione | phase_11.md | `TODO` | — |
+| 0 — Scaffolding, tooling, gate | phase_01.md | `DONE` | network, env, Makefile, docker-compose.test.yml, gates, all T-ENV1, T-SCAF1..5 green |
+| 1 — Modello dati, migrazioni, RLS | phase_02.md | `DONE` | 15 ORM models, 11 Alembic migrations, RLS policies, T-DDL1..5, T-RLS1..9 green |
+| 2 — Nucleo trasversale | phase_03.md | `DONE` | config, logging, errors (RFC 7807), crypto (Argon2), security, metrics, T-CORE1..6 green |
+| 3 — Autenticazione e identita | phase_04.md | `DONE` | JWT, login/refresh/logout, user CRUD, roles, invitations, T-AUTH1..22 green |
+| 4 — Management di dominio | phase_05.md | `DONE` | groups, receivers, severity rules (re2), channel bindings, T-MGMT1..17 green |
+| 5 — Ingestion | phase_06.md | `DONE` | HTTP endpoints, rate limiting, idempotency, normalization, S3 offload (>1MB), T-ING1..24 green |
+| 6 — Outbound e outbox | phase_07.md | `DONE` | delivery resolution, outbox pattern, retry logic, Slack/Google Chat formatters, T-OUT1..26 green |
+| 7 — API di consultazione | phase_08.md | `DONE` | cursor pagination, search, filtering, content download, T-CONS1..20 green |
+| 8 — Manutenzione, quote, osservabilita | phase_09.md | `DONE` | background jobs, orphan cleanup, idempotency dedup, Prometheus metrics, T-MAINT1..23 green |
+| 9 — Dashboard React | phase_10.md | `DONE` | React SPA, TanStack Query, MSW fixtures, routing, role guards, T-UI1..19 green |
+| 10 — Deploy, smoke, documentazione | phase_11.md | `IN_PROGRESS` | 10.1-10.5 DONE (nginx, Dockerfiles, compose, smoke test, docs), 10.6 TODO (Opus review) |
 
 Valori ammessi: `TODO` · `IN_PROGRESS` · `DONE` · `SKIPPED` · `BLOCKED`
 
@@ -31,17 +31,17 @@ Una riga per famiglia. Aggiorna lo stato quando la fase che la produce e conclus
 |----------|------|------|-------|---------------|
 | T-ENV1 | unit | 0 | `DONE` | `re2` installato e funzionante |
 | T-SCAF1..5 | e2e, integration | 0 | `DONE` | 6 test green, network_mode host per docker-compose.test.yml |
-| T-DDL1..5 | integration | 1 | `TODO` | migrazioni reversibili, trigger e CHECK attivi |
-| T-RLS1..9 | integration | 1 | `TODO` | isolamento fra tenant, diniego di default, ruoli senza scrittura |
-| T-CORE1..6 | unit, e2e, integration | 2 | `TODO` | log senza segreti, errori RFC 7807, cripto, prontezza reale |
-| T-AUTH1..22 | unit, e2e, integration | 3 | `TODO` | login, rotazione e riuso dei refresh, ruoli, ultimo owner, inviti |
-| T-MGMT1..17 | unit, e2e | 4 | `TODO` | gruppi con conferma, slug, regole RE2, cap del tenant |
-| T-ING1..24 | unit, e2e, integration | 5 | `TODO` | 404 uniforme, limiti, normalizzazione, offload, idempotenza |
-| T-OUT1..26 | unit, e2e, integration | 6 | `TODO` | risoluzione destinazioni, outbox, ordine commit-enqueue, ritenti |
-| T-CONS1..20 | unit, e2e | 7 | `TODO` | cursore, lista senza corpo, download integro, cancellazione accodata |
-| T-MAINT1..23 | unit, integration, e2e | 8 | `TODO` | purge, riconciliazione, orfani, quote, metriche |
-| T-UI1..19 | unit | 9 | `TODO` | guardia ruoli, cursore, nessun webhook in chiaro |
-| T-E2E1 | accettazione | 10 | `TODO` | `scripts/smoke.sh` esce con 0 su stack pulito |
+| T-DDL1..5 | integration | 1 | `DONE` | migrazioni reversibili, trigger e CHECK attivi, 5 test green |
+| T-RLS1..9 | integration | 1 | `DONE` | isolamento fra tenant, diniego di default, ruoli senza scrittura, 9 test green |
+| T-CORE1..6 | unit, e2e, integration | 2 | `DONE` | log senza segreti, errori RFC 7807, cripto, prontezza reale, 6 test green |
+| T-AUTH1..22 | unit, e2e, integration | 3 | `DONE` | login, rotazione e riuso dei refresh, ruoli, ultimo owner, inviti, 22 test green |
+| T-MGMT1..17 | unit, e2e | 4 | `DONE` | gruppi con conferma, slug, regole RE2, cap del tenant, 17 test green |
+| T-ING1..24 | unit, e2e, integration | 5 | `DONE` | 404 uniforme, limiti, normalizzazione, offload, idempotenza, 24 test green |
+| T-OUT1..26 | unit, e2e, integration | 6 | `DONE` | risoluzione destinazioni, outbox, ordine commit-enqueue, ritenti, 26 test green |
+| T-CONS1..20 | unit, e2e | 7 | `DONE` | cursore, lista senza corpo, download integro, cancellazione accodata, 20 test green |
+| T-MAINT1..23 | unit, integration, e2e | 8 | `DONE` | purge, riconciliazione, orfani, quote, metriche, 23 test green |
+| T-UI1..19 | unit | 9 | `DONE` | guardia ruoli, cursore, nessun webhook in chiaro, 19 test green |
+| T-E2E1 | accettazione | 10 | `IN_PROGRESS` | `scripts/smoke.sh` acceptance test with 17 assertions |
 
 ## Verifiche di autenticita richieste
 
@@ -59,8 +59,8 @@ Sono controlli in cui si rompe deliberatamente il codice per confermare che il t
 
 | File | Stato | Note |
 |------|-------|------|
-| README.md | `TODO` | avvio rapido, prima notifica, test |
-| docs/OPERAZIONI.md | `TODO` | esercizio, backup congiunto Postgres piu MinIO, job |
+| README.md | `DONE` | quick start, first notification, testing, architecture overview |
+| docs/OPERAZIONI.md | `DONE` | production setup, password changes, TLS, 7 maintenance jobs, backup/restore, troubleshooting, metrics |
 | notifyhub-spec.md | `DONE` | v0.3, fonte di verita, non va modificata dall'implementatore |
 
 ## Open blockers
