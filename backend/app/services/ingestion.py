@@ -55,16 +55,29 @@ async def create_notification(
     severity: str,
     metadata: dict | None = None,
 ) -> uuid.UUID:
-    """Create notification in database."""
+    """Create notification in database with storage backend selection."""
     from app.models.notification import Notification
+    from app.services.storage import should_use_object_storage, upload_notification_body
+
+    notification_id = uuid.uuid4()
+    body_to_store = body
+    storage_backend = "inline"
+    storage_key = None
+
+    if should_use_object_storage(len(body.encode())):
+        storage_backend = "object"
+        storage_key = await upload_notification_body(notification_id, body)
+        body_to_store = ""
 
     notification = Notification(
-        id=uuid.uuid4(),
+        id=notification_id,
         receiver_id=receiver_id,
         tenant_id=tenant_id,
         title=title,
-        body=body,
+        body=body_to_store,
         severity=severity,
+        storage_backend=storage_backend,
+        storage_key=storage_key,
         meta=metadata or {},
         status="unread",
         created_at=datetime.utcnow(),
