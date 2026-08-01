@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install *)",
+      "Bash(make *)",
+      "Bash(pytest -q --tb=short)",
+      "Bash(timeout 30 pytest -q -m \"unit or e2e\")",
+      "Bash(timeout 60 pytest -q -m integration)",
+      "Bash(timeout 60 pytest backend -q -m integration)",
+      "Bash(cp .env.example .env)",
+      "Bash(timeout 30 pytest -q -m integration)",
+      "Bash(timeout 10 python -c \"import psycopg; conn = psycopg.connect\\('postgresql://notifyhub_owner:dev_owner@localhost:5433/notifyhub_test'\\); print\\('OK'\\)\")",
+      "Bash(timeout 5 bash -c 'echo > /dev/tcp/localhost/5433')",
+      "Bash(PGPASSWORD=dev_owner psql -U notifyhub_owner -h localhost -p 5433 -d notifyhub_test -c \"SELECT 1\")",
+      "Bash(pytest -q tests/e2e -m e2e)",
+      "Bash(timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/5433 && echo \"✓ Port open\" || echo \"✗ Port closed\"')",
+      "Bash(timeout 2 nc -v localhost 5433)",
+      "Bash(echo \"nc exit code: $?\")",
+      "Bash(docker run *)",
+      "Bash(pytest -q -m integration)",
+      "Bash(pytest -q)",
+      "Bash(ruff check *)",
+      "Bash(python -m ruff check --fix .)",
+      "Bash(pytest tests/integration/test_migrations.py::test_upgrade_e_downgrade -v)",
+      "Bash(pytest backend/tests/integration/test_migrations.py::test_upgrade_e_downgrade -v)",
+      "Bash(pytest backend/tests/integration/test_migrations.py::test_upgrade_e_downgrade -vv)",
+      "Bash(pytest backend/tests/integration/test_migrations.py::test_upgrade_e_downgrade -xvs)",
+      "Bash(pytest backend/tests/unit/test_crypto.py::test_roundtrip -xvs)",
+      "Bash(pytest backend/tests/unit/test_config.py::test_chiave_troppo_corta_rifiutata -xvs)",
+      "Bash(pytest backend/tests/unit/test_crypto.py::test_manomissione_rilevata -xvs)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git init *)"
+    ]
+  }
+}
