@@ -67,3 +67,25 @@ async def require_viewer(  # noqa: B008
     ),
 ) -> AccessClaims:
     return claims
+
+
+async def receiver_auth(authorization: str = Header(...)) -> Any:  # noqa: B008
+    from app.services.ingestion import authenticate_receiver
+
+    if not authorization.startswith("Bearer "):
+        raise Problem(
+            status=401,
+            type=PROBLEM_TYPES["unauthorized"],
+            title="Unauthorized",
+            detail="Invalid API key.",
+        )
+    api_key = authorization[7:]
+    auth = await authenticate_receiver(api_key)
+    if auth is None:
+        raise Problem(
+            status=401,
+            type=PROBLEM_TYPES["unauthorized"],
+            title="Unauthorized",
+            detail="Invalid or revoked API key.",
+        )
+    return auth
