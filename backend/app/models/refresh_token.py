@@ -13,6 +13,7 @@ class RefreshToken(Base, UUIDPrimaryKeyMixin):
     tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     token_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    jti: Mapped[str] = mapped_column(String, nullable=False)
     family_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
     expires_at: Mapped[datetime] = mapped_column(nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(nullable=True)
