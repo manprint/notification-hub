@@ -75,6 +75,7 @@ class Notification(Base, UUIDPrimaryKeyMixin):
         notification_status_type, nullable=False, default="unread"
     )
     received_at: Mapped[datetime] = mapped_column(nullable=False, index=True)
+    archived_at: Mapped[datetime | None] = mapped_column(nullable=True)
     source_ip: Mapped[str | None] = mapped_column(nullable=True)
     meta: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")

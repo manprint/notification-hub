@@ -57,12 +57,15 @@ def create_app() -> FastAPI:
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    from app.api.v1 import auth, delivery, ingestion, users
+    from app.api.v1 import auth, delivery, groups, ingestion, notifications, search, users
 
     app.include_router(auth.router, prefix="/api/v1")
     app.include_router(users.router, prefix="/api/v1")
     app.include_router(ingestion.router, prefix="/api/v1")
     app.include_router(delivery.router, prefix="/api/v1")
+    app.include_router(groups.router, prefix="/api/v1")
+    app.include_router(notifications.router, prefix="/api/v1")
+    app.include_router(search.router, prefix="/api/v1")
 
     # ROUTERS: i router delle fasi successive si registrano qui sopra
 
