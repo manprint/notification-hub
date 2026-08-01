@@ -1,0 +1,17 @@
+node_modules
+.git
+__pycache__
+.venv
+frontend/dist
+*.md
+.env
+.env.local
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.coverage
+.DS_Store
+*.egg-info
+dist
+build

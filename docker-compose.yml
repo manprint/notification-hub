@@ -58,6 +58,87 @@ services:
       "
     restart: "no"
 
+  migrate:
+    build:
+      context: .
+      dockerfile: deploy/api/Dockerfile
+    command: alembic upgrade head
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: deploy/api/Dockerfile
+    command: bash deploy/api/entrypoint.sh
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file: .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build:
+      context: .
+      dockerfile: deploy/api/Dockerfile
+    command: celery -A app.tasks.celery_app worker -Q delivery --concurrency 4 --loglevel INFO
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file: .env
+
+  beat:
+    build:
+      context: .
+      dockerfile: deploy/api/Dockerfile
+    command: celery -A app.tasks.celery_app beat --loglevel INFO
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    env_file: .env
+
+  nginx:
+    build:
+      context: .
+      dockerfile: deploy/frontend/Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  mock-webhook:
+    image: python:3.12-slim
+    command: python scripts/mock_webhook.py
+    ports:
+      - "8899:8899"
+    volumes:
+      - ./scripts:/scripts:ro
+    working_dir: /scripts
+    profiles:
+      - smoke
+
 volumes:
   pgdata:
   miniodata:
