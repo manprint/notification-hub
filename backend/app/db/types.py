@@ -3,6 +3,13 @@ from enum import StrEnum
 from sqlalchemy.dialects.postgresql import ENUM
 
 
+class RateLimitTier(StrEnum):
+    FREE = "free"
+    BASIC = "basic"
+    PREMIUM = "premium"
+    ENTERPRISE = "enterprise"
+
+
 class TenantStatus(StrEnum):
     ACTIVE = "active"
     SUSPENDED = "suspended"
