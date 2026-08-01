@@ -10,6 +10,7 @@ backend_dir = os.path.join(os.path.dirname(__file__), "..")
 env_file = os.path.join(backend_dir, os.environ.get("ENV_FILE", ".env.test"))
 load_dotenv(env_file)
 
+import app.models  # noqa: F401, E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import engine_app, tenant_session  # noqa: E402
 from app.main import create_app  # noqa: E402
@@ -99,3 +100,58 @@ async def make_user(
         session.add(user)
         await session.flush()
         return user
+
+
+@pytest.fixture
+async def create_receiver_fixture(two_tenants):
+    """Fixture to create test receiver."""
+    from tests.conftest_factories import create_receiver
+
+    tenant_a_id, _ = two_tenants
+
+    async def _create_receiver(slug: str, group_id: uuid.UUID | None = None):
+        return await create_receiver(tenant_a_id, slug, group_id)
+
+    return _create_receiver
+
+
+@pytest.fixture
+async def create_api_key_fixture(two_tenants):
+    """Fixture to create test API key."""
+    from tests.conftest_factories import create_api_key
+
+    tenant_a_id, _ = two_tenants
+
+    async def _create_api_key(receiver_id: uuid.UUID, label: str = "Test Key"):
+        return await create_api_key(tenant_a_id, receiver_id, label)
+
+    return _create_api_key
+
+
+@pytest.fixture
+async def create_group_fixture(two_tenants):
+    """Fixture to create test group."""
+    from tests.conftest_factories import create_group
+
+    tenant_a_id, _ = two_tenants
+
+    async def _create_group(name: str = "Test Group", description: str | None = None):
+        return await create_group(tenant_a_id, name, description)
+
+    return _create_group
+
+
+@pytest.fixture
+async def auth_token(api_client, two_tenants):
+    """Fixture to get auth token for test user."""
+    tenant_a_id, _ = two_tenants
+    await make_user(tenant_a_id, "testuser@test.com")
+
+    response = await api_client.post(
+        "/api/v1/auth/login",
+        json={"email": "testuser@test.com", "password": "test"},
+    )
+
+    if response.status_code == 200:
+        return response.json()["access_token"]
+    return None
