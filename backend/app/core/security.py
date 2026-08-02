@@ -1,6 +1,6 @@
 import secrets
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 
 import jwt
@@ -38,7 +38,10 @@ def verify_password(password: str, hash_value: str) -> bool:
 
 def create_access_token(user_id: str, tenant_id: str, role: str) -> tuple[str, int]:
     settings = get_settings()
-    now = datetime.utcnow()
+    # datetime.utcnow() e naive: .timestamp() lo interpreta nel fuso ORARIO
+    # LOCALE del sistema, non in UTC, producendo un epoch sbagliato se il
+    # server non gira in UTC. datetime.now(UTC) e tz-aware ed e corretto.
+    now = datetime.now(UTC)
     exp_minutes = settings.access_token_ttl_minutes
     exp_time = now + timedelta(minutes=exp_minutes)
 

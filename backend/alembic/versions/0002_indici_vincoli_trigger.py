@@ -11,14 +11,12 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
+    op.create_check_constraint(
+        "ck_notifications_body",
         "notifications",
-        sa.CheckConstraint(
-            (
-                "(storage_backend = 'inline' AND content IS NOT NULL AND storage_key IS NULL) "
-                "OR (storage_backend = 'object' AND content IS NULL AND storage_key IS NOT NULL)"
-            ),
-            name="ck_notifications_body",
+        (
+            "(storage_backend = 'inline' AND content IS NOT NULL AND storage_key IS NULL) "
+            "OR (storage_backend = 'object' AND content IS NULL AND storage_key IS NOT NULL)"
         ),
     )
 

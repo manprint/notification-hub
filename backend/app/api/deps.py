@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -10,8 +11,10 @@ from app.db.session import tenant_session
 from app.db.types import UserRole
 
 
-async def current_claims(authorization: str = Header(...)) -> AccessClaims:
-    if not authorization.startswith("Bearer "):
+async def current_claims(authorization: str | None = Header(default=None)) -> AccessClaims:
+    # authorization e opzionale a livello di validazione FastAPI apposta: un header
+    # assente deve rispondere 401 applicativo, non 422 di Pydantic (vedi docs/REVIEW.md F15).
+    if authorization is None or not authorization.startswith("Bearer "):
         raise Problem(
             status=401,
             type=PROBLEM_TYPES["unauthorized"],
@@ -23,8 +26,6 @@ async def current_claims(authorization: str = Header(...)) -> AccessClaims:
 
 
 async def db(claims: AccessClaims = Depends(current_claims)) -> AsyncIterator[AsyncSession]:  # noqa: B008
-    import uuid
-
     async with tenant_session(uuid.UUID(claims.tid)) as session:
         yield session
 
@@ -67,25 +68,3 @@ async def require_viewer(  # noqa: B008
     ),
 ) -> AccessClaims:
     return claims
-
-
-async def receiver_auth(authorization: str = Header(...)) -> Any:  # noqa: B008
-    from app.services.ingestion import authenticate_receiver
-
-    if not authorization.startswith("Bearer "):
-        raise Problem(
-            status=401,
-            type=PROBLEM_TYPES["unauthorized"],
-            title="Unauthorized",
-            detail="Invalid API key.",
-        )
-    api_key = authorization[7:]
-    auth = await authenticate_receiver(api_key)
-    if auth is None:
-        raise Problem(
-            status=401,
-            type=PROBLEM_TYPES["unauthorized"],
-            title="Unauthorized",
-            detail="Invalid or revoked API key.",
-        )
-    return auth

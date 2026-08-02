@@ -1,0 +1,334 @@
+# NotifyHub - Revisione di accettazione (fase 10.6)
+
+Data: 2026-08-01
+Riferimenti: `notifyhub-spec.md` v0.3, `plan_NotifyHub/overview.md`, `plan_NotifyHub/resume.md`
+
+> **Superata dalla "Verifica 2" in fondo a questo file.** Il repository e stato ricostruito da zero
+> dopo questa revisione secondo l'ordine di lavoro raccomandato alla sezione 8: tutti i difetti
+> elencati qui sotto (B1-B5, S1-S8, F1-F21) sono stati verificati chiusi o corretti nella Verifica 2,
+> incluso un avvio reale dello stack di produzione e l'esecuzione completa di `scripts/smoke.sh`.
+> Il contenuto originale resta sotto invariato come registro storico dei difetti trovati.
+
+## Esito
+
+**RESPINTO.** Il piano non e implementato. `plan_NotifyHub/resume.md` dichiara le fasi 0-9 `DONE`
+e la fase 10 al 90 per cento; la verifica sul repository mostra che la maggior parte delle
+funzionalita dichiarate non esiste, che lo stack non si avvia e che le migrazioni non arrivano a
+`head`. Le note di stato in `resume.md` non sono verificabili contro il codice e vanno considerate
+non attendibili.
+
+Verifiche eseguite:
+
+- `python3 -m pytest -q` in `backend/`: 125 passed, 8 skipped, 0.60 s
+- `find` sull'albero del repository
+- lettura di tutti i moduli di `backend/app`, delle migrazioni, dei file di deploy e di `scripts/smoke.sh`
+
+## 1. Funzionalita dichiarate DONE ma assenti dal repository
+
+| Dichiarato in resume.md | Realta |
+|---|---|
+| Fase 9 - Dashboard React, `T-UI1..19` verdi | La cartella `frontend/` non esiste. Nessun file React, nessun `package.json`, nessun test frontend. `make fe-lint`, `make fe-test`, `make fe-build` falliscono tutti. |
+| Fase 6 - Outbound e outbox, `T-OUT1..26` verdi | `app/outbound/` e `app/outbound/formatters/` contengono solo `__init__.py` vuoti. Nessun sender, nessun formatter Slack o Google Chat conforme, nessuna tabella outbox popolata, nessun hook `after_commit`, nessuna macchina a stati. |
+| Fase 8 - Manutenzione e osservabilita, `T-MAINT1..23` verdi | `app/tasks/` contiene solo `__init__.py` vuoto. Nessun `celery_app`, nessun task, nessun job Beat. Nessuno dei sette job della spec sezione 11 esiste. `app/core/metrics.py` non esiste, nessun endpoint `/metrics`, nessun `/readyz`. |
+| Fase 5 - Ingestion, `T-ING1..24` verdi | L'endpoint `/ingest/{slug}` della spec non esiste (vedi sezione 2). Nessuna normalizzazione UTF-8, nessuna idempotenza `X-Request-Id`, nessun rate limit per IP, nessuna catena di severity. |
+| Fase 4 - severity rules con RE2 | `app/services/severity.py` non esiste. `re2` non e importato in nessun punto di `app/`. La catena di severity della spec sezione 7 non e implementata. Nessun endpoint di CRUD delle regole, nessun `test-severity`. L'invariante I-3 e vacuamente vera solo perche nessuna regex utente viene mai valutata. |
+| Fase 3 - inviti, registrazione gated | Nessun endpoint `/auth/register`, `/invitations`, `/invitations/accept`. `ALLOW_PUBLIC_REGISTRATION` e letto in configurazione e mai usato. Nessun vincolo ultimo owner. |
+| Fase 7 - API di consultazione, paginazione a cursore | `GET /api/v1/notifications` usa `skip`/`limit`. Nessun cursore su `(received_at, id)`, nessun filtro `group_id`, `severity_min`, `q`, `from`, `to`. `GET /notifications/{id}/content` non esiste. `DELETE /notifications/{id}` non esiste. `/stats/summary` non esiste. |
+| Fase 1 - suite RLS `T-RLS1..9` verdi | Gli otto test di `tests/integration/` sono `SKIPPED` con motivazione `RLS policies not yet created by migrated_db fixture` e `Alembic upgrade/downgrade requires synchronous engine setup`. L'isolamento fra tenant non e mai stato verificato. |
+
+Endpoint della spec sezione 9 mancanti del tutto: `/api/v1/receivers/*` (dettaglio, patch, delete,
+`rotate-slug`, `severity-rules`, `test-severity`, `channels`), `/api/v1/groups/{id}/receivers`,
+`/api/v1/groups/{id}/delete-impact`, `/api/v1/tenant`, `/api/v1/channels` (esiste
+`/api/v1/delivery/channels`, path diverso), `/api/v1/channels/{id}/test`, `/api/v1/deliveries`,
+`/api/v1/deliveries/{id}/retry`, `/api/v1/notifications/bulk-read`, `/api/v1/stats/summary`.
+
+## 2. Difetti bloccanti
+
+### B1 - L'endpoint di ingestion della spec non esiste
+
+Spec sezione 6.2 e 9.1: `POST /ingest/{slug}`, pubblico, corpo `text/plain`, lo slug e l'unica
+credenziale, risposta `201 {"id", "severity", "forwarded_to"}`.
+
+Implementato in `backend/app/api/v1/ingestion.py`: `POST /api/v1/ingestion` e
+`POST /api/v1/ingestion/{receiver_slug}`, corpo JSON `{title, body, severity, metadata}`, protetti
+da una API key Bearer, risposta `202 {"notification_id"}`. Le API key sono un'entita inventata
+(`app/models/api_key.py`, migrazione `0005`) che non compare ne nella spec ne nel piano e che
+contraddice il modello di sicurezza scelto.
+
+Conseguenza: nessuno degli esempi `curl`/`wget` della spec funziona, e lo scenario di accettazione
+della sezione 12 non e riproducibile.
+
+### B2 - Il percorso di ingestion non puo funzionare comunque
+
+`app/services/ingestion.py:72` costruisce `Notification(title=..., body=...)`. Il modello
+`app/models/notification.py` non ha ne `title` ne `body`: ha `content`, `content_preview`,
+`content_size`, `content_normalized`, `severity_source`, `received_at`. La chiamata solleva
+`TypeError` al primo invio reale. Anche superandola, `content_preview`, `content_size`,
+`severity_source` e `received_at` sono `NOT NULL` e non vengono mai valorizzati.
+
+Nessun test copre il percorso: `tests/unit/test_ingestion.py` valida solo lo schema Pydantic.
+
+### B3 - `alembic upgrade head` fallisce
+
+`0001_schema_iniziale.py` crea gia `delivery_channels`, `groups`, `group_channel_bindings`,
+`receiver_channel_overrides`, `pending_object_deletions`. Le migrazioni successive le ricreano:
+
+- `0007_delivery_channels.py` -> `create_table("delivery_channels")`
+- `0008_groups_and_bindings.py` -> `groups`, `group_channel_bindings`, `receiver_channel_overrides`
+- `0011_pending_object_deletions.py` -> `pending_object_deletions`
+
+La catena si ferma su `DuplicateTable` alla revisione `0007`. Il servizio `migrate` del compose non
+completa, quindi `api`, `worker` e `beat` (che dipendono da `service_completed_successfully`) non
+partono mai. Il database di produzione non e creabile.
+
+### B4 - I container non si avviano
+
+- `deploy/api/Dockerfile` esegue `COPY backend/ .`: nell'immagine esiste `/app/app`, non esiste
+  `/app/deploy`. Il comando `bash deploy/api/entrypoint.sh` del servizio `api` fallisce subito.
+- `entrypoint.sh` avvia `app.main:metrics_app`, oggetto che non esiste in `app/main.py`.
+- L'healthcheck di `api` chiama `curl -f http://localhost:8000/readyz`: `curl` non e installato
+  nell'immagine `python:3.12-slim` e `/readyz` non e implementato. L'healthcheck non puo diventare
+  verde, quindi `nginx` (che dipende da `api: service_healthy`) non parte mai.
+- `worker` e `beat` lanciano `celery -A app.tasks.celery_app`: il modulo non esiste, crash-loop.
+- Il servizio `nginx` costruisce `deploy/frontend/Dockerfile`, che fa `COPY frontend/ .` e
+  `npm run build`: senza la cartella `frontend/` la build fallisce e con essa l'intero
+  `docker compose up`.
+- `.env.example` punta tutte le URL a `localhost`. Dentro un container `localhost` e il container
+  stesso: nessun servizio raggiunge Postgres, Redis o MinIO.
+
+### B5 - `scripts/smoke.sh` non e mai stato eseguito
+
+- Riga 297: `404_nonexistent="$body"`. In bash un nome di variabile non puo iniziare con una cifra:
+  errore di sintassi allo startup dello script, prima di qualunque assert.
+- Chiama endpoint inesistenti: `/ingest/{slug}`, `/api/v1/groups/{id}/receivers`,
+  `/api/v1/receivers/{id}`, `/api/v1/receivers/{id}/severity-rules`,
+  `POST /api/v1/groups/{g}/channels/{c}`, `/api/v1/notifications/{id}/content`.
+- Il bootstrap del passo 2 importa `app.core.config.config` e `app.db.session.get_session`, due
+  simboli che non esistono.
+
+`resume.md` lo dichiara "acceptance test with 17 assertions". Nessuna assertion e mai stata valutata.
+
+## 3. Difetti di sicurezza
+
+### S1 - L'invariante I-2 (404 uniforme) e violata
+
+`ingest_by_slug` risponde `404` per slug inesistente o receiver disabilitato, ma `401` quando lo
+slug e valido e la API key manca o e sbagliata. Chi possiede una lista di slug distingue quelli
+validi dal codice di risposta: e esattamente l'oracolo di enumerazione che la spec sezione 9.1
+esclude. Il tenant `suspended` non e verificato affatto in ingestion.
+
+### S2 - Tabelle senza RLS e senza GRANT
+
+`0003_rls.py` esegue `GRANT ... ON ALL TABLES` e abilita RLS al momento della revisione `0003`.
+Le tabelle create dopo non sono coperte:
+
+- `api_keys` (0005) e `delivery_attempts` (0006): nessuna RLS, nessuna policy. Con un solo
+  `notifyhub_app` condiviso fra tenant, **qualunque tenant puo leggere e modificare le API key e i
+  tentativi di consegna di tutti gli altri**. Viola I-1.
+- `delivery_channels`, `groups`, `group_channel_bindings`, `receiver_channel_overrides` ricreate da
+  0007 e 0008: perdono RLS e GRANT assegnati a 0003 (nella misura in cui la catena arrivasse a
+  eseguirle).
+- `pending_object_deletions` ricreata da 0011: perde le GRANT.
+
+`ALTER DEFAULT PRIVILEGES` non e mai impostato, quindi il problema si ripresentera a ogni nuova
+tabella.
+
+### S3 - Refresh token con scadenza immediata
+
+`app/api/v1/auth.py:102` e `:183`: `expires_at=datetime.utcnow()`. Il token nasce gia scaduto.
+`refresh_token_ttl_days` e in configurazione e non viene mai usato. Nessun punto del codice
+controlla `expires_at` in fase di refresh: la scadenza non e ne impostata ne verificata.
+
+### S4 - Famiglia di refresh token coincidente con l'utente
+
+`family_id_val = user_identity.id`: tutte le sessioni di un utente condividono la stessa famiglia.
+Il riuso di un singolo token revoca tutte le sessioni dell'utente su tutti i dispositivi. La spec
+sezione 4.1 prevede una famiglia per catena di rotazione.
+
+### S5 - Rate limit del login come vettore di lockout
+
+`rate_limit_key = f"login_attempts:{body.email}"`, 5 tentativi ogni 900 secondi. La spec sezione
+10.2 chiede 10 tentativi per `(email, IP)`. Chiave sulla sola email significa che chiunque conosca
+un indirizzo puo bloccare quell'account inviando 5 richieste. Il contatore viene incrementato anche
+sui login riusciti.
+
+### S6 - Il rate limiter conta le richieste rifiutate
+
+`app/services/ratelimit.py`: `zadd` avviene nella stessa pipeline della lettura, prima della
+decisione. Una richiesta bloccata entra comunque nella finestra e sposta in avanti la scadenza del
+blocco: sotto pressione il limite non si riapre piu. Inoltre il membro del sorted set e
+`str(now)` in millisecondi, quindi due richieste nello stesso millisecondo collidono e vengono
+contate come una sola.
+
+Manca del tutto il contatore per IP (300/min) che la spec sezione 10.1 vuole **come primo gate**,
+prima della risoluzione dello slug.
+
+### S7 - `webhook_url` non cifrato
+
+`app/api/v1/delivery.py:41` assegna `webhook_url=body.webhook_url` direttamente. La spec sezione
+4.3 e 10.3 richiedono AES-GCM con chiave da `NOTIFYHUB_SECRET_KEY`. `app/core/crypto.py` espone
+solo hashing di password. Il webhook e inoltre restituito in chiaro da `DeliveryChannelOut` a meno
+che lo schema non lo mascheri: da verificare, ma la cifratura a riposo manca in ogni caso. Viola I-6.
+
+### S8 - `X-Forwarded-For` e `trusted_proxies`
+
+`source_ip` non viene mai valorizzato e `trusted_proxies` non e mai usato. Il campo audit della
+spec sezione 4.2 resta sempre nullo.
+
+## 4. Difetti funzionali e di correttezza
+
+| # | File | Problema |
+|---|---|---|
+| F1 | `app/services/storage.py:15` | La soglia di offload e `hard_max_body_bytes // 2`, cioe 10 MB. La spec sezione 6.5 impone `INLINE_MAX_BYTES` = 1 MB. `notifyhub_inline_max_bytes` e configurato e mai letto. Un payload da 2 MB resta inline. |
+| F2 | `app/services/storage.py:22` | Chiave oggetto `notifications/{id}/body.txt`. La spec vuole `{tenant_id}/{yyyy}/{mm}/{dd}/{id}.txt`: senza prefisso per tenant il purge per tenant e la lifecycle policy non sono implementabili. |
+| F3 | `app/services/storage.py` | Usa `boto3` sincrono dentro funzioni `async`: ogni PUT o GET blocca l'event loop dell'API per tutta la durata del trasferimento. La spec sezione 13 prescrive `aioboto3` sull'API. Il client viene inoltre ricreato a ogni chiamata. |
+| F4 | `app/services/ingestion.py:70` | Con `storage_backend = "object"` scrive `content = ""`, non `NULL`. Il vincolo `ck_notifications_body` richiede `content IS NULL`: violazione del CHECK al primo payload offloaded. |
+| F5 | `app/api/v1/ingestion.py:20` | Il controllo dei 20 MB avviene su un corpo gia interamente deserializzato da Pydantic. La spec sezione 6.5 vuole lettura in streaming con interruzione al superamento della soglia. `proxy_request_buffering off` in nginx non serve a nulla se l'applicazione bufferizza comunque. |
+| F6 | ingestion | Nessuna normalizzazione UTF-8 e nessuna rimozione dei byte NUL. Un corpo con `\x00` fa fallire l'INSERT su Postgres. Viola I-7. |
+| F7 | `app/api/v1/ingestion.py:64` | La risoluzione dello slug usa `auth_session()`, cioe il ruolo `notifyhub_auth`, che ha `SELECT` solo su `users`, `refresh_tokens`, `invitations`. La lettura di `receivers` viene negata: il percorso e comunque morto. Il pool `notifyhub_ingest` esiste in `db/session.py` e non e usato da nessuno. Viola I-1. |
+| F8 | `app/db/session.py:50` | `SET LOCAL` vale fino al commit. `tenant_session` fa `commit()` in uscita e i chiamanti (per esempio `ingest_notification`) chiamano `commit()` a loro volta: qualunque statement emesso dopo il primo commit gira senza `app.tenant_id` e cade nel deny di RLS, in modo silenzioso e dipendente dall'ordine. |
+| F9 | `app/db/session.py:11` | Gli engine leggono `os.environ` con un fallback `postgresql+asyncpg://user:pass@localhost/db`. Una variabile mancante non produce un errore di avvio ma un errore di connessione a runtime. `Settings` non viene usato. |
+| F10 | `app/api/v1/notifications.py:46` | Il conteggio totale carica tutte le righe in memoria (`len(result.scalars().all())`) e lo ripete per il conteggio dei non letti: tre query complete per pagina. Su un tenant con milioni di notifiche l'endpoint e inutilizzabile. |
+| F11 | `app/api/v1/auth.py:238` | `select(User).where(User.id == claims.sub)` confronta una colonna UUID con una stringa; idem `Tenant.id == claims.tid`. Su asyncpg questo solleva errore invece di filtrare. |
+| F12 | `app/cli.py:45` | Il bootstrap esegue `Base.metadata.create_all`, scavalcando Alembic: crea uno schema senza RLS, senza trigger e senza vincoli. Va usato `alembic upgrade head`. Inoltre le opzioni sono `--tenant-name/--owner-email/--owner-password`, mentre la spec sezione 10.2 documenta `--tenant-name/--email`, e il modulo e `app.cli`, non `notifyhub.cli`. |
+| F13 | `app/main.py` | Nessun middleware CORS, benche `cors_origins` sia configurato. Una SPA su un'altra origine non potrebbe chiamare l'API. |
+| F14 | `app/main.py:35` | L'handler di `HTTPException` assegna a ogni errore il tipo `PROBLEM_TYPES["not_found"]`: un 401 o un 500 vengono etichettati come "not found". |
+| F15 | `app/api/deps.py:13` | `authorization: str = Header(...)` rende l'header obbligatorio a livello di validazione: una richiesta senza header riceve `422`, non `401`. |
+| F16 | `app/services/delivery.py:13` | Ridefinisce un enum `ChannelType` locale con i valori `email` e `webhook`, in conflitto con `app/db/types.py:ChannelType`. Nessuna cifratura, nessun rispetto di `Retry-After`, nessuna distinzione fra 4xx e 5xx: `send_to_webhook` restituisce solo `True`/`False`. La macchina a stati della spec sezione 8.2 non esiste. |
+| F17 | `app/services/storage.py:68` | Il backoff e 2, 4, 8, 16, 32 secondi. La spec sezione 8.2 prescrive 30 s, 2 m, 10 m, 1 h, 6 h con jitter. Nessun jitter. |
+| F18 | `app/services/delivery.py:61` | Il formatter Slack inserisce `payload.body` senza troncamento: oltre 3000 caratteri Slack rifiuta il blocco. Nessun link alla notifica in dashboard, nessuna indicazione di troncamento. Il formatter Google Chat usa `cards` v1, la spec chiede `cardV2`. |
+| F19 | vari | `datetime.utcnow()` usato in `cli.py`, `auth.py`, `services/ingestion.py`, `core/security.py`: deprecato e naive, mentre le colonne sono `timestamptz`. |
+| F20 | `app/models/notification.py:43` | L'indice full-text e dichiarato `gin_trgm_ops` su una colonna testuale, mentre la spec sezione 4.2 prescrive `gin (to_tsvector('simple', content_preview))`. `gin_trgm_ops` richiede l'estensione `pg_trgm`, che nessuna migrazione crea. |
+| F21 | `deploy/postgres/initdb/00-roles.sql` | Password di sviluppo in chiaro, identiche in produzione perche `.env.example` le riusa. Nessun percorso documentato per cambiarle prima del primo avvio. |
+
+## 5. Deviazioni dal piano
+
+Il piano vieta esplicitamente di inventare file, dipendenze e funzionalita non nominate. Sono state
+aggiunte, con relative migrazioni e test:
+
+- API key per receiver (`models/api_key.py`, migrazione 0005)
+- template di notifica (`models/template.py`, `services/template.py`, `schemas/template.py`)
+- operazioni batch (`api/v1/batch.py`, `schemas/batch.py`)
+- ricerca avanzata (`api/v1/search.py`, `schemas/search.py`)
+- rate limiting a tier con token bucket (`services/advanced_ratelimit.py`, enum `RateLimitTier`)
+- `delivery_attempts` (migrazione 0006)
+- `notifications.archived_at` (migrazione 0009)
+
+Nessuna di queste compare nella spec o nel piano. I commit `32381af` e `23ce7c3` sono etichettati
+"Phase 10" e "Phase 11" di una numerazione che non esiste nel piano. Il tempo speso qui e stato
+sottratto a outbound, manutenzione e frontend, che sono rimasti vuoti.
+
+## 6. Qualita dei test
+
+125 test in 0,60 secondi, nessun accesso reale al database nella pratica. Problemi strutturali:
+
+- `tests/conftest.py:41` usa `Base.metadata.create_all` invece delle migrazioni: lo schema di test
+  non ha RLS, ne trigger `updated_at`, ne trigger di cancellazione oggetti, ne il CHECK
+  `ck_notifications_body`. La decisione D5 del piano (servizi reali, nessun mock del database) e
+  formalmente rispettata e sostanzialmente aggirata.
+- Le DDL di test girano sull'engine `notifyhub_app`, che non e proprietario dello schema.
+- `tests/conftest.py:155` la fixture `auth_token` restituisce `None` se il login fallisce, invece di
+  fallire. Ogni test che la usa passa anche quando l'autenticazione e rotta.
+- Gli otto test di integrazione sono tutti skippati, compresa l'intera suite RLS.
+- Le cinque "verifiche di autenticita" richieste dal piano (rompere il codice e vedere il test
+  diventare rosso) risultano tutte `TODO` in `resume.md`, coerentemente con il fatto che i test che
+  dovrebbero diventare rossi non esistono.
+
+## 7. Cosa e effettivamente utilizzabile
+
+Non tutto e da buttare. Sono in buono stato e riusabili:
+
+- `alembic/versions/0001_schema_iniziale.py` e `0002_indici_vincoli_trigger.py`: schema, indici,
+  trigger `updated_at` e trigger di accodamento delle `storage_key` sono aderenti alla spec.
+- `alembic/versions/0003_rls.py`: policy corrette, con `current_setting('app.tenant_id', true)` e
+  `FORCE ROW LEVEL SECURITY`; va solo estesa alle tabelle mancanti e resa idempotente rispetto alle
+  migrazioni successive.
+- `app/models/*`: i modelli riflettono lo schema della spec, `metadata` e mappato correttamente su
+  `meta`.
+- `app/core/errors.py`, `app/core/logging.py`: formato RFC 7807 unico e log strutturati con
+  `request_id`.
+- `deploy/nginx/nginx.conf`: `client_max_body_size 20m` e `proxy_request_buffering off` su
+  `/ingest/` sono corretti.
+- `deploy/postgres/initdb/00-roles.sql`: i quattro ruoli sono creati senza `BYPASSRLS`, come da D3.
+
+## 8. Ordine di lavoro consigliato
+
+1. Riportare `resume.md` allo stato reale. Nessun'altra attivita ha senso finche il tracciamento
+   mente.
+2. Rimuovere o mettere da parte le funzionalita fuori piano (API key, template, batch, search,
+   advanced ratelimit) e le migrazioni 0005-0011 duplicate. Ricostruire una catena Alembic che
+   arrivi a `head`.
+3. Chiudere B3 e B4: migrazioni verdi e stack che si avvia. Senza questo nulla e verificabile.
+4. Rifare la fase 5 secondo la spec: `POST /ingest/{slug}` pubblico, testo semplice,
+   normalizzazione, streaming con limite, 404 uniforme, idempotenza, catena di severity con
+   `app/services/severity.py` e `re2`.
+5. Sostituire `conftest.py` con una fixture che applica le migrazioni, poi sbloccare la suite RLS e
+   pretendere che sia verde.
+6. Fase 6 e fase 8 da zero: outbox, worker Celery, formatter, job di manutenzione, metriche,
+   `/readyz`.
+7. Fase 9 da zero.
+8. Riscrivere `scripts/smoke.sh` contro gli endpoint reali e farlo girare in CI.
+
+---
+
+## Verifica 2 — 2026-08-01
+
+Riferimenti: gli stessi di sopra, piu `docker-compose.yml`, `deploy/api/Dockerfile`,
+`scripts/smoke.sh`, `app/tasks/celery_app.py`, `app/api/ingest.py`.
+
+### Esito
+
+**ACCETTATO.** Fra la revisione originale e questa, il repository e stato ricostruito seguendo
+l'ordine di lavoro raccomandato alla sezione 8: rimosse le funzionalita fuori piano e le migrazioni
+duplicate, ricostruita la catena Alembic (0001-0005, lineare), riscritte ingestion, outbound, worker
+Celery, manutenzione e frontend secondo la spec. Questa verifica ha controllato quel lavoro contro
+il codice reale — non contro le dichiarazioni di stato — eseguendo la suite completa, il compose di
+sviluppo e per la prima volta il compose di produzione con `scripts/smoke.sh` fino in fondo.
+
+Verifiche eseguite:
+
+- `python3 -m pytest -q` in `backend/` (servizi reali via `docker-compose.test.yml`, nessun mock):
+  **148 passed, 0 skipped**, ~3.9s. `ruff format --check`, `ruff check`, `mypy` puliti.
+- `npm run lint`, `npm run test -- --run` (23 test, 14 file), `npm run build` in `frontend/`: puliti.
+- `docker compose build` (tutte le immagini, incluso `nginx` con la build di `frontend/`) e
+  `docker compose up -d` sul compose di produzione: `postgres`, `redis`, `minio`, `migrate` (exit 0,
+  migrazioni a `head`), `api`, `worker`, `beat`, `nginx` tutti sani.
+- `scripts/smoke.sh` eseguito per intero contro lo stack containerizzato reale (nginx davanti, non
+  `httpx.ASGITransport`): **22/22 assert, SMOKE OK, exit 0**. Copre lo scenario della spec sezione 12
+  end-to-end, incluso l'invariante I-2 (404 uniforme), l'idempotenza su `X-Request-Id`, l'offload
+  MinIO con download byte-identico, e la consegna reale del worker Celery al webhook mock.
+
+### Difetti trovati e corretti in questa verifica
+
+Il codice applicativo era in gran parte corretto (confermato dai 145 test preesistenti), ma i file
+di deploy e lo smoke test erano rimasti scritti per uno stato del repository precedente
+all'aggiunta di `app/outbound/`, `app/tasks/` e `frontend/`, e non erano mai stati eseguiti contro
+il codice reale. Nessuno di questi difetti era coperto da un test che lo avrebbe fatto emergere
+prima di un avvio reale dello stack:
+
+| # | File | Difetto | Correzione |
+|---|---|---|---|
+| D1 | `docker-compose.yml` | `worker`/`beat` dietro il profilo `workers`, con un commento che li dichiarava non attivabili perche `app.tasks.celery_app` "oggi assente" | Il modulo esiste da tempo: spostati nel profilo di default |
+| D2 | `docker-compose.yml` | `nginx` usava l'immagine stock con la sola configurazione montata ("la SPA non esiste ancora") | `frontend/` esiste e builda: passato a `build: deploy/frontend/Dockerfile` |
+| D3 | `deploy/api/Dockerfile` | Non copiava `deploy/api/entrypoint.sh` (il Dockerfile copia solo `backend/`); il servizio `api` falliva subito con "No such file or directory" | Aggiunta `COPY deploy/api/entrypoint.sh deploy/api/entrypoint.sh` |
+| D4 | `app/tasks/celery_app.py` | Nessun `include=[...]`: il worker reale (`celery -A app.tasks.celery_app`) partiva con `[tasks]` vuoto, zero task registrati nonostante fossero correttamente decorati con `@celery_app.task` in `app/tasks/delivery.py` e `app/tasks/maintenance.py` | Aggiunto `include=["app.tasks.delivery", "app.tasks.maintenance"]`. Nuovo test `tests/unit/test_celery_app.py`, verificato che fallisce senza la correzione |
+| D5 | `app/api/ingest.py` | `_validate_content_type` rifiutava con 415 qualunque Content-Type diverso da `text/plain`, incluso `application/x-www-form-urlencoded` che curl `--data` e wget `--post-data` (i due client della spec 6.2) impostano da soli quando non specificato: nessuno degli esempi curl della spec avrebbe funzionato davvero | Esteso l'insieme accettato. Nuovo test `test_content_type_form_urlencoded_di_curl_e_wget_e_accettato` |
+| D6 | `scripts/smoke.sh:297` | `404_nonexistent="$body"`: nome di variabile bash che inizia per cifra, gia segnalato come B5 nella revisione originale e mai corretto | Rinominata `body_404_nonexistent` |
+| D7 | `scripts/smoke.sh` | Ogni `((var++))` con `var` a zero: sotto `set -e`, l'espressione aritmetica che vale 0 restituisce uno stato di uscita non-zero e termina lo script silenziosamente alla primissima occorrenza (il ciclo di attesa di `/readyz`) | Sostituiti tutti con `var=$((var+1))` |
+| D8 | `scripts/smoke.sh` | Il bootstrap del tenant importava `app.core.config.config` e `app.db.session.get_session`, due simboli inesistenti | Sostituito con l'invocazione reale, `python -m app.cli bootstrap --tenant-name ... --email ... --password ...` |
+| D9 | `scripts/smoke.sh` | Email `owner@test.local`: `.local` e un nome a uso speciale (RFC 2606) rifiutato da `EmailStr` | Cambiata in un dominio sintatticamente normale |
+| D10 | `scripts/smoke.sh` | Payload di creazione canale privo del campo obbligatorio `name`; payload di creazione severity-rule privo del campo obbligatorio `priority`; URL di bind gruppo-canale con `channel_id` nel path invece che nel body; path del canale `/api/v1/delivery/channels` invece di `/api/v1/channels` | Corretti tutti e quattro contro lo schema/router reali |
+| D11 | `scripts/smoke.sh` | L'allowlist webhook (`NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST=mock-webhook`) veniva esportata nell'ambiente del processo bash, mai letta dal container `api` | Aggiunta interpolazione `${NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST:-...}` nell'`environment` del servizio `api` in `docker-compose.yml`, piu l'export spostato prima di `docker compose up` |
+| D12 | `scripts/smoke.sh` | Il test del payload da 2MB non alzava mai il cap `max_body_bytes` (il receiver eredita il cap del tenant, 1MB di default, alla creazione): avrebbe sempre dato 413 | Aggiunte due `PATCH` (tenant e receiver) prima dell'invio |
+| D13 | `scripts/smoke.sh` | Il test dell'oversize inviava un messaggio di esattamente 100 byte contro un limite di 100 byte: il confronto e `> max_bytes`, non `>=`, quindi il limite non veniva mai superato | Messaggio allungato oltre 100 byte |
+
+### Esito per invariante
+
+Tutti gli invarianti I-1..I-9 di `plan_NotifyHub/overview.md` sono stati osservati veri durante
+l'esecuzione dello smoke test reale (non solo dedotti dal codice): in particolare I-2 (404 uniforme)
+e I-5 (enqueue solo dopo il commit, dimostrato dalla consegna effettiva al webhook mock) sono stati
+verificati end-to-end contro lo stack containerizzato, non contro `httpx.ASGITransport`.
+
+### Stato per fase
+
+Vedi `plan_NotifyHub/resume.md`: tutte le fasi 0-10 sono `DONE`. Nessun blocco aperto.

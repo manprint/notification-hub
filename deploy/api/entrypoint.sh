@@ -2,7 +2,7 @@
 set -e
 
 # Start metrics uvicorn on port 9100 in background
-uvicorn app.main:metrics_app --host 0.0.0.0 --port 9100 &
+uvicorn app.core.metrics:metrics_app --host 0.0.0.0 --port 9100 &
 METRICS_PID=$!
 
 # Start main application uvicorn on port 8000 in foreground

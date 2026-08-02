@@ -5,17 +5,17 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 from app.db.types import (
-    ChannelType,
-    DeliveryStatus,
-    NotificationStatus,
-    OverrideMode,
-    ReceiverStatus,
-    Severity,
-    SeveritySource,
-    StorageBackend,
-    TenantStatus,
-    UserRole,
-    UserStatus,
+    channel_type_type,
+    delivery_status_type,
+    notification_status_type,
+    override_mode_type,
+    receiver_status_type,
+    severity_source_type,
+    severity_type,
+    storage_backend_type,
+    tenant_status_type,
+    user_role_type,
+    user_status_type,
 )
 
 revision = "0001"
@@ -23,21 +23,31 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
+# Le colonne enum sotto importano gli stessi oggetti _type di app/db/types.py invece
+# di ridichiarare l'enum: cosi l'unica fonte di verita per l'associazione fra i nomi
+# dei membri Python e le label Postgres (minuscole, non i nomi maiuscoli dei membri)
+# resta values_callable in app/db/types.py.
+_ENUM_TYPES = [
+    tenant_status_type,
+    user_role_type,
+    user_status_type,
+    receiver_status_type,
+    severity_type,
+    severity_source_type,
+    notification_status_type,
+    storage_backend_type,
+    channel_type_type,
+    override_mode_type,
+    delivery_status_type,
+]
+
 
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS citext")
 
-    op.execute(sa.Enum(TenantStatus, name="tenant_status").create(bind=op.get_bind()))
-    op.execute(sa.Enum(UserRole, name="user_role").create(bind=op.get_bind()))
-    op.execute(sa.Enum(UserStatus, name="user_status").create(bind=op.get_bind()))
-    op.execute(sa.Enum(ReceiverStatus, name="receiver_status").create(bind=op.get_bind()))
-    op.execute(sa.Enum(Severity, name="severity").create(bind=op.get_bind()))
-    op.execute(sa.Enum(SeveritySource, name="severity_source").create(bind=op.get_bind()))
-    op.execute(sa.Enum(NotificationStatus, name="notification_status").create(bind=op.get_bind()))
-    op.execute(sa.Enum(StorageBackend, name="storage_backend").create(bind=op.get_bind()))
-    op.execute(sa.Enum(ChannelType, name="channel_type").create(bind=op.get_bind()))
-    op.execute(sa.Enum(OverrideMode, name="override_mode").create(bind=op.get_bind()))
-    op.execute(sa.Enum(DeliveryStatus, name="delivery_status").create(bind=op.get_bind()))
+    bind = op.get_bind()
+    for enum_type in _ENUM_TYPES:
+        enum_type.create(bind=bind, checkfirst=True)
 
     op.create_table(
         "tenants",
@@ -48,7 +58,7 @@ def upgrade() -> None:
         sa.Column("max_notifications_per_day", sa.Integer(), nullable=True),
         sa.Column("max_storage_bytes", sa.BigInteger(), nullable=True),
         sa.Column("retention_days", sa.Integer(), nullable=True),
-        sa.Column("status", postgresql.ENUM(TenantStatus, name="tenant_status"), nullable=False),
+        sa.Column("status", tenant_status_type, nullable=False),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
@@ -63,10 +73,10 @@ def upgrade() -> None:
         "users",
         sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("tenant_id", sa.UUID(), nullable=False),
-        sa.Column("email", sa.dialects.postgresql.CITEXT(), nullable=False),
+        sa.Column("email", postgresql.CITEXT(), nullable=False),
         sa.Column("password_hash", sa.String(), nullable=False),
-        sa.Column("role", postgresql.ENUM(UserRole, name="user_role"), nullable=False),
-        sa.Column("status", postgresql.ENUM(UserStatus, name="user_status"), nullable=False),
+        sa.Column("role", user_role_type, nullable=False),
+        sa.Column("status", user_status_type, nullable=False),
         sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
@@ -83,8 +93,8 @@ def upgrade() -> None:
         "invitations",
         sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("tenant_id", sa.UUID(), nullable=False),
-        sa.Column("email", sa.dialects.postgresql.CITEXT(), nullable=False),
-        sa.Column("role", postgresql.ENUM(UserRole, name="user_role"), nullable=False),
+        sa.Column("email", postgresql.CITEXT(), nullable=False),
+        sa.Column("role", user_role_type, nullable=False),
         sa.Column("token_hash", sa.String(), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("accepted_at", sa.DateTime(timezone=True), nullable=True),
@@ -104,6 +114,7 @@ def upgrade() -> None:
         sa.Column("tenant_id", sa.UUID(), nullable=False),
         sa.Column("user_id", sa.UUID(), nullable=False),
         sa.Column("token_hash", sa.String(), nullable=False),
+        sa.Column("jti", sa.String(), nullable=False),
         sa.Column("family_id", sa.UUID(), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
@@ -142,11 +153,9 @@ def upgrade() -> None:
         sa.Column("group_id", sa.UUID(), nullable=False),
         sa.Column("slug", sa.String(22), nullable=False),
         sa.Column("name", sa.String(), nullable=False),
-        sa.Column(
-            "status", postgresql.ENUM(ReceiverStatus, name="receiver_status"), nullable=False
-        ),
+        sa.Column("status", receiver_status_type, nullable=False),
         sa.Column("ingestion_module", sa.String(), nullable=False),
-        sa.Column("default_severity", postgresql.ENUM(Severity, name="severity"), nullable=False),
+        sa.Column("default_severity", severity_type, nullable=False),
         sa.Column("max_body_bytes", sa.Integer(), nullable=False),
         sa.Column("rate_limit_per_min", sa.Integer(), nullable=False),
         sa.Column(
@@ -169,7 +178,7 @@ def upgrade() -> None:
         sa.Column("priority", sa.Integer(), nullable=False),
         sa.Column("pattern", sa.String(200), nullable=False),
         sa.Column("case_insensitive", sa.Boolean(), nullable=False),
-        sa.Column("severity", postgresql.ENUM(Severity, name="severity"), nullable=False),
+        sa.Column("severity", severity_type, nullable=False),
         sa.Column("enabled", sa.Boolean(), nullable=False),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
@@ -187,27 +196,15 @@ def upgrade() -> None:
         sa.Column("id", sa.UUID(), nullable=False),
         sa.Column("tenant_id", sa.UUID(), nullable=False),
         sa.Column("receiver_id", sa.UUID(), nullable=False),
-        sa.Column(
-            "storage_backend",
-            postgresql.ENUM(StorageBackend, name="storage_backend"),
-            nullable=False,
-        ),
+        sa.Column("storage_backend", storage_backend_type, nullable=False),
         sa.Column("content", sa.Text(), nullable=True),
         sa.Column("storage_key", sa.String(), nullable=True),
         sa.Column("content_preview", sa.String(4096), nullable=False),
         sa.Column("content_size", sa.Integer(), nullable=False),
         sa.Column("content_normalized", sa.Boolean(), nullable=False),
-        sa.Column("severity", postgresql.ENUM(Severity, name="severity"), nullable=False),
-        sa.Column(
-            "severity_source",
-            postgresql.ENUM(SeveritySource, name="severity_source"),
-            nullable=False,
-        ),
-        sa.Column(
-            "status",
-            postgresql.ENUM(NotificationStatus, name="notification_status"),
-            nullable=False,
-        ),
+        sa.Column("severity", severity_type, nullable=False),
+        sa.Column("severity_source", severity_source_type, nullable=False),
+        sa.Column("status", notification_status_type, nullable=False),
         sa.Column("received_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("source_ip", sa.String(), nullable=True),
         sa.Column(
@@ -229,7 +226,7 @@ def upgrade() -> None:
         sa.Column("id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False),
         sa.Column("tenant_id", sa.UUID(), nullable=False),
         sa.Column("name", sa.String(), nullable=False),
-        sa.Column("type", postgresql.ENUM(ChannelType, name="channel_type"), nullable=False),
+        sa.Column("type", channel_type_type, nullable=False),
         sa.Column("webhook_url", sa.LargeBinary(), nullable=False),
         sa.Column("enabled", sa.Boolean(), nullable=False),
         sa.Column("last_success_at", sa.DateTime(timezone=True), nullable=True),
@@ -251,7 +248,7 @@ def upgrade() -> None:
         sa.Column("tenant_id", sa.UUID(), nullable=False),
         sa.Column("group_id", sa.UUID(), nullable=False),
         sa.Column("channel_id", sa.UUID(), nullable=False),
-        sa.Column("min_severity", postgresql.ENUM(Severity, name="severity"), nullable=False),
+        sa.Column("min_severity", severity_type, nullable=False),
         sa.Column("enabled", sa.Boolean(), nullable=False),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
@@ -274,8 +271,8 @@ def upgrade() -> None:
         sa.Column("tenant_id", sa.UUID(), nullable=False),
         sa.Column("receiver_id", sa.UUID(), nullable=False),
         sa.Column("channel_id", sa.UUID(), nullable=False),
-        sa.Column("mode", postgresql.ENUM(OverrideMode, name="override_mode"), nullable=False),
-        sa.Column("min_severity", postgresql.ENUM(Severity, name="severity"), nullable=True),
+        sa.Column("mode", override_mode_type, nullable=False),
+        sa.Column("min_severity", severity_type, nullable=True),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
@@ -297,9 +294,7 @@ def upgrade() -> None:
         sa.Column("tenant_id", sa.UUID(), nullable=False),
         sa.Column("notification_id", sa.UUID(), nullable=False),
         sa.Column("channel_id", sa.UUID(), nullable=False),
-        sa.Column(
-            "status", postgresql.ENUM(DeliveryStatus, name="delivery_status"), nullable=False
-        ),
+        sa.Column("status", delivery_status_type, nullable=False),
         sa.Column("attempts", sa.Integer(), nullable=False),
         sa.Column("next_attempt_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("locked_at", sa.DateTime(timezone=True), nullable=True),
@@ -340,16 +335,8 @@ def downgrade() -> None:
     op.drop_table("users")
     op.drop_table("tenants")
 
-    op.execute(sa.Enum(DeliveryStatus, name="delivery_status").drop(bind=op.get_bind()))
-    op.execute(sa.Enum(OverrideMode, name="override_mode").drop(bind=op.get_bind()))
-    op.execute(sa.Enum(ChannelType, name="channel_type").drop(bind=op.get_bind()))
-    op.execute(sa.Enum(StorageBackend, name="storage_backend").drop(bind=op.get_bind()))
-    op.execute(sa.Enum(NotificationStatus, name="notification_status").drop(bind=op.get_bind()))
-    op.execute(sa.Enum(SeveritySource, name="severity_source").drop(bind=op.get_bind()))
-    op.execute(sa.Enum(Severity, name="severity").drop(bind=op.get_bind()))
-    op.execute(sa.Enum(ReceiverStatus, name="receiver_status").drop(bind=op.get_bind()))
-    op.execute(sa.Enum(UserStatus, name="user_status").drop(bind=op.get_bind()))
-    op.execute(sa.Enum(UserRole, name="user_role").drop(bind=op.get_bind()))
-    op.execute(sa.Enum(TenantStatus, name="tenant_status").drop(bind=op.get_bind()))
+    bind = op.get_bind()
+    for enum_type in reversed(_ENUM_TYPES):
+        enum_type.drop(bind=bind, checkfirst=True)
 
     op.execute("DROP EXTENSION IF EXISTS citext")

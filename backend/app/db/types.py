@@ -3,13 +3,6 @@ from enum import StrEnum
 from sqlalchemy.dialects.postgresql import ENUM
 
 
-class RateLimitTier(StrEnum):
-    FREE = "free"
-    BASIC = "basic"
-    PREMIUM = "premium"
-    ENTERPRISE = "enterprise"
-
-
 class TenantStatus(StrEnum):
     ACTIVE = "active"
     SUSPENDED = "suspended"
@@ -82,14 +75,35 @@ SEVERITY_ORDER: dict[Severity, int] = {
     Severity.CRITICAL: 50,
 }
 
-tenant_status_type = ENUM(TenantStatus, name="tenant_status", create_type=False)
-user_role_type = ENUM(UserRole, name="user_role", create_type=False)
-user_status_type = ENUM(UserStatus, name="user_status", create_type=False)
-receiver_status_type = ENUM(ReceiverStatus, name="receiver_status", create_type=False)
-severity_type = ENUM(Severity, name="severity", create_type=False)
-severity_source_type = ENUM(SeveritySource, name="severity_source", create_type=False)
-notification_status_type = ENUM(NotificationStatus, name="notification_status", create_type=False)
-storage_backend_type = ENUM(StorageBackend, name="storage_backend", create_type=False)
-channel_type_type = ENUM(ChannelType, name="channel_type", create_type=False)
-override_mode_type = ENUM(OverrideMode, name="override_mode", create_type=False)
-delivery_status_type = ENUM(DeliveryStatus, name="delivery_status", create_type=False)
+
+def _values(enum_cls: type[StrEnum]) -> list[str]:
+    return [member.value for member in enum_cls]
+
+
+tenant_status_type = ENUM(
+    TenantStatus, name="tenant_status", create_type=False, values_callable=_values
+)
+user_role_type = ENUM(UserRole, name="user_role", create_type=False, values_callable=_values)
+user_status_type = ENUM(UserStatus, name="user_status", create_type=False, values_callable=_values)
+receiver_status_type = ENUM(
+    ReceiverStatus, name="receiver_status", create_type=False, values_callable=_values
+)
+severity_type = ENUM(Severity, name="severity", create_type=False, values_callable=_values)
+severity_source_type = ENUM(
+    SeveritySource, name="severity_source", create_type=False, values_callable=_values
+)
+notification_status_type = ENUM(
+    NotificationStatus, name="notification_status", create_type=False, values_callable=_values
+)
+storage_backend_type = ENUM(
+    StorageBackend, name="storage_backend", create_type=False, values_callable=_values
+)
+channel_type_type = ENUM(
+    ChannelType, name="channel_type", create_type=False, values_callable=_values
+)
+override_mode_type = ENUM(
+    OverrideMode, name="override_mode", create_type=False, values_callable=_values
+)
+delivery_status_type = ENUM(
+    DeliveryStatus, name="delivery_status", create_type=False, values_callable=_values
+)

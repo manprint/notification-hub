@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import MetaData, func, text
+from sqlalchemy import DateTime, MetaData, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -24,5 +24,13 @@ class UUIDPrimaryKeyMixin:
 
 
 class TimestampMixin:
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+    # timezone=True esplicito: senza, SQLAlchemy inferisce un DateTime naive
+    # dall'annotazione `datetime`, mentre la colonna in Postgres e timestamptz
+    # (spec 4). Un valore Python timezone-aware assegnato a una colonna mappata
+    # come naive fa fallire l'INSERT su asyncpg (vedi docs/REVIEW.md, sez. 8).
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+import uuid
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.db.types import Severity
 
@@ -14,7 +16,15 @@ class GroupUpdate(BaseModel):
 
 
 class GroupOut(BaseModel):
-    id: str
+    # from_attributes + model_validate(orm_object): i campi UUID vanno tipati
+    # uuid.UUID, non str. Pydantic non converte un oggetto UUID in stringa
+    # per un campo `str` durante la validazione da attributi (a differenza
+    # della costruzione esplicita `GroupOut(id=str(...))`), e la validazione
+    # fallisce a runtime (mai colto perche i vecchi test non passavano
+    # dall'endpoint reale, vedi docs/REVIEW.md sezione 6).
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
     name: str
     description: str | None
 
@@ -25,23 +35,37 @@ class GroupChannelBindingCreate(BaseModel):
     enabled: bool = True
 
 
+class GroupChannelBindingUpdate(BaseModel):
+    min_severity: Severity | None = None
+    enabled: bool | None = None
+
+
 class GroupChannelBindingOut(BaseModel):
-    id: str
-    group_id: str
-    channel_id: str
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    group_id: uuid.UUID
+    channel_id: uuid.UUID
     min_severity: Severity
     enabled: bool
 
 
 class ReceiverChannelOverrideCreate(BaseModel):
     channel_id: str
-    mode: str = Field(pattern="^(override|disable)$")
+    mode: str = Field(pattern="^(override|mute)$")
+    min_severity: Severity | None = None
+
+
+class ReceiverChannelOverrideUpdate(BaseModel):
+    mode: str | None = Field(default=None, pattern="^(override|mute)$")
     min_severity: Severity | None = None
 
 
 class ReceiverChannelOverrideOut(BaseModel):
-    id: str
-    receiver_id: str
-    channel_id: str
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    receiver_id: uuid.UUID
+    channel_id: uuid.UUID
     mode: str
     min_severity: Severity | None

@@ -1,13 +1,16 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
-class NotificationIngest(BaseModel):
-    title: str = Field(min_length=1, max_length=255)
-    body: str = Field(max_length=1048576)
-    severity: str | None = None
-    metadata: dict | None = None
+class IngestResponse(BaseModel):
+    """Spec 9.1: {"id": "...", "severity": "error", "forwarded_to": 2}.
 
+    severity_source non e nella tabella della spec 9.1 ma e citato in sezione 12
+    passo 8 dello scenario di riferimento ed e utile in diagnostica: aggiunto
+    come campo extra, non sostituisce nessuno dei tre richiesti.
+    """
 
-class NotificationIngestResponse(BaseModel):
-    notification_id: str
-    status: str = "enqueued"
+    id: str
+    severity: str
+    severity_source: str
+    forwarded_to: int
+    storage_backend: str

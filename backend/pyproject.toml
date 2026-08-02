@@ -20,6 +20,11 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Gli engine SQLAlchemy async sono singleton di modulo (app/db/session.py), come
+# in produzione: devono restare legati a un solo event loop per l'intera sessione
+# di test, altrimenti asyncpg solleva "attached to a different loop" al secondo
+# test che li usa (pytest-asyncio di default crea un loop per funzione).
+asyncio_default_fixture_loop_scope = "session"
 testpaths = ["tests"]
 markers = [
     "unit: test senza dipendenze esterne",

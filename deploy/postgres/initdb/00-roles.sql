@@ -6,3 +6,10 @@ CREATE ROLE notifyhub_auth   LOGIN PASSWORD 'dev_auth'   NOSUPERUSER NOCREATEDB 
 
 ALTER SCHEMA public OWNER TO notifyhub_owner;
 GRANT USAGE ON SCHEMA public TO notifyhub_app, notifyhub_ingest, notifyhub_auth;
+
+-- notifyhub_owner deve poter creare estensioni (citext) e girare le migrazioni
+-- Alembic: serve essere owner del database corrente, non solo dello schema.
+DO $$
+BEGIN
+    EXECUTE format('ALTER DATABASE %I OWNER TO notifyhub_owner', current_database());
+END $$;

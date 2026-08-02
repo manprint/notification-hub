@@ -1,18 +1,28 @@
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
-from app.core.errors import PROBLEM_TYPES, Problem, problem_response
+from app.core.config import get_settings
+from app.core.errors import PROBLEM_TYPES, Problem, problem_response, problem_type_for_status
 from app.core.logging import RequestIdMiddleware, configure_logging, get_logger
 
 
 def create_app() -> FastAPI:
     configure_logging()
     logger = get_logger(__name__)
+    settings = get_settings()
 
     app = FastAPI(title="NotifyHub", version="0.1.0", docs_url="/docs")
 
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.add_middleware(RequestIdMiddleware)
 
     @app.exception_handler(Problem)
@@ -36,7 +46,7 @@ def create_app() -> FastAPI:
     async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
         p = Problem(
             status=exc.status_code,
-            type=PROBLEM_TYPES.get("not_found", "/problems/generic"),
+            type=problem_type_for_status(exc.status_code),
             title=exc.detail or "HTTP Error",
             detail=exc.detail or "",
         )
@@ -47,7 +57,7 @@ def create_app() -> FastAPI:
         logger.exception("unhandled_exception", exc_info=exc)
         p = Problem(
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            type="/problems/internal-error",
+            type=PROBLEM_TYPES["internal_error"],
             title="Internal Server Error",
             detail="An internal error occurred.",
         )
@@ -57,17 +67,34 @@ def create_app() -> FastAPI:
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    from app.api.v1 import auth, batch, delivery, groups, ingestion, notifications, search, users
+    @app.get("/readyz")
+    async def readyz() -> JSONResponse:
+        from app.core.readiness import check_readiness
 
+        checks = await check_readiness()
+        ready = all(checks.values())
+        return JSONResponse(
+            status_code=status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"ready": ready, "checks": checks},
+        )
+
+    from app.api import ingest
+    from app.api.v1 import auth, channels, groups, notifications, receivers, stats, tenant, users
+
+    app.include_router(ingest.router)
     app.include_router(auth.router, prefix="/api/v1")
+    app.include_router(auth.invitations_router, prefix="/api/v1")
     app.include_router(users.router, prefix="/api/v1")
-    app.include_router(ingestion.router, prefix="/api/v1")
-    app.include_router(delivery.router, prefix="/api/v1")
+    app.include_router(channels.router, prefix="/api/v1")
     app.include_router(groups.router, prefix="/api/v1")
+    app.include_router(receivers.router, prefix="/api/v1")
+    app.include_router(tenant.router, prefix="/api/v1")
     app.include_router(notifications.router, prefix="/api/v1")
-    app.include_router(search.router, prefix="/api/v1")
-    app.include_router(batch.router, prefix="/api/v1")
+    app.include_router(stats.router, prefix="/api/v1")
 
     # ROUTERS: i router delle fasi successive si registrano qui sopra
 
     return app
+
+
+app = create_app()

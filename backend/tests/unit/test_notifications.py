@@ -1,75 +1,44 @@
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 
 from app.schemas.notification import (
-    ArchiveRequest,
-    MarkReadRequest,
-    MarkUnreadRequest,
-    NotificationOut,
+    BulkReadIn,
+    MarkStatusIn,
+    NotificationListItemOut,
 )
 
 
 @pytest.mark.unit
-def test_mark_read_request_schema():
-    req = MarkReadRequest(notification_ids=[str(uuid.uuid4()), str(uuid.uuid4())])
-
-    assert len(req.notification_ids) == 2
-
-
-@pytest.mark.unit
-def test_mark_read_request_schema_empty():
-    req = MarkReadRequest(notification_ids=[])
-
-    assert len(req.notification_ids) == 0
-
-
-@pytest.mark.unit
-def test_mark_unread_request_schema():
-    req = MarkUnreadRequest(notification_ids=[str(uuid.uuid4())])
-
-    assert len(req.notification_ids) == 1
-
-
-@pytest.mark.unit
-def test_archive_request_schema():
-    req = ArchiveRequest(notification_ids=[str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())])
-
-    assert len(req.notification_ids) == 3
-
-
-@pytest.mark.unit
-def test_notification_out_schema():
-    from datetime import UTC, datetime
-
+def test_notification_list_item_schema():
     now = datetime.now(UTC)
-    notification = NotificationOut(
+    item = NotificationListItemOut(
         id=str(uuid.uuid4()),
-        title="Test Notification",
+        receiver_id=str(uuid.uuid4()),
         content_preview="Preview text",
+        content_size=12,
+        content_normalized=False,
+        storage_backend="inline",
         severity="info",
+        severity_source="receiver_default",
         status="unread",
         received_at=now,
     )
-
-    assert notification.title == "Test Notification"
-    assert notification.status == "unread"
-    assert notification.archived_at is None
+    assert item.status == "unread"
+    assert item.severity == "info"
 
 
 @pytest.mark.unit
-def test_notification_out_schema_archived():
-    from datetime import UTC, datetime
+def test_mark_status_schema():
+    body = MarkStatusIn(status="read")
+    assert body.status == "read"
 
-    now = datetime.now(UTC)
-    notification = NotificationOut(
-        id=str(uuid.uuid4()),
-        title="Archived Notification",
-        content_preview="Preview",
-        severity="warning",
-        status="read",
-        received_at=now,
-        archived_at=now,
+
+@pytest.mark.unit
+def test_bulk_read_schema_accepts_from_alias():
+    body = BulkReadIn.model_validate(
+        {"group_id": str(uuid.uuid4()), "from": "2026-01-01T00:00:00Z"}
     )
-
-    assert notification.archived_at == now
+    assert body.group_id is not None
+    assert body.from_ is not None

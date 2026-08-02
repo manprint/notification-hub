@@ -1,4 +1,20 @@
-version: "3.8"
+# NotifyHub - servizi reali per la suite di test (decisione D5 del piano).
+#
+#   make up-test    avvia
+#   make test       esegue pytest contro backend/.env.test
+#   make down-test  ferma e cancella i volumi
+#
+# Le porte sono quelle fissate dal piano e da backend/.env.test: 5433 Postgres,
+# 6380 Redis, 9002 MinIO S3, 9003 console MinIO. Tutte legate a 127.0.0.1: la suite
+# gira dall'host, non serve esporle altrove.
+#
+# I quattro ruoli Postgres arrivano da deploy/postgres/initdb/00-roles.sql, che il
+# container esegue una sola volta alla creazione del volume. Dopo una modifica ai
+# ruoli serve make down-test seguito da make up-test, altrimenti lo script non viene
+# rieseguito.
+#
+# I volumi sono tmpfs: il database di test non deve sopravvivere al riavvio e cosi
+# non resta stato sporco fra una sessione e l'altra.
 
 services:
   postgres-test:
@@ -7,30 +23,33 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: notifyhub_test
+      # fsync off: e un database usa e getta, conta solo la velocita
+      POSTGRES_INITDB_ARGS: "--nosync"
+    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"]
     ports:
       - "127.0.0.1:5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
     volumes:
-      - pgdata_test:/var/lib/postgresql/data
       - ./deploy/postgres/initdb:/docker-entrypoint-initdb.d:ro
-    networks:
-      - notifyhub-test
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      test: ["CMD-SHELL", "pg_isready -U postgres -d notifyhub_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks: [notifyhub-test]
 
   redis-test:
     image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
     ports:
       - "127.0.0.1:6380:6379"
-    networks:
-      - notifyhub-test
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks: [notifyhub-test]
 
   minio-test:
     image: minio/minio
@@ -41,15 +60,14 @@ services:
     ports:
       - "127.0.0.1:9002:9000"
       - "127.0.0.1:9003:9001"
-    volumes:
-      - miniodata_test:/data
-    networks:
-      - notifyhub-test
+    tmpfs:
+      - /data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks: [notifyhub-test]
 
   minio-init-test:
     image: minio/mc
@@ -62,13 +80,8 @@ services:
       mc mb --ignore-existing local/notifyhub-payloads &&
       mc anonymous set none local/notifyhub-payloads
       "
-    networks:
-      - notifyhub-test
+    networks: [notifyhub-test]
     restart: "no"
-
-volumes:
-  pgdata_test:
-  miniodata_test:
 
 networks:
   notifyhub-test:

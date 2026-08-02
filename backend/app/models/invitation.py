@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import CITEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -16,6 +16,6 @@ class Invitation(Base, UUIDPrimaryKeyMixin):
     email: Mapped[str] = mapped_column(CITEXT, nullable=False)
     role: Mapped[UserRole] = mapped_column(user_role_type, nullable=False)
     token_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
-    expires_at: Mapped[datetime] = mapped_column(nullable=False)
-    accepted_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     invited_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)

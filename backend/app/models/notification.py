@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, String, Text, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,12 +37,6 @@ class Notification(Base, UUIDPrimaryKeyMixin):
             postgresql_where="status='unread'",
         ),
         Index(
-            "ix_notifications_content_preview_tsvector",
-            "content_preview",
-            postgresql_using="gin",
-            postgresql_ops={"content_preview": "gin_trgm_ops"},
-        ),
-        Index(
             "ix_notifications_storage_key",
             "storage_key",
             postgresql_where="storage_backend='object'",
@@ -71,11 +65,14 @@ class Notification(Base, UUIDPrimaryKeyMixin):
     content_normalized: Mapped[bool] = mapped_column(nullable=False, default=False)
     severity: Mapped[Severity] = mapped_column(severity_type, nullable=False)
     severity_source: Mapped[SeveritySource] = mapped_column(severity_source_type, nullable=False)
+    # Denormalizzato al momento dell'ingestion, come content_preview: le regole
+    # possono essere modificate o cancellate dopo, ma la UI deve poter mostrare
+    # quale pattern ha deciso la severity di QUESTA notifica (spec 9.3/9.7).
+    matched_pattern: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[NotificationStatus] = mapped_column(
         notification_status_type, nullable=False, default="unread"
     )
-    received_at: Mapped[datetime] = mapped_column(nullable=False, index=True)
-    archived_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source_ip: Mapped[str | None] = mapped_column(nullable=True)
     meta: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")

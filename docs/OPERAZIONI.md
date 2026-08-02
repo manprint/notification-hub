@@ -4,227 +4,240 @@
 
 ### Cambio Password Predefinite
 
-Prima di esporre NotifyHub su Internet, modificare le password di default dei quattro ruoli PostgreSQL e dell'accesso MinIO:
+Prima di esporre NotifyHub su Internet, cambia le password di default dei quattro ruoli PostgreSQL
+(`deploy/postgres/initdb/00-roles.sql`, applicato solo al primo avvio del volume) e dell'accesso
+MinIO.
 
-#### PostgreSQL (docker-compose.yml)
-
-```bash
-# Genera password sicure
-openssl rand -base64 32
-
-# Aggiorna le variabili in .env:
-DATABASE_PASSWORD=<nuova_password>
-DATABASE_OWNER_PASSWORD=<nuova_password_owner>
-```
-
-Esegui le migrazioni dopo il cambio per garantire che i ruoli siano creati con le nuove credenziali.
-
-#### MinIO (docker-compose.yml)
+#### PostgreSQL
 
 ```bash
-# Aggiorna .env:
-MINIO_ROOT_USER=<nuovo_user>
-MINIO_ROOT_PASSWORD=<nuova_password>
+openssl rand -base64 32   # ripeti per ciascuna delle quattro password
+
+# deploy/postgres/initdb/00-roles.sql (prima del primo avvio, il file gira una sola volta
+# per volume): sostituisci le quattro password dev_owner/dev_app/dev_auth/dev_ingest.
+
+# .env: aggiorna le URL con le stesse password
+PG_OWNER_PASSWORD=<nuova_password_owner>
+PG_APP_PASSWORD=<nuova_password_app>
+PG_AUTH_PASSWORD=<nuova_password_auth>
+PG_INGEST_PASSWORD=<nuova_password_ingest>
 ```
 
-Ricrea il bucket `notifyhub-payloads` dopo il cambio di credenziali:
+Un cambio password su un volume Postgres gia inizializzato richiede `make reset-db` (o
+`ALTER ROLE ... PASSWORD` manuale): `00-roles.sql` non viene rieseguito su un volume esistente.
+
+#### MinIO
+
+```bash
+# .env
+NOTIFYHUB_S3_ACCESS_KEY=<nuovo_access_key>
+NOTIFYHUB_S3_SECRET_KEY=<nuovo_secret_key>
+```
 
 ```bash
 docker compose down
-docker compose up -d minio minio-init
+docker compose up -d minio minio-init   # minio-init ricrea il bucket con le nuove credenziali
 ```
 
 ### Terminazione TLS
 
-nginx ascolta sulla porta 80 senza TLS. Per la produzione:
+`nginx` ascolta sulla porta 80 senza TLS (`deploy/nginx/nginx.conf`). Per la produzione:
 
-1. Ottieni un certificato SSL (Let's Encrypt, self-signed, etc.)
-2. Modifica `deploy/nginx/nginx.conf`:
-
-```nginx
-server {
-    listen 80;
-    server_name yourdomain.com;
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name yourdomain.com;
-    
-    ssl_certificate /etc/nginx/certs/cert.pem;
-    ssl_certificate_key /etc/nginx/certs/key.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    
-    # ... resto della configurazione ...
-}
-```
-
-3. Monta i certificati nel container nginx via `volumes`.
+1. Procurati un certificato (Let's Encrypt, self-signed, o terminazione a monte).
+2. Aggiungi un server block `listen 443 ssl` con `ssl_certificate`/`ssl_certificate_key` e un
+   redirect 301 dal blocco `listen 80` esistente.
+3. Monta i certificati nel container `nginx` via `volumes` in `docker-compose.yml`.
 
 ## Variabili d'Ambiente
 
-| Variabile | Descrizione | Default |
-|-----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection string (notifyhub_app) | postgresql://... |
-| `DATABASE_OWNER_PASSWORD` | Password for schema owner (Alembic) | postgres |
-| `REDIS_URL` | Redis connection string | redis://redis:6379/0 |
-| `MINIO_ENDPOINT` | MinIO S3-compatible endpoint | minio:9000 |
-| `MINIO_ACCESS_KEY` | MinIO access key | minioadmin |
-| `MINIO_SECRET_KEY` | MinIO secret key | minioadmin |
-| `NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST` | Comma-separated webhook hosts | slack.com,google.com |
-| `NOTIFYHUB_PAYLOAD_THRESHOLD_BYTES` | Inline/object storage threshold | 1048576 (1MB) |
-| `NOTIFYHUB_MAX_DELIVERY_ATTEMPTS` | Max retries for webhook delivery | 5 |
-| `NOTIFYHUB_BASE_RETRY_SECONDS` | Base retry delay (exponential backoff) | 2 |
+Elenco completo in `.env.example`. Le principali:
+
+| Variabile | Descrizione |
+|-----------|-------------|
+| `NOTIFYHUB_SECRET_KEY` | Chiave AES-GCM per cifrare `webhook_url` a riposo |
+| `DATABASE_URL_OWNER` | Connessione Alembic (`notifyhub_owner`, proprietario dello schema) |
+| `DATABASE_URL_APP` / `_AUTH` / `_INGEST` | Le tre connessioni di runtime a RLS (spec 5.2) |
+| `DATABASE_URL_SYNC` | Connessione sincrona (psycopg) usata da worker/beat |
+| `REDIS_URL` | Broker rate limit, idempotenza, contatori |
+| `CELERY_BROKER_URL` | Broker Celery (db Redis separato dal precedente) |
+| `NOTIFYHUB_S3_ENDPOINT` / `_BUCKET` / `_ACCESS_KEY` / `_SECRET_KEY` / `_REGION` | MinIO/S3 |
+| `NOTIFYHUB_INLINE_MAX_BYTES` | Soglia inline/object, default 1048576 (1MB, spec 6.5) |
+| `NOTIFYHUB_HARD_MAX_BODY_BYTES` | Hard limit di sistema, default 20971520 (20MB) |
+| `ALLOW_PUBLIC_REGISTRATION` | Gate su `POST /auth/register`, default `false` |
+| `NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST` | Host consentiti per `webhook_url`, CSV |
+| `ACCESS_TOKEN_TTL_MINUTES` / `REFRESH_TOKEN_TTL_DAYS` | Scadenze JWT/refresh |
+| `CORS_ORIGINS` | Origin ammessi dalla SPA |
+| `TRUSTED_PROXIES` | Solo questi IP autorizzano la lettura di `X-Forwarded-For` |
+| `SMTP_HOST/_PORT/_USER/_PASSWORD/_FROM` | Opzionali: se assenti, l'invito resta un link copiabile |
 
 ## Job di Manutenzione
 
-Seven background jobs run via Celery Beat. Tutti leggono configurazione da variabili d'ambiente oppure hanno default ragionevoli.
+Sette job Celery Beat, definiti in `app/tasks/maintenance.py` e schedulati in
+`app/tasks/celery_app.py` (spec sezione 11). Il worker che li esegue e il servizio `worker`/`beat`
+del compose di produzione (profilo di default, non serve attivare nulla).
 
-### 1. `reconcile_pending_deliveries`
+### 1. `purge_notifications`
 
-**Cosa fa:** ricerca delivery con stato `pending` o `sending` da più di 5 minuti e ri-accoda per la consegna.
+**Cosa fa:** per ogni tenant con `retention_days` non NULL, elimina le notifiche piu vecchie della
+retention, a batch di 10.000 righe.
 
-**Quando:** ogni 5 minuti
+**Quando:** ogni notte alle 03:00.
 
-**Importanza:** CRITICA. Se il broker Redis perde messaggi, questo job garantisce consegna asincrona.
+**Importanza:** MEDIA. Se non gira, i tenant con retention configurata accumulano dati oltre il
+limite dichiarato.
 
-**Se non gira:** notifiche restano bloccate; incrementare la frequenza o controllare che il worker sia attivo.
+### 2. `purge_deliveries`
 
-### 2. `purge_orphan_objects`
+**Cosa fa:** elimina le delivery `sent` piu vecchie di 30 giorni. Le `dead` restano finche non
+archiviate manualmente.
 
-**Cosa fa:** ricerca entry in `pending_object_deletions` più vecchie di 1 giorno e cancella i blob da MinIO.
+**Quando:** ogni notte alle 03:30.
 
-**Quando:** ogni ora
+**Importanza:** BASSA. Pulizia della tabella outbox.
 
-**Importanza:** MEDIA. Previene accumulo indefinito di oggetti orfani su MinIO.
+### 3. `cleanup_tokens`
 
-**Se non gira:** disk space MinIO cresce lentamente; esegui manualmente:
+**Cosa fa:** elimina refresh token scaduti/revocati e inviti scaduti.
+
+**Quando:** ogni ora.
+
+**Importanza:** BASSA. Housekeeping.
+
+### 4. `reconcile_deliveries`
+
+**Cosa fa:** ripesca le delivery `pending`/`failed` con `next_attempt_at` scaduto (copre un
+messaggio Celery perso dal broker) e le `sending` con `locked_at` piu vecchio di 10 minuti (copre
+un worker morto a meta lavoro).
+
+**Quando:** ogni 5 minuti.
+
+**Importanza:** CRITICA. E' la garanzia di consegna del pattern outbox (spec 8.2): senza questo job
+una delivery persa dal broker resta bloccata per sempre.
+
+**Diagnostica se le delivery restano ferme:**
+
+```bash
+docker compose logs beat | grep reconcile-deliveries
+docker compose exec worker celery -A app.tasks.celery_app inspect active
+```
+
+### 5. `drain_object_deletions`
+
+**Cosa fa:** svuota `pending_object_deletions` cancellando gli oggetti da MinIO. Dopo 10 tentativi
+falliti la riga resta e alimenta la metrica `notifyhub_maintenance_job_runs_total{job="drain_object_deletions",outcome="error"}`.
+
+**Quando:** ogni 10 minuti.
+
+**Importanza:** MEDIA. Se non gira, gli oggetti cancellati lato applicativo restano su MinIO.
+
+### 6. `purge_orphan_objects`
+
+**Cosa fa:** elimina gli oggetti del bucket piu vecchi di 24h senza riga corrispondente in
+`notifications.storage_key`. Recupera i PUT riusciti con commit Postgres fallito.
+
+**Quando:** ogni notte alle 04:00.
+
+**Importanza:** MEDIA. Previene accumulo di oggetti orfani.
+
+**Esecuzione manuale:**
 
 ```bash
 docker compose run --rm worker celery -A app.tasks.celery_app call app.tasks.maintenance.purge_orphan_objects
 ```
 
-### 3. `clear_expired_tokens`
+### 7. `recompute_tenant_usage`
 
-**Cosa fa:** cancella `refresh_tokens` scaduti e `invitations` scadute (> 7 giorni).
+**Cosa fa:** ricalcola lo spazio occupato per tenant (inline + oggetti MinIO), alimenta la gauge
+`notifyhub_tenant_storage_bytes` usata dall'enforcement di `max_storage_bytes` (spec 4.1, F7).
 
-**Quando:** ogni 24 ore
+**Quando:** ogni notte alle 04:30.
 
-**Importanza:** BASSA. Pulizia housekeeping.
+**Importanza:** MEDIA. Se non gira, l'enforcement di `max_storage_bytes` lavora su dati non
+aggiornati fino al giorno successivo.
 
-**Se non gira:** database cresce leggermente; non critico.
+## Quote per Tenant
 
-### 4. `reap_completed_migrations`
-
-**Cosa fa:** cancella record di migrazioni completate più vecchi di 30 giorni.
-
-**Quando:** ogni 7 giorni
-
-**Importanza:** BASSA. Evita crescita dei log di migrazione.
-
-### 5. `detect_tenant_suspension`
-
-**Cosa fa:** controlla se tenant hanno raggiunto limiti di quota e li sospende.
-
-**Quando:** ogni 30 minuti
-
-**Importanza:** MEDIA. Richiede `NOTIFYHUB_QUOTA_CHECKS=true` in .env.
-
-**Se non gira:** tenant possono superare quota; controllare che `enable_quota_enforcement` sia true.
-
-### 6. `sync_external_webhooks`
-
-**Cosa fa:** sincronizza lo stato di delivery channels esterni (se configurato).
-
-**Quando:** ogni 60 minuti
-
-**Importanza:** BASSA. Solo se integrato con external system.
-
-### 7. `log_metrics_summary`
-
-**Cosa fa:** log aggregato di metriche giornaliere (notification count, delivery success rate, etc.).
-
-**Quando:** ogni 24 ore a mezzanotte UTC
-
-**Importanza:** BASSA. Solo per observability.
+L'enforcement delle quote (`app/services/quota.py`) e sincrono, dentro la richiesta di ingestion:
+supera `max_notifications_per_day` o `max_storage_bytes` (entrambi NULL = illimitato) e la risposta
+e `429` con `type: /problems/quota-exceeded`, nessuna sospensione automatica del tenant. Il campo
+`tenants.status` (`active`/`suspended`) e amministrativo: va cambiato esplicitamente via
+`PATCH /api/v1/tenant` o direttamente in database, non da un job.
 
 ## Backup e Ripristino
 
 I dati vivono in tre posti:
 
-1. **PostgreSQL**: tabelle, schema, constraints, RLS policies
-2. **MinIO**: blob di notifiche > 1MB
-3. **Redis**: state transitorio (rate limit, lock, broker queue)
+1. **PostgreSQL**: tabelle, schema, vincoli, policy RLS.
+2. **MinIO**: payload di notifiche oltre `NOTIFYHUB_INLINE_MAX_BYTES`.
+3. **Redis**: stato transitorio (rate limit, idempotenza, broker Celery) — non serve backup.
 
-### Backup Coordinato
-
-Sempre fare backup di PostgreSQL e MinIO insieme:
+### Backup coordinato
 
 ```bash
-# Backup PostgreSQL
 docker compose exec -T postgres pg_dump -U postgres notifyhub > backup.sql
 
-# Backup MinIO
-docker compose run --rm mc alias set local http://minio:9000 minioadmin minioadmin
-docker compose run --rm mc mirror local/notifyhub-payloads ./minio-backup/
+docker compose exec minio mc alias set local http://localhost:9000 "$NOTIFYHUB_S3_ACCESS_KEY" "$NOTIFYHUB_S3_SECRET_KEY"
+docker compose exec minio mc mirror local/notifyhub-payloads /tmp/minio-backup
+docker compose cp minio:/tmp/minio-backup ./minio-backup
 ```
 
 ### Ripristino
 
 ```bash
-# Ripristina database
 docker compose exec -T postgres psql -U postgres notifyhub < backup.sql
 
-# Ripristina MinIO
-docker compose run --rm mc alias set local http://minio:9000 minioadmin minioadmin
-docker compose run --rm mc mirror ./minio-backup/ local/notifyhub-payloads
+docker compose cp ./minio-backup minio:/tmp/minio-backup
+docker compose exec minio mc mirror /tmp/minio-backup local/notifyhub-payloads
 ```
 
 ## Troubleshooting
 
-### `pending_object_deletions_backlog` cresce
+### `pending_object_deletions` cresce senza svuotarsi
 
-Significa che il job `purge_orphan_objects` non riesce a contattare MinIO o i file sono gia cancellati.
-
-**Diagnostica:**
+Il job `drain_object_deletions` non riesce a contattare MinIO, o `attempts` ha superato 10 e la riga
+resta ferma di proposito.
 
 ```bash
-docker compose logs worker | grep purge_orphan
+docker compose logs worker beat | grep drain_object_deletions
 docker compose exec minio mc ls local/notifyhub-payloads
 ```
 
-**Fix:** riavvia il worker e controlla la connessione MinIO.
+**Fix:** verifica la connettivita verso MinIO (`NOTIFYHUB_S3_ENDPOINT`), poi ri-accoda manualmente
+il job con il comando della sezione 5 sopra.
 
 ### Rate limiting bloccato
 
-Se tutti i receiver hanno 0 richieste rimaste, controllare Redis:
+Le chiavi sliding-window sono su Redis:
 
 ```bash
-docker compose exec redis redis-cli
-> KEYS "rate_limit:*"
-> DEL rate_limit:*  # Reset globale
+docker compose exec redis redis-cli KEYS "ingest:ratelimit:*"
+docker compose exec redis redis-cli DEL "ingest:ratelimit:ip:<indirizzo>"
+docker compose exec redis redis-cli DEL "ingest:ratelimit:slug:<receiver_id>"
 ```
+
+Il rate limit per IP (`ingest:ratelimit:ip:*`, 300/min) e il primo gate, valutato prima della
+risoluzione dello slug (spec 10.1): uno scan di slug inesistenti resta bloccato li, senza mai
+toccare il database.
 
 ### RLS blocca query legittime
 
-Se un utente vede 403 su endpoint válido, controllare che `app.tenant_id` sia impostato. Nel codice deve esserci un commit di transazione con `SET LOCAL`:
+Se una richiesta autenticata vede righe mancanti o un 404 inatteso, verifica che la transazione
+abbia impostato `app.tenant_id`: la dependency FastAPI lo fa con `SET LOCAL`, valido solo fino al
+prossimo commit sulla stessa sessione. Un `commit()` intermedio seguito da altre query nella stessa
+sessione le esegue senza `app.tenant_id`, e la policy nega di default (nessuna riga, non un errore).
 
-```python
-await session.execute(text("SET LOCAL app.tenant_id = :tenant_id"), {"tenant_id": tenant_id})
-```
-
-### Webhook non inoltrati
-
-Controllare che il worker sia attivo:
+### Webhook non consegnati
 
 ```bash
 docker compose logs worker
 docker compose exec worker celery -A app.tasks.celery_app inspect active
+docker compose exec worker celery -A app.tasks.celery_app inspect registered
 ```
 
-Se nessun task è attivo, il worker è morto; riavvia:
+Se `registered` non elenca `app.tasks.delivery.dispatch_delivery`, il worker non ha caricato i
+moduli task (verifica `include` in `app/tasks/celery_app.py`). Se il worker e sano ma le delivery
+restano `pending`, controlla `GET /api/v1/deliveries?status=pending` e attendi il prossimo giro di
+`reconcile_deliveries` (5 minuti) o riavvia il worker:
 
 ```bash
 docker compose restart worker
@@ -232,24 +245,25 @@ docker compose restart worker
 
 ## Metriche Esposte
 
-L'API espone metriche Prometheus sulla porta interna 9100 (non visibile da nginx):
+L'API espone metriche Prometheus sulla porta interna 9100, mai instradata da nginx (spec 10.4):
 
 ```bash
-curl http://localhost:9100/metrics
+docker compose exec api curl -s http://localhost:9100/metrics
 ```
 
-Metriche principali:
+Metriche definite in `app/core/metrics.py`:
 
-- `notifyhub_notifications_ingested_total`: counter, notifiche ricevute
-- `notifyhub_notifications_forwarded_total`: counter, notifiche inoltrate a webhook
-- `notifyhub_delivery_failed_total`: counter, fallimenti di consegna
-- `notifyhub_ingestion_request_duration_seconds`: histogram, latenza ingestion
-- `notifyhub_receiver_rate_limit_exceeded`: gauge, quanti receiver hanno superato limite
+- `notifyhub_ingestion_requests_total{outcome}` — richieste di ingestion per esito (`success`,
+  `replay`, `not_found`, `rate_limited`, `payload_too_large`, `unsupported_media_type`,
+  `storage_unavailable`, `error`)
+- `notifyhub_ingestion_duration_seconds` — histogram, latenza dell'endpoint di ingestion
+- `notifyhub_deliveries_total{outcome}` — tentativi di inoltro per esito
+- `notifyhub_maintenance_job_runs_total{job,outcome}` — esecuzioni dei job di manutenzione
+- `notifyhub_tenant_storage_bytes{tenant_id}` — spazio occupato per tenant, da `recompute_tenant_usage`
 
-Integra con Prometheus aggiungendo un job di scrape verso il container API:
+Integrazione Prometheus:
 
 ```yaml
-# prometheus.yml
 scrape_configs:
   - job_name: notifyhub
     static_configs:
@@ -258,11 +272,11 @@ scrape_configs:
 
 ## Limitazioni Conosciute
 
-- L'ingestion endpoint non supporta streaming incrementale (carica tutto in memoria, poi valida)
-- I webhook falliti non vengono mai cancellati; restano con stato `failed` indefinitamente
-- Nessun limite per il numero di severity rules per receiver
-- RLS non supporta query cross-tenant (by design)
+Vedi `notifyhub-spec.md` sezione 16 per i rischi noti e i rimandi consapevoli (ricerca limitata ai
+primi 4096 caratteri, nessun partitioning di `notifications`, access token non revocabile prima
+della scadenza di 15 minuti).
 
 ## Support
 
-Per bug o feature request, consultare il documento di spec: `notifyhub-spec.md`.
+Per bug o richieste di funzionalita, la fonte di verita e `notifyhub-spec.md`; lo stato di
+implementazione e in `plan_NotifyHub/resume.md`.

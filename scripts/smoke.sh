@@ -11,6 +11,12 @@ COLOR_NC='\033[0m'
 test_passed=0
 test_failed=0
 
+# mock-webhook e' il solo host verso cui questo test invia webhook reali: va
+# nella allowlist letta dal container api, non in quella (irrilevante) di questo
+# processo bash. L'interpolazione di docker compose legge questa variabile dal
+# proprio ambiente prima di lanciare i container (vedi docker-compose.yml).
+export NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST="hooks.slack.com,chat.googleapis.com,mock-webhook"
+
 assert_eq() {
     local expected="$1"
     local actual="$2"
@@ -18,12 +24,12 @@ assert_eq() {
 
     if [ "$expected" = "$actual" ]; then
         echo -e "${COLOR_GREEN}✓${COLOR_NC} $msg"
-        ((test_passed++))
+        test_passed=$((test_passed+1))
     else
         echo -e "${COLOR_RED}✗${COLOR_NC} $msg"
         echo "  Expected: $expected"
         echo "  Actual:   $actual"
-        ((test_failed++))
+        test_failed=$((test_failed+1))
         return 1
     fi
 }
@@ -35,12 +41,12 @@ assert_http_code() {
 
     if [ "$expected" = "$actual" ]; then
         echo -e "${COLOR_GREEN}✓${COLOR_NC} $msg (HTTP $actual)"
-        ((test_passed++))
+        test_passed=$((test_passed+1))
     else
         echo -e "${COLOR_RED}✗${COLOR_NC} $msg"
         echo "  Expected HTTP: $expected"
         echo "  Actual HTTP:   $actual"
-        ((test_failed++))
+        test_failed=$((test_failed+1))
         return 1
     fi
 }
@@ -59,7 +65,7 @@ while [ $retry -lt $max_retries ]; do
         break
     fi
     sleep 1
-    ((retry++))
+    retry=$((retry+1))
 done
 
 if [ $retry -eq $max_retries ]; then
@@ -73,35 +79,16 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} All services ready"
 # Step 2: Bootstrap tenant
 echo ""
 echo "Step 2: Bootstrap tenant..."
-bootstrap_output=$(docker compose run --rm -T migrate /bin/bash -c "cd /app && python -c \"
-import asyncio
-from app.core.config import config
-from app.db.session import get_session
-from app.models import Tenant, User
-from app.core.crypto import hash_password
-from sqlalchemy import insert
+# ".local"/".test" sono nomi a uso speciale (RFC 2606) rifiutati da EmailStr:
+# serve un dominio sintatticamente normale, non deve risolvere davvero in DNS.
+USER_EMAIL="owner@acme-notifyhub-smoke.io"
+USER_PASSWORD="password123"
 
-async def bootstrap():
-    async with get_session() as session:
-        # Create tenant
-        tenant = await session.scalar(insert(Tenant).values(name='Test Tenant').returning(Tenant))
-        await session.flush()
-
-        # Create owner user
-        user = await session.scalar(insert(User).values(
-            tenant_id=tenant.id,
-            email='owner@test.local',
-            password_hash=hash_password('password123'),
-            role='owner',
-            status='active'
-        ).returning(User))
-
-        await session.commit()
-        print(f'BOOTSTRAP_TENANT_ID={tenant.id}')
-        print(f'BOOTSTRAP_USER_EMAIL={user.email}')
-
-asyncio.run(bootstrap())
-\"" 2>&1 || echo "BOOTSTRAP_FAILED")
+bootstrap_output=$(docker compose run --rm -T migrate \
+    python -m app.cli bootstrap \
+        --tenant-name "Test Tenant" \
+        --email "$USER_EMAIL" \
+        --password "$USER_PASSWORD" 2>&1 || echo "BOOTSTRAP_FAILED")
 
 if echo "$bootstrap_output" | grep -q "BOOTSTRAP_FAILED"; then
     echo -e "${COLOR_RED}✗${COLOR_NC} Bootstrap failed"
@@ -109,15 +96,13 @@ if echo "$bootstrap_output" | grep -q "BOOTSTRAP_FAILED"; then
     exit 1
 fi
 
-TENANT_ID=$(echo "$bootstrap_output" | grep BOOTSTRAP_TENANT_ID | cut -d= -f2)
-USER_EMAIL=$(echo "$bootstrap_output" | grep BOOTSTRAP_USER_EMAIL | cut -d= -f2)
-
-if [ -z "$TENANT_ID" ]; then
-    echo -e "${COLOR_RED}✗${COLOR_NC} Could not extract tenant ID"
+if ! echo "$bootstrap_output" | grep -q "Tenant created"; then
+    echo -e "${COLOR_RED}✗${COLOR_NC} Bootstrap did not report tenant creation"
+    echo "$bootstrap_output"
     exit 1
 fi
 
-echo -e "${COLOR_GREEN}✓${COLOR_NC} Tenant bootstrapped (ID: $TENANT_ID)"
+echo -e "${COLOR_GREEN}✓${COLOR_NC} Tenant bootstrapped"
 
 # Step 3: Login
 echo ""
@@ -168,7 +153,7 @@ echo "Step 5: Create receiver..."
 receiver_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/api/v1/groups/$group_id/receivers \
     -H "Authorization: Bearer $access_token" \
     -H "Content-Type: application/json" \
-    -d '{"slug": "server-prod"}')
+    -d '{"name": "Backup notturno"}')
 
 http_code=$(echo "$receiver_response" | tail -1)
 body=$(echo "$receiver_response" | head -n -1)
@@ -189,12 +174,11 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} Receiver created (slug: $receiver_slug, le
 # Step 6: Create delivery channel
 echo ""
 echo "Step 6: Create delivery channel..."
-export NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST="mock-webhook"
 
-channel_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/api/v1/delivery/channels \
+channel_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/api/v1/channels \
     -H "Authorization: Bearer $access_token" \
     -H "Content-Type: application/json" \
-    -d '{"type": "slack", "webhook_url": "http://mock-webhook:8899/hook"}')
+    -d '{"name": "Slack #ops", "type": "slack", "webhook_url": "http://mock-webhook:8899/hook"}')
 
 http_code=$(echo "$channel_response" | tail -1)
 body=$(echo "$channel_response" | head -n -1)
@@ -217,10 +201,10 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} Channel created (webhook masked in respons
 # Step 7: Bind group to channel
 echo ""
 echo "Step 7: Bind group to channel..."
-binding_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/api/v1/groups/$group_id/channels/$channel_id \
+binding_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/api/v1/groups/$group_id/channels \
     -H "Authorization: Bearer $access_token" \
     -H "Content-Type: application/json" \
-    -d '{"min_severity": "error"}')
+    -d "{\"channel_id\": \"$channel_id\", \"min_severity\": \"error\"}")
 
 http_code=$(echo "$binding_response" | tail -1)
 assert_http_code 201 "$http_code" "Bind channel should return 201"
@@ -233,7 +217,7 @@ echo "Step 8: Create severity rule..."
 rule_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/api/v1/receivers/$receiver_id/severity-rules \
     -H "Authorization: Bearer $access_token" \
     -H "Content-Type: application/json" \
-    -d '{"pattern": "FALL(ITO|IMENT)|ERROR", "severity": "error"}')
+    -d '{"priority": 0, "pattern": "FALL(ITO|IMENT)|ERROR", "severity": "error"}')
 
 http_code=$(echo "$rule_response" | tail -1)
 assert_http_code 201 "$http_code" "Create severity rule should return 201"
@@ -294,7 +278,7 @@ http_code=$(echo "$ingest_response" | tail -1)
 body=$(echo "$ingest_response" | head -n -1)
 
 assert_http_code 404 "$http_code" "Non-existent slug should return 404"
-404_nonexistent="$body"
+body_404_nonexistent="$body"
 
 echo -e "${COLOR_GREEN}✓${COLOR_NC} Non-existent slug returned 404"
 
@@ -316,14 +300,14 @@ body=$(echo "$ingest_response" | head -n -1)
 
 assert_http_code 404 "$http_code" "Disabled receiver should return 404"
 
-if [ "$body" != "$404_nonexistent" ]; then
+if [ "$body" != "$body_404_nonexistent" ]; then
     echo -e "${COLOR_RED}✗${COLOR_NC} 404 body not identical for disabled receiver"
-    echo "  Expected: $404_nonexistent"
+    echo "  Expected: $body_404_nonexistent"
     echo "  Got:      $body"
-    ((test_failed++))
+    test_failed=$((test_failed+1))
 else
     echo -e "${COLOR_GREEN}✓${COLOR_NC} 404 body byte-identical for disabled receiver (I-2 verified)"
-    ((test_passed++))
+    test_passed=$((test_passed+1))
 fi
 
 # Step 13: Re-enable receiver
@@ -342,9 +326,27 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} Receiver re-enabled"
 # Step 14: Ingest large payload (2MB)
 echo ""
 echo "Step 14: Ingest 2MB payload..."
-dd if=/dev/zero bs=1M count=2 2>/dev/null | base64 > /tmp/payload_2mb.txt
+
+# Il receiver eredita il cap del tenant (1MB) alla creazione (spec 4.1): va
+# alzato in entrambi i punti prima di poter accettare un corpo da 2MB.
+cap_response=$(curl -s -w "\n%{http_code}" -X PATCH http://localhost/api/v1/tenant \
+    -H "Authorization: Bearer $access_token" \
+    -H "Content-Type: application/json" \
+    -d '{"max_body_bytes": 5242880}')
+http_code=$(echo "$cap_response" | tail -1)
+assert_http_code 200 "$http_code" "Raise tenant max_body_bytes should return 200"
+
+cap_response=$(curl -s -w "\n%{http_code}" -X PATCH http://localhost/api/v1/receivers/$receiver_id \
+    -H "Authorization: Bearer $access_token" \
+    -H "Content-Type: application/json" \
+    -d '{"max_body_bytes": 5242880}')
+http_code=$(echo "$cap_response" | tail -1)
+assert_http_code 200 "$http_code" "Raise receiver max_body_bytes should return 200"
+
+dd if=/dev/zero bs=1M count=2 2>/dev/null > /tmp/payload_2mb.txt
 
 ingest_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/ingest/$receiver_slug \
+    -H "Content-Type: text/plain" \
     --data-binary @/tmp/payload_2mb.txt)
 
 http_code=$(echo "$ingest_response" | tail -1)
@@ -365,13 +367,19 @@ notification_id=$(echo "$body" | jq -r '.id // empty')
 echo ""
 echo "Step 15: Download and verify content..."
 if [ -n "$notification_id" ]; then
-    download_response=$(curl -s -w "\n%{http_code}" http://localhost/api/v1/notifications/$notification_id/content \
+    http_code=$(curl -s -o /tmp/payload_2mb_downloaded.txt -w "%{http_code}" \
+        http://localhost/api/v1/notifications/$notification_id/content \
         -H "Authorization: Bearer $access_token")
 
-    http_code=$(echo "$download_response" | tail -1)
     assert_http_code 200 "$http_code" "Download content should return 200"
 
-    echo -e "${COLOR_GREEN}✓${COLOR_NC} Content downloaded (SHA-256 verification skipped in smoke test)"
+    if cmp -s /tmp/payload_2mb.txt /tmp/payload_2mb_downloaded.txt; then
+        echo -e "${COLOR_GREEN}✓${COLOR_NC} Downloaded content byte-identical to the 2097152 byte upload"
+        test_passed=$((test_passed+1))
+    else
+        echo -e "${COLOR_RED}✗${COLOR_NC} Downloaded content differs from the original upload"
+        test_failed=$((test_failed+1))
+    fi
 fi
 
 # Step 16: Wait for webhook delivery
@@ -388,21 +396,21 @@ while [ $waited -lt $max_wait ]; do
         break
     fi
     sleep 1
-    ((waited++))
+    waited=$((waited+1))
 done
 
 if [ $webhook_received -eq 0 ]; then
     echo -e "${COLOR_RED}✗${COLOR_NC} Webhook not received within 30 seconds"
     echo "  Check worker/beat status"
-    ((test_failed++))
+    test_failed=$((test_failed+1))
 else
     webhook_count=$(curl -s http://localhost:8899/_received | jq 'length')
     if [ "$webhook_count" -eq 1 ]; then
         echo -e "${COLOR_GREEN}✓${COLOR_NC} Webhook delivered (exactly 1 request)"
-        ((test_passed++))
+        test_passed=$((test_passed+1))
     else
         echo -e "${COLOR_RED}✗${COLOR_NC} Unexpected number of webhook requests: $webhook_count (expected 1)"
-        ((test_failed++))
+        test_failed=$((test_failed+1))
     fi
 fi
 
@@ -419,7 +427,7 @@ receiver_update=$(curl -s -w "\n%{http_code}" -X PATCH http://localhost/api/v1/r
 sleep 1
 
 oversized_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/ingest/$receiver_slug \
-    -d "This is a message that exceeds the configured limit and should be rejected by the ingestion endpoint")
+    -d "This is a message that is well over one hundred bytes long and therefore exceeds the configured per-receiver limit of 100 bytes set just above")
 
 http_code=$(echo "$oversized_response" | tail -1)
 assert_http_code 413 "$http_code" "Oversized payload should return 413"

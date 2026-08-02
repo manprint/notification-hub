@@ -1,40 +1,107 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import current_claims, db
+from app.api.deps import current_claims, db, require_admin
+from app.core.config import get_settings
 from app.core.errors import PROBLEM_TYPES, Problem
 from app.core.security import (
     AccessClaims,
     create_access_token,
+    hash_password,
     hash_token,
     new_refresh_token,
     verify_password,
 )
 from app.db.session import tenant_session
+from app.db.types import TenantStatus, UserRole, UserStatus
+from app.models.invitation import Invitation
 from app.models.refresh_token import RefreshToken
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.auth import (
+    InvitationAcceptIn,
+    InvitationIn,
+    InvitationOut,
     LoginIn,
     LogoutIn,
     MeOut,
     RefreshIn,
+    RegisterIn,
     TokenPairOut,
 )
-from app.services.identity import find_refresh_token, find_user_by_email
+from app.services.identity import find_invitation, find_refresh_token, find_user_by_email
 from app.services.ratelimit import sliding_window_hit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+# Le rotte inviti sono sotto /api/v1/invitations, non /api/v1/auth/invitations
+# (spec 9.2: la tabella le elenca nella sezione Auth ma il path e a livello
+# radice, come /api/v1/users).
+invitations_router = APIRouter(prefix="/invitations", tags=["auth"])
+
+
+@router.post("/register", status_code=201)
+async def register(body: RegisterIn) -> dict:
+    """Crea Tenant + primo utente owner. Disabilitato di default (spec 10.2):
+    un'istanza self-hosted esposta su internet con registrazione aperta si
+    riempie di tenant spazzatura."""
+    settings = get_settings()
+    if not settings.allow_public_registration:
+        raise Problem(
+            status=403,
+            type=PROBLEM_TYPES["forbidden"],
+            title="Forbidden",
+            detail="Public registration is disabled. Use the bootstrap CLI.",
+        )
+
+    existing = await find_user_by_email(body.email)
+    if existing is not None:
+        raise Problem(
+            status=409,
+            type=PROBLEM_TYPES["conflict"],
+            title="Conflict",
+            detail="Email already registered.",
+        )
+
+    from app.db.session import async_session_factory_app
+
+    tenant_id = uuid.uuid4()
+    async with async_session_factory_app() as session:
+        tenant = Tenant(
+            id=tenant_id,
+            name=body.tenant_name,
+            slug=f"{body.tenant_name.lower().replace(' ', '-')}-{tenant_id.hex[:8]}",
+            status=TenantStatus.ACTIVE,
+        )
+        session.add(tenant)
+        await session.commit()
+
+    user_id = uuid.uuid4()
+    async with tenant_session(tenant_id) as session:
+        user = User(
+            id=user_id,
+            tenant_id=tenant_id,
+            email=body.email,
+            password_hash=hash_password(body.password),
+            role=UserRole.OWNER,
+            status=UserStatus.ACTIVE,
+        )
+        session.add(user)
+
+    return {"tenant_id": str(tenant_id), "user_id": str(user_id)}
 
 
 @router.post("/login", response_model=TokenPairOut, status_code=200)
-async def login(body: LoginIn) -> TokenPairOut:
-    rate_limit_key = f"login_attempts:{body.email}"
-    rate_limit = await sliding_window_hit(rate_limit_key, 5, 900)
+async def login(body: LoginIn, request: Request) -> TokenPairOut:
+    # Chiave su (email, IP): sulla sola email chiunque conosca un indirizzo
+    # potrebbe bloccare quell'account inviando richieste false (spec 10.2
+    # chiede esplicitamente (email, IP)).
+    client_ip = request.client.host if request.client else "unknown"
+    rate_limit_key = f"login_attempts:{body.email}:{client_ip}"
+    rate_limit = await sliding_window_hit(rate_limit_key, 10, 900)
 
     if not rate_limit.allowed:
         raise Problem(
@@ -42,19 +109,12 @@ async def login(body: LoginIn) -> TokenPairOut:
             type=PROBLEM_TYPES["rate_limited"],
             title="Too Many Requests",
             detail="Too many login attempts. Please try again later.",
+            extra={"retry_after": rate_limit.retry_after},
         )
 
     user_identity = await find_user_by_email(body.email)
 
-    if not user_identity:
-        raise Problem(
-            status=401,
-            type=PROBLEM_TYPES["unauthorized"],
-            title="Unauthorized",
-            detail="Invalid credentials.",
-        )
-
-    if not verify_password(body.password, user_identity.password_hash):
+    if not user_identity or not verify_password(body.password, user_identity.password_hash):
         raise Problem(
             status=401,
             type=PROBLEM_TYPES["unauthorized"],
@@ -70,12 +130,9 @@ async def login(body: LoginIn) -> TokenPairOut:
             detail="Invalid credentials.",
         )
 
-    import uuid
-
-    async with tenant_session(uuid.UUID(user_identity.tenant_id)) as session:
-        tenant_result = await session.execute(
-            select(Tenant).where(Tenant.id == user_identity.tenant_id)
-        )
+    tenant_id = uuid.UUID(user_identity.tenant_id)
+    async with tenant_session(tenant_id) as session:
+        tenant_result = await session.execute(select(Tenant).where(Tenant.id == tenant_id))
         tenant = tenant_result.scalar_one()
 
         if tenant.status != "active":
@@ -86,20 +143,27 @@ async def login(body: LoginIn) -> TokenPairOut:
                 detail="Invalid credentials.",
             )
 
-        user_result = await session.execute(select(User).where(User.id == user_identity.id))
+        user_result = await session.execute(
+            select(User).where(User.id == uuid.UUID(user_identity.id))
+        )
         user = user_result.scalar_one()
-        user.last_login_at = datetime.utcnow()  # type: ignore[assignment]
+        user.last_login_at = datetime.now(UTC)
 
+        settings = get_settings()
         refresh_plain, refresh_hash = new_refresh_token()
-        family_id_val = user_identity.id
+        # Una famiglia nuova per ogni login: sessioni su dispositivi diversi
+        # non condividono la stessa famiglia, cosi il riuso rilevato su una
+        # non revoca le altre (spec 4.1, contrariamente al bug descritto in
+        # docs/REVIEW.md S4, dove family_id coincideva con lo user_id).
+        family_id = uuid.uuid4()
 
         refresh_token_row = RefreshToken(
-            tenant_id=user_identity.tenant_id,
-            user_id=user_identity.id,
+            tenant_id=tenant_id,
+            user_id=user.id,
             token_hash=refresh_hash,
             jti=str(uuid.uuid4()),
-            family_id=family_id_val,
-            expires_at=datetime.utcnow(),
+            family_id=family_id,
+            expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_ttl_days),
             revoked_at=None,
             user_agent=None,
             ip=None,
@@ -107,9 +171,7 @@ async def login(body: LoginIn) -> TokenPairOut:
         session.add(refresh_token_row)
         await session.flush()
 
-        access_token, expires_in = create_access_token(
-            user_identity.id, user_identity.tenant_id, user_identity.role
-        )
+        access_token, expires_in = create_access_token(str(user.id), str(tenant_id), user.role)
 
     return TokenPairOut(
         access_token=access_token,
@@ -131,10 +193,12 @@ async def refresh(body: RefreshIn) -> TokenPairOut:
             detail="Invalid refresh token.",
         )
 
-    async with tenant_session(uuid.UUID(refresh_token_identity.tenant_id)) as session:
-        refresh_token_row = await session.get(RefreshToken, refresh_token_identity.id)
+    tenant_id = uuid.UUID(refresh_token_identity.tenant_id)
+    async with tenant_session(tenant_id) as session:
+        refresh_token_row = await session.get(RefreshToken, uuid.UUID(refresh_token_identity.id))
 
         if refresh_token_row is None or refresh_token_row.revoked_at is not None:
+            # Riuso di un token gia ruotato: revoca l'intera famiglia (spec 4.1).
             if refresh_token_row is not None and refresh_token_row.family_id:
                 refresh_result = await session.execute(
                     select(RefreshToken).where(
@@ -143,7 +207,12 @@ async def refresh(body: RefreshIn) -> TokenPairOut:
                 )
                 family_tokens = refresh_result.scalars().all()
                 for token in family_tokens:
-                    token.revoked_at = datetime.utcnow()
+                    token.revoked_at = datetime.now(UTC)
+                # tenant_session fa rollback quando un'eccezione esce dal
+                # blocco: senza un commit esplicito qui, la revoca della
+                # famiglia scritta sopra sparirebbe insieme al raise sotto,
+                # lasciando il resto della famiglia ancora valido.
+                await session.commit()
 
             raise Problem(
                 status=401,
@@ -152,14 +221,20 @@ async def refresh(body: RefreshIn) -> TokenPairOut:
                 detail="Refresh token revoked or invalid.",
             )
 
+        if refresh_token_row.expires_at < datetime.now(UTC):
+            raise Problem(
+                status=401,
+                type=PROBLEM_TYPES["unauthorized"],
+                title="Unauthorized",
+                detail="Refresh token expired.",
+            )
+
         user_result = await session.execute(
-            select(User).where(User.id == refresh_token_identity.user_id)
+            select(User).where(User.id == uuid.UUID(refresh_token_identity.user_id))
         )
         user = user_result.scalar_one()
 
-        tenant_result = await session.execute(
-            select(Tenant).where(Tenant.id == refresh_token_identity.tenant_id)
-        )
+        tenant_result = await session.execute(select(Tenant).where(Tenant.id == tenant_id))
         tenant = tenant_result.scalar_one()
 
         if user.status != "active" or tenant.status != "active":
@@ -170,17 +245,18 @@ async def refresh(body: RefreshIn) -> TokenPairOut:
                 detail="User or tenant inactive.",
             )
 
+        settings = get_settings()
         old_family_id = refresh_token_row.family_id
-        refresh_token_row.revoked_at = datetime.utcnow()
+        refresh_token_row.revoked_at = datetime.now(UTC)
 
         refresh_plain, refresh_hash = new_refresh_token()
         new_refresh_token_row = RefreshToken(
-            tenant_id=refresh_token_identity.tenant_id,
-            user_id=refresh_token_identity.user_id,
+            tenant_id=tenant_id,
+            user_id=user.id,
             token_hash=refresh_hash,
             jti=str(uuid.uuid4()),
             family_id=old_family_id,
-            expires_at=datetime.utcnow(),
+            expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_ttl_days),
             revoked_at=None,
             user_agent=None,
             ip=None,
@@ -188,7 +264,7 @@ async def refresh(body: RefreshIn) -> TokenPairOut:
         session.add(new_refresh_token_row)
         await session.flush()
 
-        access_token, expires_in = create_access_token(str(user.id), str(tenant.id), user.role)
+        access_token, expires_in = create_access_token(str(user.id), str(tenant_id), user.role)
 
     return TokenPairOut(
         access_token=access_token,
@@ -214,7 +290,7 @@ async def logout(
         )
         tokens = refresh_result.scalars().all()
         for token in tokens:
-            token.revoked_at = datetime.utcnow()
+            token.revoked_at = datetime.now(UTC)
     else:
         refresh_result = await session.execute(
             select(RefreshToken).where(
@@ -225,7 +301,7 @@ async def logout(
         )
         refresh_row: RefreshToken | None = refresh_result.scalar_one_or_none()
         if refresh_row is not None:
-            refresh_row.revoked_at = datetime.utcnow()
+            refresh_row.revoked_at = datetime.now(UTC)
 
     await session.flush()
 
@@ -235,10 +311,10 @@ async def me(  # noqa: B008
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> MeOut:
-    user_result = await session.execute(select(User).where(User.id == claims.sub))
+    user_result = await session.execute(select(User).where(User.id == uuid.UUID(claims.sub)))
     user = user_result.scalar_one()
 
-    tenant_result = await session.execute(select(Tenant).where(Tenant.id == claims.tid))
+    tenant_result = await session.execute(select(Tenant).where(Tenant.id == uuid.UUID(claims.tid)))
     tenant = tenant_result.scalar_one()
 
     return MeOut(
@@ -248,3 +324,108 @@ async def me(  # noqa: B008
         tenant_id=str(tenant.id),
         tenant_name=tenant.name,
     )
+
+
+async def _send_invitation_email(email: str, invite_url: str) -> bool:
+    settings = get_settings()
+    if not settings.smtp_enabled or settings.smtp_host is None:
+        return False
+
+    import smtplib
+    from email.message import EmailMessage
+
+    message = EmailMessage()
+    message["Subject"] = "Invito a NotifyHub"
+    message["From"] = settings.smtp_from
+    message["To"] = email
+    message.set_content(f"Sei stato invitato a NotifyHub. Accetta l'invito: {invite_url}")
+
+    smtp_host: str = settings.smtp_host
+    try:
+        with smtplib.SMTP(smtp_host, settings.smtp_port or 587, timeout=10) as smtp:
+            if settings.smtp_user and settings.smtp_password:
+                smtp.starttls()
+                smtp.login(settings.smtp_user, settings.smtp_password)
+            smtp.send_message(message)
+        return True
+    except OSError:
+        return False
+
+
+@invitations_router.post("", response_model=InvitationOut, status_code=201)
+async def create_invitation(
+    body: InvitationIn,
+    claims: AccessClaims = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(db),  # noqa: B008
+) -> InvitationOut:
+    settings = get_settings()
+    token_plain, token_hash = new_refresh_token()
+
+    invitation = Invitation(
+        id=uuid.uuid4(),
+        tenant_id=uuid.UUID(claims.tid),
+        email=body.email,
+        role=body.role,
+        token_hash=token_hash,
+        expires_at=datetime.now(UTC) + timedelta(days=7),
+        accepted_at=None,
+        invited_by=uuid.UUID(claims.sub),
+    )
+    session.add(invitation)
+    await session.flush()
+
+    # Il token viaggia solo nel frammento dell'URL (mai trasmesso al server) e
+    # la SPA lo gira nel body della POST di /invitations/accept (spec 9.2).
+    invite_url = f"{settings.notifyhub_public_base_url}/invite#token={token_plain}"
+    email_sent = await _send_invitation_email(body.email, invite_url)
+
+    return InvitationOut(
+        id=str(invitation.id),
+        email=invitation.email,
+        role=invitation.role,
+        expires_at=invitation.expires_at,
+        invite_url=invite_url,
+        email_sent=email_sent,
+    )
+
+
+@invitations_router.post("/accept", status_code=201)
+async def accept_invitation(body: InvitationAcceptIn) -> dict:
+    invitation_identity = await find_invitation(hash_token(body.token))
+
+    if invitation_identity is None or invitation_identity.accepted_at is not None:
+        raise Problem(
+            status=401,
+            type=PROBLEM_TYPES["unauthorized"],
+            title="Unauthorized",
+            detail="Invalid or already accepted invitation.",
+        )
+
+    if datetime.fromisoformat(invitation_identity.expires_at) < datetime.now(UTC):
+        raise Problem(
+            status=401,
+            type=PROBLEM_TYPES["unauthorized"],
+            title="Unauthorized",
+            detail="Invitation expired.",
+        )
+
+    tenant_id = uuid.UUID(invitation_identity.tenant_id)
+    user_id = uuid.uuid4()
+    async with tenant_session(tenant_id) as session:
+        invitation_result = await session.execute(
+            select(Invitation).where(Invitation.id == uuid.UUID(invitation_identity.id))
+        )
+        invitation = invitation_result.scalar_one()
+
+        user = User(
+            id=user_id,
+            tenant_id=tenant_id,
+            email=invitation.email,
+            password_hash=hash_password(body.password),
+            role=invitation.role,
+            status=UserStatus.ACTIVE,
+        )
+        session.add(user)
+        invitation.accepted_at = datetime.now(UTC)
+
+    return {"user_id": str(user_id), "tenant_id": str(tenant_id)}

@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -6,6 +7,12 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
+
+
+class RegisterIn(BaseModel):
+    tenant_name: str = Field(min_length=1, max_length=255)
+    email: EmailStr
+    password: str = Field(min_length=12)
 
 
 class TokenPairOut(BaseModel):
@@ -35,9 +42,11 @@ class MeOut(BaseModel):
 
 
 class UserOut(BaseModel):
+    # model_validate(user) su un oggetto ORM richiede uuid.UUID sui campi id,
+    # non str (vedi nota in schemas/group.py).
     model_config = ConfigDict(from_attributes=True)
 
-    id: str
+    id: uuid.UUID
     email: str
     role: str
     status: str

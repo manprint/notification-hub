@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -106,9 +106,13 @@ async def update_group(
 @router.delete("/{group_id}", status_code=204)
 async def delete_group(
     group_id: str,
+    confirm: str = Query(...),  # noqa: B008
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> None:
+    """Cascade su receiver, notifiche, delivery e oggetti MinIO (via trigger),
+    confermata digitando il nome esatto del gruppo (spec 9.3): niente
+    cancellazioni accidentali di dati che nessuna UI ripristina."""
     result = await session.execute(
         select(Group).where(
             Group.id == uuid.UUID(group_id),
@@ -122,6 +126,13 @@ async def delete_group(
             type=PROBLEM_TYPES["not_found"],
             title="Not Found",
             detail="Group not found.",
+        )
+    if confirm != group.name:
+        raise Problem(
+            status=422,
+            type=PROBLEM_TYPES["validation_error"],
+            title="Validation Error",
+            detail="confirm must match the exact group name.",
         )
     await session.delete(group)
 

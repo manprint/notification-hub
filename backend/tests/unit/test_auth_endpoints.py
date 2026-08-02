@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from pydantic import ValidationError
 
@@ -89,14 +91,15 @@ def test_me_out_schema():
 
 @pytest.mark.unit
 def test_user_out_schema():
+    user_id = str(uuid.uuid4())
     payload = UserOut(
-        id="user-123",
+        id=user_id,
         email="user@example.com",
         role="member",
         status="active",
         last_login_at=None,
     )
-    assert payload.id == "user-123"
+    assert str(payload.id) == user_id
     assert payload.email == "user@example.com"
     assert payload.role == "member"
     assert payload.status == "active"
