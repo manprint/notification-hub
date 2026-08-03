@@ -35,6 +35,7 @@ class Severity(StrEnum):
 
 class SeveritySource(StrEnum):
     EXPLICIT = "explicit"
+    EXIT_CODE = "exit_code"
     RULE = "rule"
     RECEIVER_DEFAULT = "receiver_default"
 

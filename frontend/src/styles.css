@@ -192,6 +192,40 @@ code {
   max-width: 28rem;
 }
 
+/* Riassunto della catena di severity: passi numerati, non un elenco puntato
+   qualunque — l'ordine e' l'informazione. */
+.chain-list {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.chain-list li + li {
+  margin-top: var(--space-2);
+}
+
+.chain-list em {
+  color: var(--color-text-muted);
+}
+
+.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.inline-check input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+}
+
+.row-disabled td {
+  opacity: 0.55;
+}
+
 .severity-badge {
   display: inline-block;
   padding: 2px var(--space-2);

@@ -3,8 +3,8 @@
 import secrets
 import uuid
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_claims, db, require_admin, require_member
@@ -18,14 +18,17 @@ from app.schemas.receiver import (
     ReceiverCreate,
     ReceiverOut,
     ReceiverUpdate,
+    SeverityReplayItemOut,
+    SeverityReplayOut,
     SeverityRuleCreate,
     SeverityRuleOut,
+    SeverityRuleReorderIn,
     SeverityRuleUpdate,
     TestSeverityIn,
     TestSeverityOut,
 )
 from app.services.authz import accessible_group_ids, assert_group_access
-from app.services.severity import InvalidPatternError, compile_pattern, resolve_severity
+from app.services.severity import InvalidPatternError, compile_pattern, resolve_severity_async
 
 router = APIRouter(tags=["receivers"])
 
@@ -107,6 +110,7 @@ async def create_receiver(
         status="active",
         ingestion_module="http_raw",
         default_severity=body.default_severity,
+        exit_code_severity=body.exit_code_severity,
         max_body_bytes=max_body_bytes,
         rate_limit_per_min=body.rate_limit_per_min,
     )
@@ -194,6 +198,10 @@ async def update_receiver(
         receiver.rate_limit_per_min = body.rate_limit_per_min
     if body.default_severity is not None:
         receiver.default_severity = body.default_severity
+    # None qui significa "disattiva la politica sull'exit code", quindi conta
+    # se il campo e stato inviato, non se vale None.
+    if "exit_code_severity" in body.model_fields_set:
+        receiver.exit_code_severity = body.exit_code_severity
 
     await session.flush()
     return ReceiverOut.model_validate(receiver)
@@ -245,6 +253,53 @@ async def list_severity_rules(
     return [SeverityRuleOut.model_validate(r) for r in result.scalars().all()]
 
 
+async def _next_priority(
+    session: AsyncSession, tenant_id: uuid.UUID, receiver_id: uuid.UUID
+) -> int:
+    """Accoda la nuova regola in fondo, lasciando spazio per inserirne altre in
+    mezzo domani (10, 20, 30...)."""
+    result = await session.execute(
+        select(func.max(SeverityRule.priority)).where(
+            SeverityRule.receiver_id == receiver_id,
+            SeverityRule.tenant_id == tenant_id,
+        )
+    )
+    current_max = result.scalar_one()
+    return 10 if current_max is None else current_max + 10
+
+
+async def _assert_priority_free(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    receiver_id: uuid.UUID,
+    priority: int,
+    *,
+    exclude_rule_id: uuid.UUID | None = None,
+) -> None:
+    """Il vincolo di unicita e nel database (migrazione 0008): qui il conflitto
+    diventa un messaggio che dice quale numero e occupato, invece del 409
+    generico dell'IntegrityError."""
+    conditions = [
+        SeverityRule.receiver_id == receiver_id,
+        SeverityRule.tenant_id == tenant_id,
+        SeverityRule.priority == priority,
+    ]
+    if exclude_rule_id is not None:
+        conditions.append(SeverityRule.id != exclude_rule_id)
+
+    result = await session.execute(select(SeverityRule.id).where(*conditions))
+    if result.scalar_one_or_none() is not None:
+        raise Problem(
+            status=409,
+            type=PROBLEM_TYPES["conflict"],
+            title="Conflict",
+            detail=(
+                f"Priority {priority} is already used by another rule on this receiver. "
+                "Priorities must be unique: the lowest one is evaluated first."
+            ),
+        )
+
+
 @router.post(
     "/receivers/{receiver_id}/severity-rules", response_model=SeverityRuleOut, status_code=201
 )
@@ -268,11 +323,17 @@ async def create_severity_rule(
             detail=f"Pattern not compilable by RE2: {exc}",
         ) from exc
 
+    if body.priority is None:
+        priority = await _next_priority(session, tenant_id, receiver_id)
+    else:
+        priority = body.priority
+        await _assert_priority_free(session, tenant_id, receiver_id, priority)
+
     rule = SeverityRule(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
         receiver_id=receiver_id,
-        priority=body.priority,
+        priority=priority,
         pattern=body.pattern,
         case_insensitive=body.case_insensitive,
         severity=body.severity,
@@ -303,6 +364,52 @@ async def _get_rule_or_404(
     return rule
 
 
+@router.put("/receivers/{receiver_id}/severity-rules/order", response_model=list[SeverityRuleOut])
+async def reorder_severity_rules(
+    receiver_id: uuid.UUID,
+    body: SeverityRuleReorderIn,
+    claims: AccessClaims = Depends(require_member),  # noqa: B008
+    session: AsyncSession = Depends(db),  # noqa: B008
+) -> list[SeverityRuleOut]:
+    """Rinumera le regole 10, 20, 30... nell'ordine dato. Sposta una regola in
+    su o in giu senza far calcolare al chiamante un numero di priorita libero.
+
+    La rinumerazione avviene in due passate: prima tutte le priorita vanno su
+    valori negativi, poi su quelli definitivi. Un singolo UPDATE che scambia
+    due valori violerebbe il vincolo di unicita mentre e a meta strada, perche
+    Postgres lo verifica riga per riga e non a fine istruzione.
+    """
+    tenant_id = uuid.UUID(claims.tid)
+    receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
+    await assert_group_access(session, claims, receiver.group_id, write=True)
+
+    result = await session.execute(
+        select(SeverityRule).where(
+            SeverityRule.receiver_id == receiver_id,
+            SeverityRule.tenant_id == tenant_id,
+        )
+    )
+    rules = {rule.id: rule for rule in result.scalars().all()}
+
+    if set(body.rule_ids) != set(rules.keys()):
+        raise Problem(
+            status=422,
+            type=PROBLEM_TYPES["validation_error"],
+            title="Validation Error",
+            detail="rule_ids must list every rule of this receiver exactly once.",
+        )
+
+    for index, rule_id in enumerate(body.rule_ids):
+        rules[rule_id].priority = -(index + 1)
+    await session.flush()
+
+    for index, rule_id in enumerate(body.rule_ids):
+        rules[rule_id].priority = (index + 1) * 10
+    await session.flush()
+
+    return [SeverityRuleOut.model_validate(rules[rule_id]) for rule_id in body.rule_ids]
+
+
 @router.patch("/severity-rules/{rule_id}", response_model=SeverityRuleOut)
 async def update_severity_rule(
     rule_id: uuid.UUID,
@@ -330,7 +437,10 @@ async def update_severity_rule(
                 detail=f"Pattern not compilable by RE2: {exc}",
             ) from exc
 
-    if body.priority is not None:
+    if body.priority is not None and body.priority != rule.priority:
+        await _assert_priority_free(
+            session, tenant_id, rule.receiver_id, body.priority, exclude_rule_id=rule.id
+        )
         rule.priority = body.priority
     if body.pattern is not None:
         rule.pattern = body.pattern
@@ -378,12 +488,14 @@ async def test_severity(
     )
     rules = list(rules_result.scalars().all())
 
-    resolution = resolve_severity(
+    resolution = await resolve_severity_async(
         header_severity=body.header_severity,
         query_severity=None,
         rules=rules,
-        content_sample=body.content,
+        content=body.content,
         default_severity=receiver.default_severity,
+        exit_code=body.exit_code,
+        exit_code_severity=receiver.exit_code_severity,
     )
 
     return TestSeverityOut(
@@ -392,6 +504,84 @@ async def test_severity(
         matched_rule_id=resolution.matched_rule_id,
         matched_pattern=resolution.matched_pattern,
     )
+
+
+REPLAY_PREVIEW_CHARS = 200
+REPLAY_MAX_NOTIFICATIONS = 20
+
+
+@router.get("/receivers/{receiver_id}/severity-rules/replay", response_model=SeverityReplayOut)
+async def replay_severity_rules(
+    receiver_id: uuid.UUID,
+    limit: int = Query(default=10, ge=1, le=REPLAY_MAX_NOTIFICATIONS),  # noqa: B008
+    claims: AccessClaims = Depends(current_claims),  # noqa: B008
+    session: AsyncSession = Depends(db),  # noqa: B008
+) -> SeverityReplayOut:
+    """Rivaluta le ultime notifiche del receiver con le regole ATTUALI e
+    confronta il risultato con la severity registrata all'epoca.
+
+    Serve a rispondere alla domanda che la casella "Prova severity" non copre:
+    non "cosa succederebbe a questo testo che mi invento", ma "cosa cambierebbe
+    sui messaggi che arrivano davvero".
+    """
+    from app.models.notification import Notification
+
+    tenant_id = uuid.UUID(claims.tid)
+    receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
+    await assert_group_access(session, claims, receiver.group_id, write=False)
+
+    rules_result = await session.execute(
+        select(SeverityRule).where(
+            SeverityRule.receiver_id == receiver_id,
+            SeverityRule.tenant_id == tenant_id,
+            SeverityRule.enabled.is_(True),
+        )
+    )
+    rules = list(rules_result.scalars().all())
+
+    notifications_result = await session.execute(
+        select(Notification)
+        .where(Notification.receiver_id == receiver_id, Notification.tenant_id == tenant_id)
+        .order_by(Notification.received_at.desc(), Notification.id.desc())
+        .limit(limit)
+    )
+    notifications = list(notifications_result.scalars().all())
+
+    items: list[SeverityReplayItemOut] = []
+    for notification in notifications:
+        content = notification.content
+        truncated = False
+        if content is None:
+            # Payload su object storage: rileggerlo per intero moltiplicherebbe
+            # le richieste a MinIO. Si rivaluta l'anteprima, segnalando che il
+            # risultato riguarda solo quella parte.
+            content = notification.content_preview
+            truncated = True
+
+        resolution = await resolve_severity_async(
+            header_severity=None,
+            query_severity=None,
+            rules=rules,
+            content=content,
+            default_severity=receiver.default_severity,
+        )
+        items.append(
+            SeverityReplayItemOut(
+                notification_id=notification.id,
+                received_at=notification.received_at,
+                content_preview=notification.content_preview[:REPLAY_PREVIEW_CHARS],
+                truncated=truncated,
+                stored_severity=notification.severity,
+                stored_source=notification.severity_source,
+                replayed_severity=resolution.severity,
+                replayed_source=resolution.source.value,
+                matched_rule_id=resolution.matched_rule_id,
+                matched_pattern=resolution.matched_pattern,
+                changed=resolution.severity != notification.severity,
+            )
+        )
+
+    return SeverityReplayOut(items=items, changed_count=sum(1 for item in items if item.changed))
 
 
 @router.get("/groups/{group_id}/delete-impact", response_model=DeleteImpactOut)

@@ -84,6 +84,9 @@ export interface ReceiverChannelOverrideOut {
   min_severity: Severity | null;
 }
 
+// Passo della catena che ha deciso la severity di una notifica.
+export type SeveritySource = "explicit" | "exit_code" | "rule" | "receiver_default";
+
 export interface ReceiverOut {
   id: string;
   group_id: string;
@@ -92,9 +95,30 @@ export interface ReceiverOut {
   status: ReceiverStatus;
   ingestion_module: string;
   default_severity: Severity;
+  // null = l'header X-Exit-Code non influenza la severity.
+  exit_code_severity: Severity | null;
   max_body_bytes: number;
   rate_limit_per_min: number;
   rejected_last_24h?: number;
+}
+
+export interface SeverityReplayItemOut {
+  notification_id: string;
+  received_at: string;
+  content_preview: string;
+  truncated: boolean;
+  stored_severity: Severity;
+  stored_source: string;
+  replayed_severity: Severity;
+  replayed_source: string;
+  matched_rule_id: string | null;
+  matched_pattern: string | null;
+  changed: boolean;
+}
+
+export interface SeverityReplayOut {
+  items: SeverityReplayItemOut[];
+  changed_count: number;
 }
 
 export interface SeverityRuleOut {

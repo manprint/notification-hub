@@ -22,5 +22,8 @@ class Receiver(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     default_severity: Mapped[Severity] = mapped_column(
         severity_type, nullable=False, default="info"
     )
+    # Severity assegnata quando l'ingestion riceve X-Exit-Code diverso da zero.
+    # NULL = l'exit code non ha nessun effetto sulla severity.
+    exit_code_severity: Mapped[Severity | None] = mapped_column(severity_type, nullable=True)
     max_body_bytes: Mapped[int] = mapped_column(nullable=False)
     rate_limit_per_min: Mapped[int] = mapped_column(nullable=False, default=60)

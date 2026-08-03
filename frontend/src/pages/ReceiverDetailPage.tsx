@@ -2,251 +2,15 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { apiDelete, apiGet, apiPatch, apiPost } from "../api/client";
-import type { ApiError, ReceiverOut, Severity, SeverityRuleOut, TestSeverityOut } from "../api/types";
+import type { ApiError, ReceiverOut, Severity } from "../api/types";
 import ConfirmDialog from "../components/ConfirmDialog";
 import ErrorBanner from "../components/ErrorBanner";
+import SeverityRulesPanel from "../components/SeverityRulesPanel";
 import { useSession } from "../hooks/useSession";
 import { ADMIN_ROLES, MEMBER_ROLES, hasRole } from "../lib/roles";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
-
-function EditSeverityRuleForm({
-  rule,
-  receiverId,
-  onDone,
-}: {
-  rule: SeverityRuleOut;
-  receiverId: string;
-  onDone: () => void;
-}) {
-  const queryClient = useQueryClient();
-  const [pattern, setPattern] = useState(rule.pattern);
-  const [severity, setSeverity] = useState<Severity>(rule.severity);
-  const [priority, setPriority] = useState(rule.priority);
-  const [caseInsensitive, setCaseInsensitive] = useState(rule.case_insensitive);
-  const [enabled, setEnabled] = useState(rule.enabled);
-  const [error, setError] = useState<ApiError | null>(null);
-
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
-    setError(null);
-    try {
-      await apiPatch(`/api/v1/severity-rules/${rule.id}`, {
-        pattern,
-        severity,
-        priority,
-        case_insensitive: caseInsensitive,
-        enabled,
-      });
-      await queryClient.invalidateQueries({ queryKey: ["severity-rules", receiverId] });
-      onDone();
-    } catch (err) {
-      setError(err as ApiError);
-    }
-  }
-
-  return (
-    <tr>
-      <td colSpan={4}>
-        <form onSubmit={(event) => void handleSubmit(event)}>
-          {error && <ErrorBanner error={error} />}
-          <div className="toolbar">
-            <input value={pattern} onChange={(event) => setPattern(event.target.value)} required />
-            <select value={severity} onChange={(event) => setSeverity(event.target.value as Severity)}>
-              {SEVERITIES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-            <input
-              type="number"
-              value={priority}
-              onChange={(event) => setPriority(Number(event.target.value))}
-            />
-            <label>
-              <input
-                type="checkbox"
-                checked={caseInsensitive}
-                onChange={(event) => setCaseInsensitive(event.target.checked)}
-              />
-              case-insensitive
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={enabled}
-                onChange={(event) => setEnabled(event.target.checked)}
-              />
-              attiva
-            </label>
-            <button type="submit" className="primary">
-              Salva
-            </button>
-            <button type="button" onClick={onDone}>
-              Annulla
-            </button>
-          </div>
-        </form>
-      </td>
-    </tr>
-  );
-}
-
-function SeverityRulesPanel({ receiverId }: { receiverId: string }) {
-  const { role } = useSession();
-  const canManage = hasRole(role, MEMBER_ROLES);
-  const queryClient = useQueryClient();
-  const { data: rules } = useQuery({
-    queryKey: ["severity-rules", receiverId],
-    queryFn: () => apiGet<SeverityRuleOut[]>(`/api/v1/receivers/${receiverId}/severity-rules`),
-  });
-
-  const [pattern, setPattern] = useState("");
-  const [severity, setSeverity] = useState<Severity>("error");
-  const [priority, setPriority] = useState(1);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-
-  const [testContent, setTestContent] = useState("");
-  const [testResult, setTestResult] = useState<TestSeverityOut | null>(null);
-  const [testError, setTestError] = useState<ApiError | null>(null);
-
-  async function createRule(event: React.FormEvent) {
-    event.preventDefault();
-    setError(null);
-    try {
-      await apiPost(`/api/v1/receivers/${receiverId}/severity-rules`, {
-        pattern,
-        severity,
-        priority,
-        case_insensitive: true,
-        enabled: true,
-      });
-      setPattern("");
-      await queryClient.invalidateQueries({ queryKey: ["severity-rules", receiverId] });
-    } catch (err) {
-      setError(err as ApiError);
-    }
-  }
-
-  async function deleteRule(id: string) {
-    await apiDelete(`/api/v1/severity-rules/${id}`);
-    await queryClient.invalidateQueries({ queryKey: ["severity-rules", receiverId] });
-  }
-
-  async function runTest(event: React.FormEvent) {
-    event.preventDefault();
-    setTestError(null);
-    setTestResult(null);
-    try {
-      const result = await apiPost<TestSeverityOut>(`/api/v1/receivers/${receiverId}/test-severity`, {
-        content: testContent,
-      });
-      setTestResult(result);
-    } catch (err) {
-      setTestError(err as ApiError);
-    }
-  }
-
-  return (
-    <div className="card">
-      <h3>Regole di severity</h3>
-      {error && <ErrorBanner error={error} />}
-      <table>
-        <thead>
-          <tr>
-            <th>Priorità</th>
-            <th>Pattern</th>
-            <th>Severity</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {rules?.map((rule) =>
-            editingId === rule.id ? (
-              <EditSeverityRuleForm
-                key={rule.id}
-                rule={rule}
-                receiverId={receiverId}
-                onDone={() => setEditingId(null)}
-              />
-            ) : (
-              <tr key={rule.id}>
-                <td>{rule.priority}</td>
-                <td>
-                  <code>{rule.pattern}</code>
-                </td>
-                <td>{rule.severity}</td>
-                <td>
-                  {canManage && (
-                    <>
-                      <button onClick={() => setEditingId(rule.id)}>Modifica</button>
-                      <button onClick={() => void deleteRule(rule.id)}>Elimina</button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            ),
-          )}
-        </tbody>
-      </table>
-
-      {canManage && (
-        <form onSubmit={(event) => void createRule(event)}>
-          <div className="toolbar">
-            <input
-              placeholder="Pattern RE2"
-              value={pattern}
-              onChange={(event) => setPattern(event.target.value)}
-              required
-            />
-            <select value={severity} onChange={(event) => setSeverity(event.target.value as Severity)}>
-              {SEVERITIES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-            <input
-              type="number"
-              value={priority}
-              onChange={(event) => setPriority(Number(event.target.value))}
-            />
-            <button type="submit" className="primary">
-              Aggiungi regola
-            </button>
-          </div>
-        </form>
-      )}
-
-      <h3>Prova severity</h3>
-      {testError && <ErrorBanner error={testError} />}
-      <form onSubmit={(event) => void runTest(event)}>
-        <div className="form-row">
-          <label htmlFor="test-content">Contenuto di prova</label>
-          <textarea
-            id="test-content"
-            value={testContent}
-            onChange={(event) => setTestContent(event.target.value)}
-          />
-        </div>
-        <button type="submit">Esegui prova</button>
-      </form>
-      {testResult && (
-        <p>
-          Severity risolta: <strong>{testResult.severity}</strong> (fonte: {testResult.source}
-          {testResult.matched_pattern && (
-            <>
-              , regola <code>{testResult.matched_pattern}</code>
-            </>
-          )}
-          )
-        </p>
-      )}
-    </div>
-  );
-}
+const EXIT_CODE_DISABLED = "";
 
 function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone: () => void }) {
   const queryClient = useQueryClient();
@@ -254,6 +18,9 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
   const [defaultSeverity, setDefaultSeverity] = useState<Severity>(receiver.default_severity);
   const [maxBodyBytes, setMaxBodyBytes] = useState(receiver.max_body_bytes);
   const [rateLimitPerMin, setRateLimitPerMin] = useState(receiver.rate_limit_per_min);
+  const [exitCodeSeverity, setExitCodeSeverity] = useState<string>(
+    receiver.exit_code_severity ?? EXIT_CODE_DISABLED,
+  );
   const [error, setError] = useState<ApiError | null>(null);
 
   async function handleSubmit(event: React.FormEvent) {
@@ -265,6 +32,8 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
         default_severity: defaultSeverity,
         max_body_bytes: maxBodyBytes,
         rate_limit_per_min: rateLimitPerMin,
+        // null e' un valore, non "campo assente": disattiva la politica.
+        exit_code_severity: exitCodeSeverity === EXIT_CODE_DISABLED ? null : exitCodeSeverity,
       });
       await queryClient.invalidateQueries({ queryKey: ["receiver", receiver.id] });
       onDone();
@@ -292,6 +61,21 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
           value={defaultSeverity}
           onChange={(event) => setDefaultSeverity(event.target.value as Severity)}
         >
+          {SEVERITIES.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="form-row">
+        <label htmlFor="receiver-edit-exit-code">Severity per exit code diverso da zero</label>
+        <select
+          id="receiver-edit-exit-code"
+          value={exitCodeSeverity}
+          onChange={(event) => setExitCodeSeverity(event.target.value)}
+        >
+          <option value={EXIT_CODE_DISABLED}>nessun effetto</option>
           {SEVERITIES.map((s) => (
             <option key={s} value={s}>
               {s}
@@ -421,6 +205,10 @@ export default function ReceiverDetailPage() {
             </p>
             <p>Stato: {receiver.status}</p>
             <p>Severity di default: {receiver.default_severity}</p>
+            <p>
+              Severity per exit code diverso da zero:{" "}
+              {receiver.exit_code_severity ?? "nessun effetto"}
+            </p>
             <p>Limite corpo: {receiver.max_body_bytes} byte</p>
             <p>Rate limit: {receiver.rate_limit_per_min}/min</p>
             {receiver.status === "disabled" && (
@@ -437,7 +225,7 @@ export default function ReceiverDetailPage() {
         )}
       </div>
 
-      <SeverityRulesPanel receiverId={receiver.id} />
+      <SeverityRulesPanel receiver={receiver} />
     </div>
   );
 }

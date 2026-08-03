@@ -124,9 +124,42 @@ export const fixtureReceiver = {
   status: "active",
   ingestion_module: "http_raw",
   default_severity: "info",
+  exit_code_severity: "critical",
   max_body_bytes: 1_048_576,
   rate_limit_per_min: 60,
   rejected_last_24h: 0,
+};
+
+export const fixtureSeverityReplay = {
+  items: [
+    {
+      notification_id: "n1",
+      received_at: "2026-08-01T03:00:00Z",
+      content_preview: "Backup FALLITO: disco pieno su /var",
+      truncated: false,
+      stored_severity: "info",
+      stored_source: "receiver_default",
+      replayed_severity: "error",
+      replayed_source: "rule",
+      matched_rule_id: "sr1",
+      matched_pattern: "FALL(ITO|IMENT)|ERROR|CRITICAL",
+      changed: true,
+    },
+    {
+      notification_id: "n2",
+      received_at: "2026-08-01T02:00:00Z",
+      content_preview: "Tutto ok",
+      truncated: false,
+      stored_severity: "info",
+      stored_source: "receiver_default",
+      replayed_severity: "info",
+      replayed_source: "receiver_default",
+      matched_rule_id: null,
+      matched_pattern: null,
+      changed: false,
+    },
+  ],
+  changed_count: 1,
 };
 
 export const fixtureSeverityRules = [
@@ -261,6 +294,9 @@ export const handlers = [
   http.get("/api/v1/receivers", () => HttpResponse.json([fixtureReceiver])),
   http.get("/api/v1/receivers/r1", () => HttpResponse.json(fixtureReceiver)),
   http.get("/api/v1/receivers/r1/severity-rules", () => HttpResponse.json(fixtureSeverityRules)),
+  http.get("/api/v1/receivers/r1/severity-rules/replay", () =>
+    HttpResponse.json(fixtureSeverityReplay),
+  ),
   http.post("/api/v1/receivers/r1/test-severity", () => HttpResponse.json(fixtureTestSeverityRule)),
   http.get("/api/v1/channels", () => HttpResponse.json(fixtureChannels)),
   http.get("/api/v1/deliveries", () => HttpResponse.json(fixtureDeliveries)),

@@ -11,10 +11,9 @@ from app.db.session import ingest_session
 from app.db.types import NotificationStatus, Severity, SeveritySource
 from app.models.receiver import Receiver
 from app.models.severity_rule import SeverityRule
-from app.services.severity import resolve_severity
+from app.services.severity import resolve_severity_async
 from app.services.storage import object_key, should_use_object_storage
 
-SEVERITY_RULE_SAMPLE_BYTES = 8192
 CONTENT_PREVIEW_CHARS = 4096
 
 
@@ -27,6 +26,7 @@ class ReceiverLookup:
     max_body_bytes: int
     rate_limit_per_min: int
     default_severity: Severity
+    exit_code_severity: Severity | None
 
 
 async def resolve_receiver_by_slug(slug: str) -> ReceiverLookup | None:
@@ -47,6 +47,7 @@ async def resolve_receiver_by_slug(slug: str) -> ReceiverLookup | None:
             max_body_bytes=receiver.max_body_bytes,
             rate_limit_per_min=receiver.rate_limit_per_min,
             default_severity=receiver.default_severity,
+            exit_code_severity=receiver.exit_code_severity,
         )
 
 
@@ -106,20 +107,28 @@ async def prepare_notification(
     header_severity: str | None,
     query_severity: str | None,
     default_severity: Severity,
+    exit_code: int | None = None,
+    exit_code_severity: Severity | None = None,
 ) -> PreparedNotification:
     """Normalizza, risolve la severity e decide lo storage backend. Non scrive
     nulla: il chiamante fa l'eventuale PUT su MinIO, poi chiama
-    persist_notification per l'insert."""
+    persist_notification per l'insert.
+
+    Le regole vedono il contenuto INTERO: nessun campione, nessuna troncatura.
+    Sopra una certa dimensione la scansione va su un thread (severity.py), cosi
+    un corpo grande non blocca l'event loop per tutte le altre richieste."""
     normalized_text, content_normalized = normalize_body(raw_body)
     original_size = len(raw_body)
 
     rules = await fetch_severity_rules(session, receiver_id)
-    resolution = resolve_severity(
+    resolution = await resolve_severity_async(
         header_severity=header_severity,
         query_severity=query_severity,
         rules=rules,
-        content_sample=normalized_text[:SEVERITY_RULE_SAMPLE_BYTES],
+        content=normalized_text,
         default_severity=default_severity,
+        exit_code=exit_code,
+        exit_code_severity=exit_code_severity,
     )
 
     notification_id = uuid.uuid4()

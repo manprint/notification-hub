@@ -97,6 +97,17 @@ curl -H "X-Severity: error" --data "Backup FALLITO" https://.../ingest/{slug}
 wget --post-data="messaggio" https://.../ingest/{slug}
 ```
 
+Per i job periodici c'e `scripts/notifyhub-run.sh`, che esegue un comando, ne invia l'output insieme
+all'header `X-Exit-Code` e restituisce comunque l'exit code originale al chiamante. Che severity
+dare a un'esecuzione fallita lo decide il receiver (default `critical`), non lo script:
+
+```bash
+scripts/notifyhub-run.sh -s {slug} -- /usr/local/bin/backup.sh /dati
+```
+
+Come viene decisa la severity di una notifica e come si configurano le regole:
+[`docs/SEVERITY.md`](docs/SEVERITY.md).
+
 ## Sviluppo
 
 ```bash
@@ -180,13 +191,14 @@ notifyhub-spec.md          specifica funzionale e tecnica, fonte di verita
 plan_NotifyHub/            piano di realizzazione per fasi e stato di avanzamento
 docs/REVIEW.md             revisioni di accettazione
 docs/OPERAZIONI.md         procedure operative: job, metriche, backup, troubleshooting
+docs/SEVERITY.md           guida alla configurazione delle severity e delle regole
 Makefile                   comandi di sviluppo e di esercizio
 docker-compose.yml         stack di esercizio
 docker-compose.test.yml    servizi reali per i test
 backend/                   API FastAPI, modelli, migrazioni Alembic, test
 frontend/                  dashboard React, Vite, test
 deploy/                    Dockerfile, configurazione nginx, init di Postgres
-scripts/                   smoke test e webhook finto
+scripts/                   wrapper di invio, smoke test e webhook finto
 ```
 
 ## Sicurezza

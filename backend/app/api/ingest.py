@@ -22,6 +22,7 @@ from app.services.ingest import (
 )
 from app.services.quota import enforce_tenant_quotas
 from app.services.ratelimit import check_ip_rate_limit, check_slug_rate_limit
+from app.services.severity import parse_exit_code
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["ingest"])
@@ -81,10 +82,11 @@ async def ingest(
     request: Request,
     x_severity: str | None = Header(default=None, alias="X-Severity"),  # noqa: B008
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),  # noqa: B008
+    x_exit_code: str | None = Header(default=None, alias="X-Exit-Code"),  # noqa: B008
     severity: str | None = Query(default=None),  # noqa: B008
 ) -> JSONResponse:
     try:
-        response = await _ingest(slug, request, x_severity, x_request_id, severity)
+        response = await _ingest(slug, request, x_severity, x_request_id, severity, x_exit_code)
     except Problem as exc:
         outcome = {
             404: "not_found",
@@ -107,6 +109,7 @@ async def _ingest(
     x_severity: str | None,
     x_request_id: str | None,
     severity: str | None,
+    x_exit_code: str | None = None,
 ) -> JSONResponse:
     settings = get_settings()
     source_ip = _source_ip(request)
@@ -191,6 +194,8 @@ async def _ingest(
             header_severity=x_severity,
             query_severity=severity,
             default_severity=receiver.default_severity,
+            exit_code=parse_exit_code(x_exit_code),
+            exit_code_severity=receiver.exit_code_severity,
         )
 
         if prepared.use_object_storage:

@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import ForeignKey, Index, String
+from sqlalchemy import ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -10,6 +10,9 @@ from app.db.types import Severity, severity_type
 class SeverityRule(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "severity_rules"
     __table_args__ = (
+        # Due regole con la stessa priorita rendono indefinito quale vince:
+        # l'unicita rende l'ordine di valutazione leggibile dalla tabella.
+        UniqueConstraint("receiver_id", "priority", name="uq_severity_rules_receiver_id_priority"),
         Index(
             "ix_severity_rules_tenant_id_receiver_id_priority",
             "tenant_id",
