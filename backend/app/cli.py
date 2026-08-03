@@ -8,6 +8,7 @@ from app.db.session import async_session_factory_app, tenant_session
 from app.db.types import TenantStatus, UserRole, UserStatus
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.services.severity_presets import sync_builtin_presets
 
 
 @click.group()
@@ -64,8 +65,41 @@ async def _bootstrap(tenant_name: str, email: str, password: str) -> None:
         )
         session.add(user)
 
+    # Un tenant nuovo nasce con i preset predefiniti gia installati: senza,
+    # il primo receiver partirebbe con zero regole e la sezione Preset vuota.
+    async with tenant_session(tenant_id) as session:
+        installed = await sync_builtin_presets(session, tenant_id)
+
     click.echo(f"Tenant created: {tenant_name} (ID: {tenant_id})")
     click.echo(f"Owner created: {email} (ID: {user_id})")
+    click.echo(f"Severity presets installed: {', '.join(installed) if installed else 'none'}")
+
+
+@cli.command("sync-presets")
+def sync_presets() -> None:
+    """Installa in ogni tenant i preset predefiniti che gli mancano.
+
+    Da eseguire dopo un aggiornamento che aggiunge preset al catalogo. Non tocca
+    le copie gia presenti, nemmeno se sono state modificate: e additiva e si puo
+    ripetere senza conseguenze.
+    """
+    asyncio.run(_sync_presets())
+
+
+async def _sync_presets() -> None:
+    from sqlalchemy import select
+
+    async with async_session_factory_app() as session:
+        result = await session.execute(select(Tenant.id, Tenant.name).order_by(Tenant.name))
+        tenants = result.all()
+
+    for tenant_id, tenant_name in tenants:
+        async with tenant_session(tenant_id) as session:
+            installed = await sync_builtin_presets(session, tenant_id)
+        if installed:
+            click.echo(f"{tenant_name}: installed {', '.join(installed)}")
+        else:
+            click.echo(f"{tenant_name}: already up to date")
 
 
 if __name__ == "__main__":

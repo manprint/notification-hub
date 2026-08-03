@@ -84,8 +84,15 @@ export interface ReceiverChannelOverrideOut {
   min_severity: Severity | null;
 }
 
-// Passo della catena che ha deciso la severity di una notifica.
-export type SeveritySource = "explicit" | "exit_code" | "rule" | "receiver_default";
+// Passo della catena che ha deciso la severity di una notifica. "preset_rule"
+// distingue una regola arrivata da un preset condiviso da una scritta sul
+// receiver: dice dove andare a correggerla.
+export type SeveritySource =
+  | "explicit"
+  | "exit_code"
+  | "rule"
+  | "preset_rule"
+  | "receiver_default";
 
 export interface ReceiverOut {
   id: string;
@@ -113,6 +120,7 @@ export interface SeverityReplayItemOut {
   replayed_source: string;
   matched_rule_id: string | null;
   matched_pattern: string | null;
+  matched_preset_name: string | null;
   changed: boolean;
 }
 
@@ -136,6 +144,65 @@ export interface TestSeverityOut {
   source: string;
   matched_rule_id: string | null;
   matched_pattern: string | null;
+  matched_preset_id?: string | null;
+  matched_preset_name?: string | null;
+}
+
+export interface SeverityPresetRuleOut {
+  id: string;
+  preset_id: string;
+  priority: number;
+  pattern: string;
+  case_insensitive: boolean;
+  severity: Severity;
+  enabled: boolean;
+}
+
+export interface SeverityPresetOut {
+  id: string;
+  // null = preset creato a mano, non nato da una voce del catalogo.
+  builtin_key: string | null;
+  name: string;
+  description: string;
+  rules_count: number;
+  receivers_count: number;
+}
+
+export interface SeverityPresetDetailOut extends SeverityPresetOut {
+  rules: SeverityPresetRuleOut[];
+}
+
+export interface BuiltinPresetOut {
+  key: string;
+  name: string;
+  description: string;
+  rules_count: number;
+  installed: boolean;
+}
+
+export interface SyncBuiltinPresetsOut {
+  installed: string[];
+  already_present: string[];
+}
+
+export interface ReceiverPresetOut {
+  preset_id: string;
+  name: string;
+  description: string;
+  builtin_key: string | null;
+  position: number;
+  rules_count: number;
+}
+
+export interface SeverityChainItemOut {
+  position: number;
+  rule_id: string;
+  pattern: string;
+  case_insensitive: boolean;
+  severity: Severity;
+  origin: "receiver" | "preset";
+  preset_id: string | null;
+  preset_name: string | null;
 }
 
 export interface DeleteImpactOut {

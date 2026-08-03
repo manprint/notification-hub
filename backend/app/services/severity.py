@@ -14,6 +14,7 @@ e l'offload su thread per i corpi grandi (`resolve_severity_async`).
 """
 
 import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
@@ -21,7 +22,6 @@ from typing import Any
 import re2
 
 from app.db.types import Severity, SeveritySource
-from app.models.severity_rule import SeverityRule
 
 # Sopra questa dimensione la catena gira in un thread separato: scansionare
 # qualche megabyte con dieci regole e lavoro CPU sincrono, e sull'event loop
@@ -66,12 +66,36 @@ def compiled_pattern_cache_info() -> Any:
     return _compile_cached.cache_info()
 
 
+@dataclass(frozen=True)
+class EvaluableRule:
+    """Una regola pronta per essere valutata, indipendente da dove e conservata.
+
+    Le regole in gioco arrivano da due tabelle diverse (quelle scritte sul
+    receiver e quelle dei preset applicati): la catena di valutazione e una
+    sola, quindi il motore ragiona su questa forma unica. Chi costruisce la
+    lista (services/rule_chain.py) decide l'ordine e lo esprime in `priority`.
+    """
+
+    pattern: str
+    severity: Severity
+    priority: int = 0
+    case_insensitive: bool = True
+    enabled: bool = True
+    id: str = ""
+    # Valorizzati solo per le regole che vengono da un preset: servono a dire
+    # nella dashboard dove andare a modificare la regola che ha deciso.
+    preset_id: str | None = None
+    preset_name: str | None = None
+
+
 @dataclass
 class SeverityResolution:
     severity: Severity
     source: SeveritySource
     matched_rule_id: str | None = None
     matched_pattern: str | None = None
+    matched_preset_id: str | None = None
+    matched_preset_name: str | None = None
 
 
 def _parse_explicit_severity(value: str | None) -> Severity | None:
@@ -99,7 +123,7 @@ def resolve_severity(
     *,
     header_severity: str | None,
     query_severity: str | None,
-    rules: list[SeverityRule],
+    rules: Sequence[EvaluableRule],
     content: str,
     default_severity: Severity,
     exit_code: int | None = None,
@@ -109,7 +133,8 @@ def resolve_severity(
 
         1. severity esplicita  (header X-Severity o ?severity=)
         2. exit code != 0      (header X-Exit-Code + politica del receiver)
-        3. regole del receiver (match RE2 sul contenuto intero, per priorita)
+        3. regole              (match RE2 sul contenuto intero, per priorita:
+                                prima quelle del receiver, poi quelle dei preset)
         4. severity di default del receiver
 
     Il passo 2 sta sopra le regole perche un comando fallito e un fatto oggettivo,
@@ -138,9 +163,15 @@ def resolve_severity(
         if compiled.search(content):
             return SeverityResolution(
                 severity=rule.severity,
-                source=SeveritySource.RULE,
+                source=(
+                    SeveritySource.PRESET_RULE
+                    if rule.preset_id is not None
+                    else SeveritySource.RULE
+                ),
                 matched_rule_id=str(rule.id),
                 matched_pattern=rule.pattern,
+                matched_preset_id=rule.preset_id,
+                matched_preset_name=rule.preset_name,
             )
 
     return SeverityResolution(severity=default_severity, source=SeveritySource.RECEIVER_DEFAULT)
@@ -150,7 +181,7 @@ async def resolve_severity_async(
     *,
     header_severity: str | None,
     query_severity: str | None,
-    rules: list[SeverityRule],
+    rules: Sequence[EvaluableRule],
     content: str,
     default_severity: Severity,
     exit_code: int | None = None,

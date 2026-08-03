@@ -35,3 +35,28 @@ I primi che ho notato io sono:
 
 Guardati prima questi e poi fammi una hard review di tutto.
 Correggi quello che è baggato.
+
+*********************
+claude --resume fdab023a-b88b-4e8b-9eda-0c01414afc02
+*********************
+
+Voglio che mi realizzi per questo progetto un Dockerfile.all.
+Tutti i file necessari alla creazione dei container unico devono andare in deploy/all-in-one/; in questa cartella crea anche l'env di example ed il compose all-in-one, nonchè un readme per utilizzare l'immagine.
+Questo Dockerfile deve costruire un immagine completa, autosufficiente, con tutti i componenti del docker compose di produzione. Usa, se possibile, debian 13 come base image.
+L'obiettivo è avviare un solo container che mi rende l'app disponibile.
+Per l'orchiestrazione dei servizi all'interno dei container puoi usare supervisord o s3-init (scegli tu il più efficiente ed il più stabile)
+IL container deve avere un healtcheck che verifica che tutti i servizi sono up e l'applicazione compelta è up and running.
+Il container deve contenere tutto: minio, postgres, redis, etc. e tutta la parte applicativa.
+Il container deve gestire gli aggiornamenti in modo pulito: passare da 1.0.0 a 1.1.0 p 2.0.0 non deve creare incosistenze o errori sui dati. Quindi il container deve occuparsi di migrazioni, aggiornamento dati, etc.
+L'immagine deve prevedere una sola cartella di persistenza completa per i dati e le configurazioni "/data" che io monto e persiste tutto in sottocartelle. La monetrò come volume.
+L'immagine deve avere poi una sola cartella per i log dei servizi "/logs" ce monetrò e ha le sottocartelle per ogni servizio con i log.
+Facendo docker logs -f (stdout) voglio vedere tutti i log in streaming nella forma "[service] - riga di log (la riga classica di log con data, etc)"
+La build del container unico deve essere fatta tramite il makefile in progetto.
+
+
+
+
+Gestione errori ricorrenti (ad esempio in arco temporale di minuti configurabile)
+Monitotaggio di durata di esecuzione dello script.
+Gestione dell'escalation.
+Integrazione con ITOP.

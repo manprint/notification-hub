@@ -94,6 +94,10 @@ class TestSeverityOut(BaseModel):
     source: str
     matched_rule_id: str | None = None
     matched_pattern: str | None = None
+    # Valorizzato quando a decidere e stata la regola di un preset: senza,
+    # l'utente non saprebbe dove andare a modificarla.
+    matched_preset_id: str | None = None
+    matched_preset_name: str | None = None
 
 
 class SeverityReplayItemOut(BaseModel):
@@ -110,6 +114,7 @@ class SeverityReplayItemOut(BaseModel):
     replayed_source: str
     matched_rule_id: str | None = None
     matched_pattern: str | None = None
+    matched_preset_name: str | None = None
     changed: bool
 
 

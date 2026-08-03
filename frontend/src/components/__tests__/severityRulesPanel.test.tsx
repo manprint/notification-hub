@@ -61,7 +61,8 @@ describe("SeverityRulesPanel", () => {
     expect(passi).toHaveLength(4);
     expect(passi[0].textContent).toContain("Severity esplicita");
     expect(passi[1].textContent).toContain("Exit code diverso da zero");
-    expect(passi[2].textContent).toContain("1 regola attiva"); // la seconda e' disattivata
+    expect(passi[2].textContent).toContain("1 attiva"); // la seconda e' disattivata
+    expect(passi[2].textContent).toContain("preset applicati");
     expect(passi[3].textContent).toContain("Default del receiver");
   });
 

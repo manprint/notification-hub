@@ -5,6 +5,7 @@ import { apiDelete, apiGet, apiPatch, apiPost } from "../api/client";
 import type { ApiError, ReceiverOut, Severity } from "../api/types";
 import ConfirmDialog from "../components/ConfirmDialog";
 import ErrorBanner from "../components/ErrorBanner";
+import ReceiverPresetsPanel from "../components/ReceiverPresetsPanel";
 import SeverityRulesPanel from "../components/SeverityRulesPanel";
 import { useSession } from "../hooks/useSession";
 import { ADMIN_ROLES, MEMBER_ROLES, hasRole } from "../lib/roles";
@@ -225,6 +226,7 @@ export default function ReceiverDetailPage() {
         )}
       </div>
 
+      <ReceiverPresetsPanel receiverId={receiver.id} />
       <SeverityRulesPanel receiver={receiver} />
     </div>
   );

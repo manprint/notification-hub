@@ -95,7 +95,17 @@ def create_app() -> FastAPI:
         )
 
     from app.api import ingest
-    from app.api.v1 import auth, channels, groups, notifications, receivers, stats, tenant, users
+    from app.api.v1 import (
+        auth,
+        channels,
+        groups,
+        notifications,
+        presets,
+        receivers,
+        stats,
+        tenant,
+        users,
+    )
 
     app.include_router(ingest.router)
     app.include_router(auth.router, prefix="/api/v1")
@@ -104,6 +114,7 @@ def create_app() -> FastAPI:
     app.include_router(channels.router, prefix="/api/v1")
     app.include_router(groups.router, prefix="/api/v1")
     app.include_router(receivers.router, prefix="/api/v1")
+    app.include_router(presets.router, prefix="/api/v1")
     app.include_router(tenant.router, prefix="/api/v1")
     app.include_router(notifications.router, prefix="/api/v1")
     app.include_router(stats.router, prefix="/api/v1")

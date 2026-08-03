@@ -12,6 +12,7 @@ const MENU_ITEMS: MenuItem[] = [
   { to: "/", label: "Riepilogo", allowed: ["owner", "admin", "member", "viewer"] },
   { to: "/notifications", label: "Notifiche", allowed: ["owner", "admin", "member", "viewer"] },
   { to: "/groups", label: "Gruppi", allowed: ["owner", "admin", "member"] },
+  { to: "/presets", label: "Preset di regole", allowed: ["owner", "admin", "member"] },
   { to: "/channels", label: "Canali", allowed: ["owner", "admin", "member"] },
   { to: "/deliveries", label: "Consegne", allowed: ["owner", "admin", "member", "viewer"] },
   { to: "/users", label: "Utenti", allowed: ["owner", "admin"] },

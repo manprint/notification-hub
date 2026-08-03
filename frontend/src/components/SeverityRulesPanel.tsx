@@ -5,6 +5,7 @@ import type {
   ApiError,
   ReceiverOut,
   Severity,
+  SeverityChainItemOut,
   SeverityReplayOut,
   SeverityRuleOut,
   TestSeverityOut,
@@ -19,7 +20,8 @@ const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"]
 const SOURCE_LABELS: Record<string, string> = {
   explicit: "severity esplicita",
   exit_code: "exit code",
-  rule: "regola",
+  rule: "regola del receiver",
+  preset_rule: "regola di un preset",
   receiver_default: "default del receiver",
 };
 
@@ -53,10 +55,12 @@ function SeverityChainSummary({
         )}
       </li>
       <li>
-        <strong>Regole qui sotto</strong> — {activeRules === 0 ? "nessuna regola attiva" : null}
-        {activeRules === 1 ? "1 regola attiva" : null}
-        {activeRules > 1 ? `${activeRules} regole attive` : null}, valutate dall'alto verso il basso
-        sul contenuto <strong>intero</strong> del messaggio. La prima che corrisponde vince.
+        <strong>Regole</strong> — prima quelle scritte qui sotto (
+        {activeRules === 0 ? "nessuna attiva" : null}
+        {activeRules === 1 ? "1 attiva" : null}
+        {activeRules > 1 ? `${activeRules} attive` : null}), poi quelle dei preset applicati.
+        Valutate dall'alto verso il basso sul contenuto <strong>intero</strong> del messaggio: la
+        prima che corrisponde vince.
       </li>
       <li>
         <strong>Default del receiver</strong> — se nessuna regola corrisponde:{" "}
@@ -146,6 +150,62 @@ function RuleForm({
   );
 }
 
+/** La catena effettiva: regole proprie e regole dei preset in un elenco solo,
+ *  nell'ordine reale di valutazione. Con due o tre preset applicati, ricostruire
+ *  a mente chi viene prima non è ragionevole. */
+function EffectiveChain({ receiverId }: { receiverId: string }) {
+  const { data, error } = useQuery<SeverityChainItemOut[], ApiError>({
+    queryKey: ["severity-chain", receiverId],
+    queryFn: () => apiGet<SeverityChainItemOut[]>(`/api/v1/receivers/${receiverId}/severity-chain`),
+  });
+
+  if (error) return <ErrorBanner error={error} />;
+  if (!data || data.length === 0) {
+    return (
+      <p className="card-hint">
+        Nessuna regola attiva: ogni notifica riceve la severity di default del receiver.
+      </p>
+    );
+  }
+
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Pattern</th>
+            <th>Severity</th>
+            <th>Da dove arriva</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((item) => (
+            <tr key={item.rule_id}>
+              <td>{item.position}</td>
+              <td>
+                <code>{item.pattern}</code>
+              </td>
+              <td>
+                <SeverityBadge severity={item.severity} />
+              </td>
+              <td>
+                {item.origin === "preset" ? (
+                  <>
+                    preset <strong>{item.preset_name}</strong>
+                  </>
+                ) : (
+                  "regola di questo receiver"
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function ReplayPanel({ receiverId }: { receiverId: string }) {
   const [open, setOpen] = useState(false);
   const { data, isFetching, error, refetch } = useQuery<SeverityReplayOut, ApiError>({
@@ -210,6 +270,7 @@ function ReplayPanel({ receiverId }: { receiverId: string }) {
                       {item.changed && <span className="status-pill">cambia</span>}
                       <div className="cell-diagnostics">
                         {sourceLabel(item.replayed_source)}
+                        {item.matched_preset_name && <> «{item.matched_preset_name}»</>}
                         {item.matched_pattern && (
                           <>
                             : <code>{item.matched_pattern}</code>
@@ -254,6 +315,7 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
     try {
       await action();
       await queryClient.invalidateQueries({ queryKey: ["severity-rules", receiverId] });
+      await queryClient.invalidateQueries({ queryKey: ["severity-chain", receiverId] });
       await queryClient.invalidateQueries({ queryKey: ["severity-replay", receiverId] });
     } catch (err) {
       setError(err as ApiError);
@@ -421,6 +483,15 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
       </div>
 
       <div className="card">
+        <h3>Catena effettiva</h3>
+        <p className="card-hint">
+          Tutte le regole attive di questo receiver, proprie e dei preset, nell'ordine esatto in cui
+          vengono provate.
+        </p>
+        <EffectiveChain receiverId={receiverId} />
+      </div>
+
+      <div className="card">
         <h3>Prova severity</h3>
         <p className="card-hint">
           Verifica la catena su un testo di esempio senza scrivere nessuna notifica.
@@ -452,6 +523,7 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
           <p>
             Severity risolta: <SeverityBadge severity={testResult.severity} /> — decisa da{" "}
             <strong>{sourceLabel(testResult.source)}</strong>
+            {testResult.matched_preset_name && <> «{testResult.matched_preset_name}»</>}
             {testResult.matched_pattern && (
               <>
                 {" "}

@@ -18,15 +18,16 @@ test in [`plan_NotifyHub/resume.md`](plan_NotifyHub/resume.md).
 
 | Area | Stato |
 |---|---|
-| Schema dati, migrazioni 0001-0005, RLS su tutte le tabelle | verificato: `alembic upgrade head` verde nel servizio `migrate` |
+| Schema dati, migrazioni 0001-0009, RLS su tutte le tabelle | verificato: `alembic upgrade head` verde nel servizio `migrate` |
 | Autenticazione JWT, refresh rotante, inviti, vincolo ultimo owner | presente |
 | Gestione gruppi/receiver/canali/severity-rules | presente, path conformi alla spec sezione 9 |
+| Preset di regole di severity (catalogo estensibile, editabili in dashboard) | presente: `bash-generic`, `postgres`, `mongodb`, `tar`, `rclone` |
 | Ingestion `POST /ingest/{slug}` | presente: normalizzazione UTF-8, idempotenza, rate limit IP+slug, catena di severity con RE2, offload MinIO |
 | Inoltro Slack/Google Chat, outbox, worker Celery | presente: verificato con consegna reale al webhook mock |
 | Job di manutenzione (7), quote, metriche, `/readyz` | presenti |
 | Dashboard React | presente, `frontend/`, build di produzione servita da nginx |
 
-`backend/`: 148 test (0 skippati), `ruff format`/`ruff check`/`mypy` puliti. `frontend/`: 23 test,
+`backend/`: 248 test (0 skippati), `ruff format`/`ruff check`/`mypy` puliti. `frontend/`: 52 test,
 lint e build puliti. `scripts/smoke.sh` eseguito per intero contro lo stack di produzione
 containerizzato: 22/22 assert, exit 0.
 
@@ -107,6 +108,16 @@ scripts/notifyhub-run.sh -s {slug} -- /usr/local/bin/backup.sh /dati
 
 Come viene decisa la severity di una notifica e come si configurano le regole:
 [`docs/SEVERITY.md`](docs/SEVERITY.md).
+
+I receiver non devono partire da zero: esistono **preset di regole** già pronti
+per gli errori di bash, PostgreSQL, MongoDB, `tar` e `rclone`, applicabili anche
+in combinazione allo stesso receiver e modificabili dalla dashboard. Un tenant
+nuovo li trova installati; per installarli su un'istanza già esistente, o dopo
+un aggiornamento che ne aggiunge di nuovi:
+
+```bash
+docker compose run --rm migrate python -m app.cli sync-presets
+```
 
 ## Sviluppo
 

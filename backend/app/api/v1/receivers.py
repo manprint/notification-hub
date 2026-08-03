@@ -4,15 +4,25 @@ import secrets
 import uuid
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_claims, db, require_admin, require_member
 from app.core.errors import PROBLEM_TYPES, Problem
 from app.core.security import AccessClaims
 from app.models.receiver import Receiver
+from app.models.severity_preset import (
+    ReceiverSeverityPreset,
+    SeverityPreset,
+    SeverityPresetRule,
+)
 from app.models.severity_rule import SeverityRule
 from app.models.tenant import Tenant
+from app.schemas.preset import (
+    ReceiverPresetOut,
+    ReceiverPresetsIn,
+    SeverityChainItemOut,
+)
 from app.schemas.receiver import (
     DeleteImpactOut,
     ReceiverCreate,
@@ -28,6 +38,7 @@ from app.schemas.receiver import (
     TestSeverityOut,
 )
 from app.services.authz import accessible_group_ids, assert_group_access
+from app.services.rule_chain import load_evaluation_chain
 from app.services.severity import InvalidPatternError, compile_pattern, resolve_severity_async
 
 router = APIRouter(tags=["receivers"])
@@ -479,14 +490,7 @@ async def test_severity(
     receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
     await assert_group_access(session, claims, receiver.group_id, write=False)
 
-    rules_result = await session.execute(
-        select(SeverityRule).where(
-            SeverityRule.receiver_id == receiver_id,
-            SeverityRule.tenant_id == tenant_id,
-            SeverityRule.enabled.is_(True),
-        )
-    )
-    rules = list(rules_result.scalars().all())
+    rules = await load_evaluation_chain(session, tenant_id, receiver_id)
 
     resolution = await resolve_severity_async(
         header_severity=body.header_severity,
@@ -503,6 +507,8 @@ async def test_severity(
         source=resolution.source.value,
         matched_rule_id=resolution.matched_rule_id,
         matched_pattern=resolution.matched_pattern,
+        matched_preset_id=resolution.matched_preset_id,
+        matched_preset_name=resolution.matched_preset_name,
     )
 
 
@@ -530,14 +536,7 @@ async def replay_severity_rules(
     receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
     await assert_group_access(session, claims, receiver.group_id, write=False)
 
-    rules_result = await session.execute(
-        select(SeverityRule).where(
-            SeverityRule.receiver_id == receiver_id,
-            SeverityRule.tenant_id == tenant_id,
-            SeverityRule.enabled.is_(True),
-        )
-    )
-    rules = list(rules_result.scalars().all())
+    rules = await load_evaluation_chain(session, tenant_id, receiver_id)
 
     notifications_result = await session.execute(
         select(Notification)
@@ -577,11 +576,157 @@ async def replay_severity_rules(
                 replayed_source=resolution.source.value,
                 matched_rule_id=resolution.matched_rule_id,
                 matched_pattern=resolution.matched_pattern,
+                matched_preset_name=resolution.matched_preset_name,
                 changed=resolution.severity != notification.severity,
             )
         )
 
     return SeverityReplayOut(items=items, changed_count=sum(1 for item in items if item.changed))
+
+
+async def _receiver_presets(
+    session: AsyncSession, tenant_id: uuid.UUID, receiver_id: uuid.UUID
+) -> list[ReceiverPresetOut]:
+    result = await session.execute(
+        select(SeverityPreset, ReceiverSeverityPreset.position)
+        .join(ReceiverSeverityPreset, ReceiverSeverityPreset.preset_id == SeverityPreset.id)
+        .where(
+            ReceiverSeverityPreset.receiver_id == receiver_id,
+            ReceiverSeverityPreset.tenant_id == tenant_id,
+        )
+        .order_by(ReceiverSeverityPreset.position.asc())
+    )
+    rows = result.all()
+    if not rows:
+        return []
+
+    counts_result = await session.execute(
+        select(SeverityPresetRule.preset_id, func.count())
+        .where(SeverityPresetRule.preset_id.in_([preset.id for preset, _ in rows]))
+        .group_by(SeverityPresetRule.preset_id)
+    )
+    counts = {row[0]: row[1] for row in counts_result.all()}
+
+    return [
+        ReceiverPresetOut(
+            preset_id=preset.id,
+            name=preset.name,
+            description=preset.description,
+            builtin_key=preset.builtin_key,
+            position=position,
+            rules_count=counts.get(preset.id, 0),
+        )
+        for preset, position in rows
+    ]
+
+
+@router.get("/receivers/{receiver_id}/presets", response_model=list[ReceiverPresetOut])
+async def list_receiver_presets(
+    receiver_id: uuid.UUID,
+    claims: AccessClaims = Depends(current_claims),  # noqa: B008
+    session: AsyncSession = Depends(db),  # noqa: B008
+) -> list[ReceiverPresetOut]:
+    tenant_id = uuid.UUID(claims.tid)
+    receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
+    await assert_group_access(session, claims, receiver.group_id, write=False)
+    return await _receiver_presets(session, tenant_id, receiver_id)
+
+
+@router.put("/receivers/{receiver_id}/presets", response_model=list[ReceiverPresetOut])
+async def set_receiver_presets(
+    receiver_id: uuid.UUID,
+    body: ReceiverPresetsIn,
+    claims: AccessClaims = Depends(require_member),  # noqa: B008
+    session: AsyncSession = Depends(db),  # noqa: B008
+) -> list[ReceiverPresetOut]:
+    """Sostituisce l'elenco dei preset applicati al receiver.
+
+    Il corpo e l'elenco completo nell'ordine di valutazione voluto: quello che
+    non compare viene staccato. Applicare i preset e una modifica al receiver,
+    non al preset, quindi basta il ruolo member sul gruppo del receiver.
+    """
+    tenant_id = uuid.UUID(claims.tid)
+    receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
+    await assert_group_access(session, claims, receiver.group_id, write=True)
+
+    if len(set(body.preset_ids)) != len(body.preset_ids):
+        raise Problem(
+            status=422,
+            type=PROBLEM_TYPES["validation_error"],
+            title="Validation Error",
+            detail="preset_ids contains the same preset more than once.",
+        )
+
+    if body.preset_ids:
+        found_result = await session.execute(
+            select(SeverityPreset.id).where(
+                SeverityPreset.id.in_(body.preset_ids),
+                SeverityPreset.tenant_id == tenant_id,
+            )
+        )
+        found = {row[0] for row in found_result.all()}
+        missing = [str(pid) for pid in body.preset_ids if pid not in found]
+        if missing:
+            raise Problem(
+                status=404,
+                type=PROBLEM_TYPES["not_found"],
+                title="Not Found",
+                detail=f"Severity preset not found: {', '.join(missing)}.",
+            )
+
+    # DELETE esplicito e flush prima degli INSERT: l'unita di lavoro di
+    # SQLAlchemy emetterebbe gli INSERT per primi, e il vincolo di unicita su
+    # (receiver_id, position) scatterebbe su una posizione ancora occupata.
+    await session.execute(
+        delete(ReceiverSeverityPreset).where(
+            ReceiverSeverityPreset.receiver_id == receiver_id,
+            ReceiverSeverityPreset.tenant_id == tenant_id,
+        )
+    )
+    await session.flush()
+
+    for position, preset_id in enumerate(body.preset_ids):
+        session.add(
+            ReceiverSeverityPreset(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                receiver_id=receiver_id,
+                preset_id=preset_id,
+                position=position,
+            )
+        )
+    await session.flush()
+
+    return await _receiver_presets(session, tenant_id, receiver_id)
+
+
+@router.get("/receivers/{receiver_id}/severity-chain", response_model=list[SeverityChainItemOut])
+async def get_severity_chain(
+    receiver_id: uuid.UUID,
+    claims: AccessClaims = Depends(current_claims),  # noqa: B008
+    session: AsyncSession = Depends(db),  # noqa: B008
+) -> list[SeverityChainItemOut]:
+    """La catena effettiva: tutte le regole attive del receiver, proprie e dei
+    preset, nell'ordine esatto in cui vengono provate. Risponde alla domanda
+    "quale regola decide" senza doverla ricostruire a mente da due elenchi."""
+    tenant_id = uuid.UUID(claims.tid)
+    receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
+    await assert_group_access(session, claims, receiver.group_id, write=False)
+
+    chain = await load_evaluation_chain(session, tenant_id, receiver_id)
+    return [
+        SeverityChainItemOut(
+            position=index + 1,
+            rule_id=uuid.UUID(rule.id),
+            pattern=rule.pattern,
+            case_insensitive=rule.case_insensitive,
+            severity=rule.severity,
+            origin="preset" if rule.preset_id is not None else "receiver",
+            preset_id=uuid.UUID(rule.preset_id) if rule.preset_id is not None else None,
+            preset_name=rule.preset_name,
+        )
+        for index, rule in enumerate(chain)
+    ]
 
 
 @router.get("/groups/{group_id}/delete-impact", response_model=DeleteImpactOut)

@@ -2,12 +2,12 @@
 scansione del contenuto senza troncature."""
 
 import uuid
-from dataclasses import dataclass
 
 import pytest
 
 from app.db.types import Severity, SeveritySource
 from app.services.severity import (
+    EvaluableRule,
     InvalidPatternError,
     compile_pattern,
     compiled_pattern_cache_info,
@@ -16,17 +16,11 @@ from app.services.severity import (
 )
 
 
-@dataclass
-class FakeRule:
-    """Sostituisce SeverityRule: resolve_severity legge solo questi attributi e
-    non tocca il database."""
-
-    priority: int
-    pattern: str
-    severity: Severity
-    case_insensitive: bool = True
-    enabled: bool = True
-    id: uuid.UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+def FakeRule(**kwargs) -> EvaluableRule:  # noqa: N802
+    """Regola di prova: EvaluableRule con un id di default, cosi i test parlano
+    solo dei campi che stanno verificando."""
+    kwargs.setdefault("id", "00000000-0000-0000-0000-000000000001")
+    return EvaluableRule(**kwargs)
 
 
 def _resolve(**overrides):
@@ -100,7 +94,7 @@ def test_priorita_piu_bassa_vince():
             priority=20,
             pattern="attenzione",
             severity=Severity.WARNING,
-            id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+            id="00000000-0000-0000-0000-000000000002",
         ),
         FakeRule(priority=10, pattern="ERRORE", severity=Severity.ERROR),
     ]
@@ -132,6 +126,32 @@ def test_nessuna_troncatura_del_contenuto():
     pagliaio = "x" * 200_000 + "AGO"
     res = _resolve(rules=rules, content=pagliaio)
     assert (res.severity, res.source) == (Severity.CRITICAL, SeveritySource.RULE)
+
+
+@pytest.mark.unit
+def test_regola_di_preset_dichiara_la_sua_origine():
+    """Chi legge la notifica deve sapere se correggere la regola sul receiver o
+    il preset condiviso."""
+    rules = [
+        FakeRule(
+            priority=0,
+            pattern="ERRORE",
+            severity=Severity.ERROR,
+            preset_id="11111111-1111-1111-1111-111111111111",
+            preset_name="Bash generico",
+        )
+    ]
+    res = _resolve(rules=rules, content="ERRORE grave")
+    assert res.source == SeveritySource.PRESET_RULE
+    assert res.matched_preset_name == "Bash generico"
+
+
+@pytest.mark.unit
+def test_regola_propria_del_receiver_non_ha_preset():
+    rules = [FakeRule(priority=0, pattern="ERRORE", severity=Severity.ERROR)]
+    res = _resolve(rules=rules, content="ERRORE grave")
+    assert res.source == SeveritySource.RULE
+    assert (res.matched_preset_id, res.matched_preset_name) == (None, None)
 
 
 @pytest.mark.unit

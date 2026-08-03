@@ -37,6 +37,9 @@ class SeveritySource(StrEnum):
     EXPLICIT = "explicit"
     EXIT_CODE = "exit_code"
     RULE = "rule"
+    # Regola arrivata da un preset applicato al receiver, non scritta sul
+    # receiver stesso: distinguerle serve a sapere dove andare a correggere.
+    PRESET_RULE = "preset_rule"
     RECEIVER_DEFAULT = "receiver_default"
 
 

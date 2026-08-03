@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import ingest_session
 from app.db.types import NotificationStatus, Severity, SeveritySource
 from app.models.receiver import Receiver
-from app.models.severity_rule import SeverityRule
+from app.services.rule_chain import load_evaluation_chain
 from app.services.severity import resolve_severity_async
 from app.services.storage import object_key, should_use_object_storage
 
@@ -72,15 +72,6 @@ def normalize_body(raw: bytes) -> tuple[str, bool]:
     return text, (invalid_utf8 or had_nul)
 
 
-async def fetch_severity_rules(session: AsyncSession, receiver_id: uuid.UUID) -> list[SeverityRule]:
-    result = await session.execute(
-        select(SeverityRule)
-        .where(SeverityRule.receiver_id == receiver_id, SeverityRule.enabled.is_(True))
-        .order_by(SeverityRule.priority.asc())
-    )
-    return list(result.scalars().all())
-
-
 @dataclass
 class PreparedNotification:
     """Tutto cio che serve per decidere lo storage backend PRIMA di scrivere
@@ -120,7 +111,7 @@ async def prepare_notification(
     normalized_text, content_normalized = normalize_body(raw_body)
     original_size = len(raw_body)
 
-    rules = await fetch_severity_rules(session, receiver_id)
+    rules = await load_evaluation_chain(session, tenant_id, receiver_id)
     resolution = await resolve_severity_async(
         header_severity=header_severity,
         query_severity=query_severity,

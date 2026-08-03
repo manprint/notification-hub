@@ -11,6 +11,7 @@ import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
 import NotificationDetailPage from "./pages/NotificationDetailPage";
 import NotificationsPage from "./pages/NotificationsPage";
+import PresetsPage from "./pages/PresetsPage";
 import ReceiverDetailPage from "./pages/ReceiverDetailPage";
 import SettingsPage from "./pages/SettingsPage";
 import UsersPage from "./pages/UsersPage";
@@ -53,6 +54,14 @@ export default function App() {
             element={
               <RequireRole allowed={["owner", "admin", "member"]}>
                 <ReceiverDetailPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/presets"
+            element={
+              <RequireRole allowed={["owner", "admin", "member"]}>
+                <PresetsPage />
               </RequireRole>
             }
           />

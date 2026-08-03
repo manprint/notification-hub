@@ -143,6 +143,7 @@ export const fixtureSeverityReplay = {
       replayed_source: "rule",
       matched_rule_id: "sr1",
       matched_pattern: "FALL(ITO|IMENT)|ERROR|CRITICAL",
+      matched_preset_name: null,
       changed: true,
     },
     {
@@ -156,11 +157,106 @@ export const fixtureSeverityReplay = {
       replayed_source: "receiver_default",
       matched_rule_id: null,
       matched_pattern: null,
+      matched_preset_name: null,
       changed: false,
     },
   ],
   changed_count: 1,
 };
+
+export const fixturePresets = [
+  {
+    id: "p1",
+    builtin_key: "bash-generic",
+    name: "Bash generico",
+    description: "Errori comuni di shell e coreutils.",
+    rules_count: 2,
+    receivers_count: 3,
+  },
+  {
+    id: "p2",
+    builtin_key: null,
+    name: "Backup interni",
+    description: "Regole nostre.",
+    rules_count: 1,
+    receivers_count: 0,
+  },
+];
+
+export const fixturePresetDetail = {
+  ...fixturePresets[0],
+  rules: [
+    {
+      id: "pr1",
+      preset_id: "p1",
+      priority: 10,
+      pattern: "No space left on device",
+      case_insensitive: true,
+      severity: "critical",
+      enabled: true,
+    },
+    {
+      id: "pr2",
+      preset_id: "p1",
+      priority: 20,
+      pattern: "Permission denied",
+      case_insensitive: true,
+      severity: "error",
+      enabled: false,
+    },
+  ],
+};
+
+export const fixturePresetCatalog = [
+  {
+    key: "bash-generic",
+    name: "Bash generico",
+    description: "Errori comuni di shell e coreutils.",
+    rules_count: 14,
+    installed: true,
+  },
+  {
+    key: "rclone",
+    name: "rclone",
+    description: "Sincronizzazioni con rclone.",
+    rules_count: 12,
+    installed: false,
+  },
+];
+
+export const fixtureReceiverPresets = [
+  {
+    preset_id: "p1",
+    name: "Bash generico",
+    description: "Errori comuni di shell e coreutils.",
+    builtin_key: "bash-generic",
+    position: 0,
+    rules_count: 2,
+  },
+];
+
+export const fixtureSeverityChain = [
+  {
+    position: 1,
+    rule_id: "sr1",
+    pattern: "FALL(ITO|IMENT)|ERROR|CRITICAL",
+    case_insensitive: true,
+    severity: "error",
+    origin: "receiver",
+    preset_id: null,
+    preset_name: null,
+  },
+  {
+    position: 2,
+    rule_id: "pr1",
+    pattern: "No space left on device",
+    case_insensitive: true,
+    severity: "critical",
+    origin: "preset",
+    preset_id: "p1",
+    preset_name: "Bash generico",
+  },
+];
 
 export const fixtureSeverityRules = [
   {
@@ -304,4 +400,13 @@ export const handlers = [
   http.get("/api/v1/tenant", () => HttpResponse.json(fixtureTenant)),
   http.get("/api/v1/invitations", () => HttpResponse.json(fixtureInvitations)),
   http.get("/api/v1/receivers/:receiverId/channels", () => HttpResponse.json([])),
+  http.get("/api/v1/severity-presets", () => HttpResponse.json(fixturePresets)),
+  http.get("/api/v1/severity-presets/catalog", () => HttpResponse.json(fixturePresetCatalog)),
+  http.get("/api/v1/severity-presets/p1", () => HttpResponse.json(fixturePresetDetail)),
+  http.get("/api/v1/receivers/:receiverId/presets", () =>
+    HttpResponse.json(fixtureReceiverPresets),
+  ),
+  http.get("/api/v1/receivers/:receiverId/severity-chain", () =>
+    HttpResponse.json(fixtureSeverityChain),
+  ),
 ];

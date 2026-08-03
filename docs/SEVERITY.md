@@ -23,8 +23,13 @@ configura quella decisione.
 Ogni notifica riceve **una** severity fra `debug`, `info`, `warning`, `error`,
 `critical`. La sceglie il server al momento dell'ingestione, seguendo quattro
 passaggi in ordine fisso: chi invia può **dichiararla**, altrimenti un **exit
-code diverso da zero** la impone, altrimenti le **regole del receiver** la
-deducono dal contenuto, altrimenti vale la **severity di default**.
+code diverso da zero** la impone, altrimenti le **regole** la deducono dal
+contenuto, altrimenti vale la **severity di default**.
+
+Le regole sono di due tipi e vengono provate in quest'ordine: prima quelle
+scritte sul singolo receiver, poi quelle dei **preset** applicati — insiemi di
+regole già pronti (`Bash generico`, `PostgreSQL`, `MongoDB`, `tar`, `rclone`),
+condivisi fra i receiver e modificabili dalla dashboard.
 
 La severity non è un'etichetta decorativa: è la soglia che decide se il
 messaggio finisce su Slack o Google Chat, o se resta solo in dashboard.
@@ -46,8 +51,13 @@ messaggio finisce su Slack o Google Chat, o se resta solo in dashboard.
                     └──────────────────┬───────────────────────┘
                                        │ assente, uguale a 0, o politica disattivata
                     ┌──────────────────▼───────────────────────┐
-                    │ 3. Regole di severity del receiver       │
+                    │ 3a. Regole scritte sul receiver          │
                     │    match sul contenuto INTERO, in ordine │──sì──▶ severity_source = rule
+                    └──────────────────┬───────────────────────┘
+                                       │ nessuna ha fatto match
+                    ┌──────────────────▼───────────────────────┐
+                    │ 3b. Regole dei preset applicati          │
+                    │    nell'ordine dei preset                │──sì──▶ severity_source = preset_rule
                     └──────────────────┬───────────────────────┘
                                        │ nessuna regola ha fatto match
                     ┌──────────────────▼───────────────────────┐
@@ -154,10 +164,16 @@ solo, a ogni esecuzione.
    dall'alto verso il basso. La prima della lista porta il badge *valutata per
    prima*.
 2. Si scartano quelle disattivate.
-3. La **prima** che trova corrispondenza vince e la valutazione si ferma lì. Le
+3. Esaurite le regole scritte qui, si passa a quelle dei **preset applicati**,
+   nell'ordine dei preset (vedi [Preset di regole](#preset-di-regole)).
+4. La **prima** che trova corrispondenza vince e la valutazione si ferma lì. Le
    successive non vengono nemmeno provate.
-4. La corrispondenza è una *ricerca*: il pattern può comparire in qualsiasi
+5. La corrispondenza è una *ricerca*: il pattern può comparire in qualsiasi
    punto del testo, senza bisogno di `.*` iniziali.
+
+Il riquadro **Catena effettiva**, nel dettaglio del receiver, mostra l'elenco
+già fuso: regole proprie e regole dei preset numerate nell'ordine reale di
+valutazione, con l'indicazione di dove modificare ciascuna.
 
 Esempio con tre regole su uno stesso receiver:
 
@@ -215,6 +231,145 @@ rotta.
 Attenzione ai caratteri speciali: per cercare il testo letterale `[ERRORE]`
 serve `\[ERRORE\]`, perché le parentesi quadre nude aprono una classe di
 caratteri.
+
+---
+
+## Preset di regole
+
+Un **preset** è un insieme di regole con un nome, riusabile su quanti receiver
+si vuole. Serve a non riscrivere venti volte le stesse righe: gli errori di
+`tar` sono gli stessi su ogni macchina, quelli di `rclone` pure.
+
+Si gestiscono nella sezione **Preset di regole** del menu; si applicano a un
+receiver dal suo dettaglio, riquadro **Preset di regole applicati**.
+
+### Quelli già pronti
+
+| Preset | Copre |
+|---|---|
+| **Bash generico** | Errori di shell e coreutils: comando assente, permessi, disco pieno, segmentation fault, rete irraggiungibile, OOM. Da applicare a quasi tutti gli script. |
+| **PostgreSQL** | Livelli di log del server (`PANIC:`, `FATAL:`, `ERROR:`, `WARNING:`) più gli errori tipici di `psql`, `pg_dump`, `pg_restore`. |
+| **MongoDB** | Severità del log JSON di `mongod` (`"s":"F"`, `"s":"E"`, `"s":"W"`), errori di connessione e autenticazione, esiti di `mongodump`/`mongorestore`. |
+| **tar** | Archivi danneggiati, file illeggibili, spazio esaurito, uscita con errori differiti; include gli errori di `gzip`. |
+| **rclone** | Livelli `CRITICAL`/`ERROR`, quota esaurita, credenziali scadute, file corrotti in transito, riga finale `Errors: N`. |
+
+Un receiver può usarne **più di uno** insieme: per un backup notturno che
+comprime e sincronizza, la combinazione naturale è `Bash generico` + `tar` +
+`rclone`.
+
+### Come vengono installati
+
+I preset predefiniti non sono codice immutabile: al momento dell'installazione
+vengono **copiati dentro il tuo tenant** e da lì in poi sono regole come tutte le
+altre, che puoi modificare, disattivare, cancellare.
+
+- Un tenant nuovo li trova già installati.
+- Un tenant esistente li installa con il pulsante **Installa i preset mancanti**
+  nella sezione Preset (visibile solo se ne mancano), oppure da riga di comando:
+
+  ```bash
+  docker compose run --rm migrate python -m app.cli sync-presets
+  ```
+
+L'operazione è **additiva e ripetibile**: installa solo quello che manca e non
+tocca mai una copia già presente, nemmeno se l'hai modificata. Un aggiornamento
+dell'applicazione non ti sovrascrive le regole.
+
+Per tornare ai valori di fabbrica di un preset predefinito c'è il pulsante
+**Ripristina i valori predefiniti**, che rimette nome, descrizione e regole del
+catalogo scartando le modifiche locali.
+
+### Ordine e precedenza
+
+1. Le regole scritte **sul receiver** vengono valutate per prime. Sono
+   l'eccezione locale: servono a correggere un preset condiviso senza doverlo
+   duplicare. Esempio: il preset `Bash generico` classifica `Permission denied`
+   come `error`, ma su un receiver specifico quel messaggio è atteso — basta una
+   regola locale che lo porti a `info`, e vincerà lei.
+2. Poi vengono i preset, **nell'ordine in cui compaiono** nel riquadro del
+   receiver (frecce ↑ ↓ per cambiarlo), e dentro ogni preset nell'ordine delle
+   sue regole.
+
+Quando decide una regola di preset, la notifica registra
+`severity_source = preset_rule` e la dashboard mostra da quale preset arriva:
+sai subito dove andare a correggerla.
+
+> **Metti `Bash generico` per ultimo.** La sua ultima regola è una rete di
+> sicurezza volutamente larga (`ERROR|ERRORE|FATAL|FAILED|…` → `error`), e vince
+> su qualunque regola che venga dopo. Con l'ordine `Bash generico, tar, rclone`
+> una riga come
+>
+> ```
+> 2024/06/01 03:12:44 ERROR : dati/foto.jpg: corrupted on transfer: sizes differ
+> ```
+>
+> diventa `error`, perché la rete di sicurezza la intercetta prima che rclone
+> possa riconoscerla come `critical`. Con l'ordine `tar, rclone, Bash generico`
+> la stessa riga diventa `critical`. Regola pratica: **prima i preset specifici,
+> il generico in fondo.**
+
+> **Attenzione**: modificare un preset cambia il comportamento di **tutti** i
+> receiver che lo usano. La pagina Preset mostra per ognuno quanti receiver lo
+> stanno usando.
+
+### Preset personalizzati
+
+Il pulsante **Nuovo preset** crea un insieme vuoto a cui aggiungere le proprie
+regole. Vale la pena crearne uno quando le stesse regole servono su più
+receiver; per una regola che riguarda un solo receiver conviene scriverla
+direttamente su quel receiver.
+
+I nomi sono unici per tenant: un nome già usato viene rifiutato con `409`.
+
+### Permessi
+
+| Azione | Ruolo minimo |
+|---|---|
+| Vedere i preset e le loro regole | qualsiasi ruolo |
+| Creare, modificare, eliminare, ripristinare un preset | **admin** |
+| Applicare o togliere preset a un receiver | **member** (sul gruppo del receiver) |
+
+La scrittura richiede admin perché un preset è condiviso fra gruppi: chi lo
+modifica tocca anche receiver che non gestisce. Applicarlo al proprio receiver,
+invece, è una scelta locale.
+
+### Aggiungere un preset predefinito (per chi sviluppa)
+
+Il catalogo è un elenco di strutture dati in
+`backend/app/services/severity_presets.py`. Per aggiungerne uno si scrive una
+voce e la si mette in `BUILTIN_PRESETS`:
+
+```python
+RSYNC = PresetSpec(
+    key="rsync",                      # identificatore stabile, non si cambia più
+    name="rsync",
+    description="Sincronizzazioni con rsync.",
+    rules=(
+        PresetRuleSpec(r"No space left on device", Severity.CRITICAL),
+        PresetRuleSpec(r"rsync error:|failed to set times", Severity.ERROR),
+        PresetRuleSpec(r"some files vanished", Severity.WARNING),
+    ),
+)
+
+BUILTIN_PRESETS = (BASH_GENERIC, POSTGRES, MONGODB, TAR, RCLONE, RSYNC)
+```
+
+Non serve altro: nessuna migrazione, nessuna modifica alle API, nessuna modifica
+alla dashboard. Gli utenti lo installano con `sync-presets` o con il pulsante.
+
+Tre regole di scrittura, verificate da `tests/unit/test_severity_presets_catalog.py`:
+
+1. **Solo regole che alzano la severity.** Niente `info` o `debug`: la prima
+   regola che corrisponde vince, quindi classificare una riga innocua
+   (`Removing leading / from member names` di tar) maschererebbe l'errore vero
+   che arriva subito dopo nello stesso log. Il rumore si ignora, non si
+   classifica.
+2. **Ordine dal più grave al più lieve**: tutte le `critical`, poi le `error`,
+   poi le `warning`. Una `warning` messa sopra una `critical` renderebbe la
+   seconda irraggiungibile sugli stessi log.
+3. **`case_insensitive=False` quando le maiuscole sono l'informazione**:
+   `ERROR:` in un log PostgreSQL è un livello di log, `error` dentro una frase
+   inglese no.
 
 ---
 
@@ -457,7 +612,9 @@ a `warning` invece di `critical`. Nessuna modifica agli script sulle macchine.
 | La regola non scatta mai | Pattern con lookahead o backreference (non esistono in RE2), oppure caratteri speciali non protetti: `[ERRORE]` va scritto `\[ERRORE\]`. Provalo con **Prova severity**. |
 | Tutto è `critical`, le regole sembrano ignorate | Il mittente sta inviando `X-Exit-Code` diverso da zero e la politica del receiver è `critical`: è il passaggio 2 che vince, `severity_source` dice `exit_code`. |
 | La severity esplicita viene ignorata | Valore fuori dai cinque ammessi: viene scartato in silenzio. `severity_source` lo conferma. |
-| `severity_source` dice sempre `receiver_default` | Nessuna regola attiva sul receiver, o tutte disattivate. |
+| `severity_source` dice sempre `receiver_default` | Nessuna regola attiva sul receiver e nessun preset applicato, o tutte disattivate. Il riquadro **Catena effettiva** lo mostra a colpo d'occhio. |
+| Una regola di un preset non scatta | Un'altra regola vince prima: guarda la **Catena effettiva**, dove le regole proprie del receiver compaiono sopra quelle dei preset. |
+| Ho modificato un preset e sono cambiati receiver che non volevo | Un preset è condiviso. La pagina Preset dice quanti receiver lo usano; per l'eccezione locale scrivi una regola sul singolo receiver invece di modificare il preset. |
 | Salvando una regola arriva `409` | Stai usando l'API con una priorità già occupata su quel receiver: le priorità sono uniche. Dalla dashboard il problema non si presenta. |
 | La notifica ha la severity giusta ma non arriva su Slack | È un problema di soglie, non di severity: vedi [Dalla severity all'inoltro](#dalla-severity-allinoltro-sui-canali). |
 
@@ -477,8 +634,32 @@ l'ingestione che usa lo slug come sola credenziale.
 | Riordina tutte le regole | `PUT /api/v1/receivers/{id}/severity-rules/order` | member |
 | Prova la catena su un testo | `POST /api/v1/receivers/{id}/test-severity` | viewer |
 | Rivaluta le ultime notifiche | `GET /api/v1/receivers/{id}/severity-rules/replay` | viewer |
+| Catena effettiva (regole proprie + preset, in ordine) | `GET /api/v1/receivers/{id}/severity-chain` | viewer |
 | Severity di default e politica exit code | `PATCH /api/v1/receivers/{id}` | member |
 | Invio | `POST /ingest/{slug}` con `X-Severity`, `?severity=`, `X-Exit-Code` | — (slug) |
+
+Preset:
+
+| Operazione | Chiamata | Ruolo minimo |
+|---|---|---|
+| Elenco preset del tenant | `GET /api/v1/severity-presets` | viewer |
+| Catalogo predefinito e stato di installazione | `GET /api/v1/severity-presets/catalog` | viewer |
+| Installa i predefiniti mancanti | `POST /api/v1/severity-presets/sync-builtin` | admin |
+| Dettaglio con le regole | `GET /api/v1/severity-presets/{id}` | viewer |
+| Crea / rinomina / elimina | `POST`, `PATCH`, `DELETE /api/v1/severity-presets[/{id}]` | admin |
+| Ripristina i valori di catalogo | `POST /api/v1/severity-presets/{id}/reset` | admin |
+| Regole del preset | `POST /api/v1/severity-presets/{id}/rules`, `PATCH`/`DELETE /api/v1/severity-preset-rules/{rule_id}` | admin |
+| Riordina le regole del preset | `PUT /api/v1/severity-presets/{id}/rules/order` | admin |
+| Preset applicati a un receiver | `GET /api/v1/receivers/{id}/presets` | viewer |
+| Applica preset a un receiver | `PUT /api/v1/receivers/{id}/presets` | member |
+
+L'applicazione dei preset a un receiver è una **sostituzione**: il corpo elenca
+tutti i preset voluti, nell'ordine di valutazione. Un elenco vuoto li stacca
+tutti.
+
+```json
+{ "preset_ids": ["4a1c…", "77b0…", "0e93…"] }
+```
 
 Creazione di una regola — `priority` è **opzionale**: se assente la regola viene
 accodata in fondo (massima priorità esistente + 10).
@@ -508,9 +689,11 @@ politica.
 ```
 
 Risposte di errore rilevanti: `422` se il pattern non è compilabile da RE2 (il
-dettaglio riporta il messaggio di RE2) o se il riordino non elenca tutte le
-regole; `409` se la priorità richiesta è già occupata; `403` se il receiver
-appartiene a un gruppo non associato all'utenza.
+dettaglio riporta il messaggio di RE2), se il riordino non elenca tutte le
+regole o se lo stesso preset compare due volte; `409` se la priorità richiesta è
+già occupata, se il nome del preset è già usato o se si tenta di ripristinare un
+preset creato a mano; `404` per un preset di un altro tenant; `403` se il
+receiver appartiene a un gruppo non associato all'utenza.
 
 ---
 
@@ -519,6 +702,10 @@ appartiene a un gruppo non associato all'utenza.
 | Cosa | File |
 |---|---|
 | Catena di precedenza, cache dei pattern, offload su thread | `backend/app/services/severity.py` |
+| Costruzione della catena (regole proprie + preset, in ordine) | `backend/app/services/rule_chain.py` |
+| Catalogo dei preset predefiniti e installazione | `backend/app/services/severity_presets.py` |
+| CRUD preset e loro regole | `backend/app/api/v1/presets.py` |
+| Tabelle dei preset | migrazione `0009` |
 | Scansione del contenuto in ingestione | `backend/app/services/ingest.py` |
 | Endpoint di ingestione (`X-Severity`, `?severity=`, `X-Exit-Code`) | `backend/app/api/ingest.py` |
 | CRUD regole, riordino, prova, replay | `backend/app/api/v1/receivers.py` |
@@ -527,4 +714,5 @@ appartiene a un gruppo non associato all'utenza.
 | Soglie di inoltro e override | `backend/app/services/outbound_resolver.py` |
 | Ordine delle severity | `backend/app/db/types.py` (`SEVERITY_ORDER`) |
 | Pannello regole in dashboard | `frontend/src/components/SeverityRulesPanel.tsx` |
+| Sezione Preset e pannello preset del receiver | `frontend/src/pages/PresetsPage.tsx`, `frontend/src/components/ReceiverPresetsPanel.tsx` |
 | Script wrapper | `scripts/notifyhub-run.sh` |

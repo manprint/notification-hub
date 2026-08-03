@@ -92,6 +92,13 @@ async def register(body: RegisterIn) -> dict:
         )
         session.add(user)
 
+    # Come nel bootstrap da CLI: un tenant nuovo trova i preset predefiniti gia
+    # installati e modificabili, invece di una sezione Preset vuota.
+    from app.services.severity_presets import sync_builtin_presets
+
+    async with tenant_session(tenant_id) as session:
+        await sync_builtin_presets(session, tenant_id)
+
     return {"tenant_id": str(tenant_id), "user_id": str(user_id)}
 
 

@@ -7,6 +7,11 @@ from app.models.notification import Notification
 from app.models.object_deletion import PendingObjectDeletion
 from app.models.receiver import Receiver
 from app.models.refresh_token import RefreshToken
+from app.models.severity_preset import (
+    ReceiverSeverityPreset,
+    SeverityPreset,
+    SeverityPresetRule,
+)
 from app.models.severity_rule import SeverityRule
 from app.models.tenant import Tenant
 from app.models.user import User
@@ -20,6 +25,9 @@ __all__ = [
     "Group",
     "Receiver",
     "SeverityRule",
+    "SeverityPreset",
+    "SeverityPresetRule",
+    "ReceiverSeverityPreset",
     "Notification",
     "DeliveryChannel",
     "GroupChannelBinding",
