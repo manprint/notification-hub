@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { apiGet, apiPatch, apiPost } from "../api/client";
+import { apiDelete, apiGet, apiPatch, apiPost } from "../api/client";
 import type {
   ApiError,
   ChannelType,
@@ -8,10 +8,14 @@ import type {
   DeliveryChannelTestOut,
   GroupOut,
   OverrideMode,
+  ReceiverChannelOverrideOut,
   Severity,
 } from "../api/types";
 import ChannelBindings from "../components/ChannelBindings";
+import ConfirmDialog from "../components/ConfirmDialog";
 import ErrorBanner from "../components/ErrorBanner";
+import { useSession } from "../hooks/useSession";
+import { ADMIN_ROLES, hasRole } from "../lib/roles";
 
 const CHANNEL_TYPES: ChannelType[] = ["slack", "google_chat", "generic_webhook"];
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
@@ -73,8 +77,96 @@ function CreateChannelForm() {
   );
 }
 
-function ChannelRow({ channel }: { channel: DeliveryChannelOut }) {
+function EditChannelForm({ channel, onDone }: { channel: DeliveryChannelOut; onDone: () => void }) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState(channel.name);
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [error, setError] = useState<ApiError | null>(null);
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    setError(null);
+    try {
+      await apiPatch(`/api/v1/channels/${channel.id}`, {
+        name,
+        webhook_url: webhookUrl || undefined,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["channels"] });
+      onDone();
+    } catch (err) {
+      setError(err as ApiError);
+    }
+  }
+
+  return (
+    <form onSubmit={(event) => void handleSubmit(event)}>
+      {error && <ErrorBanner error={error} />}
+      <div className="form-row">
+        <label htmlFor={`channel-edit-name-${channel.id}`}>Nome</label>
+        <input
+          id={`channel-edit-name-${channel.id}`}
+          required
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+        />
+      </div>
+      <div className="form-row">
+        <label htmlFor={`channel-edit-webhook-${channel.id}`}>Nuovo webhook URL</label>
+        <input
+          id={`channel-edit-webhook-${channel.id}`}
+          type="password"
+          placeholder="lascia vuoto per non cambiarlo"
+          value={webhookUrl}
+          onChange={(event) => setWebhookUrl(event.target.value)}
+        />
+      </div>
+      <div className="toolbar">
+        <button type="submit" className="primary">
+          Salva
+        </button>
+        <button type="button" onClick={onDone}>
+          Annulla
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function DeleteChannelButton({ channel }: { channel: DeliveryChannelOut }) {
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
+  const queryClient = useQueryClient();
+
+  async function confirmDelete() {
+    try {
+      await apiDelete(`/api/v1/channels/${channel.id}`);
+      setOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ["channels"] });
+    } catch (err) {
+      setError(err as ApiError);
+    }
+  }
+
+  return (
+    <div>
+      {error && <ErrorBanner error={error} />}
+      {open ? (
+        <ConfirmDialog
+          title={`Elimina canale "${channel.name}"`}
+          expectedText={channel.name}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setOpen(false)}
+        />
+      ) : (
+        <button onClick={() => setOpen(true)}>Elimina</button>
+      )}
+    </div>
+  );
+}
+
+function ChannelRow({ channel, canManage }: { channel: DeliveryChannelOut; canManage: boolean }) {
   const [testResult, setTestResult] = useState<DeliveryChannelTestOut | null>(null);
+  const [editing, setEditing] = useState(false);
   const queryClient = useQueryClient();
 
   async function runTest() {
@@ -85,6 +177,16 @@ function ChannelRow({ channel }: { channel: DeliveryChannelOut }) {
   async function toggleEnabled() {
     await apiPatch(`/api/v1/channels/${channel.id}`, { enabled: !channel.enabled });
     await queryClient.invalidateQueries({ queryKey: ["channels"] });
+  }
+
+  if (editing) {
+    return (
+      <tr>
+        <td colSpan={6}>
+          <EditChannelForm channel={channel} onDone={() => setEditing(false)} />
+        </td>
+      </tr>
+    );
   }
 
   return (
@@ -100,13 +202,70 @@ function ChannelRow({ channel }: { channel: DeliveryChannelOut }) {
         {channel.last_error_at && <div>ultimo errore: {channel.last_error}</div>}
       </td>
       <td>
-        <button onClick={() => void runTest()}>Invia messaggio di prova</button>
-        <button onClick={() => void toggleEnabled()}>{channel.enabled ? "Disattiva" : "Attiva"}</button>
+        {canManage && (
+          <>
+            <button onClick={() => void runTest()}>Invia messaggio di prova</button>
+            <button onClick={() => void toggleEnabled()}>{channel.enabled ? "Disattiva" : "Attiva"}</button>
+            <button onClick={() => setEditing(true)}>Modifica</button>
+            <DeleteChannelButton channel={channel} />
+          </>
+        )}
         {testResult && (
           <div>{testResult.sent ? `Inviato (${testResult.detail})` : `Fallito: ${testResult.detail}`}</div>
         )}
       </td>
     </tr>
+  );
+}
+
+function ReceiverOverridesPanel({
+  receiverId,
+  channels,
+}: {
+  receiverId: string;
+  channels: DeliveryChannelOut[];
+}) {
+  const queryClient = useQueryClient();
+  const { data: overrides, error } = useQuery<ReceiverChannelOverrideOut[], ApiError>({
+    queryKey: ["receiver-overrides", receiverId],
+    queryFn: () => apiGet<ReceiverChannelOverrideOut[]>(`/api/v1/receivers/${receiverId}/channels`),
+  });
+
+  async function remove(channelId: string) {
+    await apiDelete(`/api/v1/receivers/${receiverId}/channels/${channelId}`);
+    await queryClient.invalidateQueries({ queryKey: ["receiver-overrides", receiverId] });
+  }
+
+  const channelName = (channelId: string) => channels.find((c) => c.id === channelId)?.name ?? channelId;
+
+  if (error) return <ErrorBanner error={error} />;
+  if (!overrides || overrides.length === 0) {
+    return <p style={{ color: "var(--color-text-muted)" }}>Nessun override per questo receiver.</p>;
+  }
+
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>Canale</th>
+          <th>Modalità</th>
+          <th>Soglia minima</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {overrides.map((o) => (
+          <tr key={o.id}>
+            <td>{channelName(o.channel_id)}</td>
+            <td>{o.mode}</td>
+            <td>{o.min_severity ?? "—"}</td>
+            <td>
+              <button onClick={() => void remove(o.channel_id)}>Rimuovi</button>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -117,6 +276,7 @@ function ReceiverOverrideForm({ channels }: { channels: DeliveryChannelOut[] }) 
   const [minSeverity, setMinSeverity] = useState<Severity>("error");
   const [error, setError] = useState<ApiError | null>(null);
   const [success, setSuccess] = useState(false);
+  const queryClient = useQueryClient();
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -129,6 +289,7 @@ function ReceiverOverrideForm({ channels }: { channels: DeliveryChannelOut[] }) 
         min_severity: mode === "override" ? minSeverity : undefined,
       });
       setSuccess(true);
+      await queryClient.invalidateQueries({ queryKey: ["receiver-overrides", receiverId] });
     } catch (err) {
       setError(err as ApiError);
     }
@@ -198,11 +359,20 @@ function ReceiverOverrideForm({ channels }: { channels: DeliveryChannelOut[] }) 
           Salva override
         </button>
       </form>
+
+      {receiverId && (
+        <>
+          <h4>Override attivi per questo receiver</h4>
+          <ReceiverOverridesPanel receiverId={receiverId} channels={channels} />
+        </>
+      )}
     </div>
   );
 }
 
 export default function ChannelsPage() {
+  const { role } = useSession();
+  const canManage = hasRole(role, ADMIN_ROLES);
   const { data: channels, error } = useQuery<DeliveryChannelOut[], ApiError>({
     queryKey: ["channels"],
     queryFn: () => apiGet<DeliveryChannelOut[]>("/api/v1/channels"),
@@ -218,7 +388,7 @@ export default function ChannelsPage() {
       <h1>Canali</h1>
       {error && <ErrorBanner error={error} />}
 
-      <CreateChannelForm />
+      {canManage && <CreateChannelForm />}
 
       <div className="card">
         <table>
@@ -232,11 +402,13 @@ export default function ChannelsPage() {
               <th></th>
             </tr>
           </thead>
-          <tbody>{channels?.map((c) => <ChannelRow key={c.id} channel={c} />)}</tbody>
+          <tbody>
+            {channels?.map((c) => <ChannelRow key={c.id} channel={c} canManage={canManage} />)}
+          </tbody>
         </table>
       </div>
 
-      {channels && (
+      {canManage && channels && (
         <div className="card">
           <h3>Soglie per gruppo</h3>
           <select value={selectedGroupId} onChange={(event) => setSelectedGroupId(event.target.value)}>
@@ -251,7 +423,7 @@ export default function ChannelsPage() {
         </div>
       )}
 
-      {channels && <ReceiverOverrideForm channels={channels} />}
+      {canManage && channels && <ReceiverOverrideForm channels={channels} />}
     </div>
   );
 }

@@ -222,6 +222,14 @@ export const fixtureTestSeverityRule = {
   matched_pattern: "FALL(ITO|IMENT)|ERROR|CRITICAL",
 };
 
+export const fixtureInvitations: Array<{
+  id: string;
+  email: string;
+  role: string;
+  expires_at: string;
+  accepted_at: string | null;
+}> = [];
+
 export const handlers = [
   http.get("/api/v1/auth/me", () => HttpResponse.json(fixtureMe)),
   http.post("/api/v1/auth/login", () => HttpResponse.json(fixtureTokenPair)),
@@ -245,4 +253,6 @@ export const handlers = [
   http.get("/api/v1/deliveries", () => HttpResponse.json(fixtureDeliveries)),
   http.get("/api/v1/users", () => HttpResponse.json(fixtureUsers)),
   http.get("/api/v1/tenant", () => HttpResponse.json(fixtureTenant)),
+  http.get("/api/v1/invitations", () => HttpResponse.json(fixtureInvitations)),
+  http.get("/api/v1/receivers/:receiverId/channels", () => HttpResponse.json([])),
 ];

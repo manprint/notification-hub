@@ -51,6 +51,14 @@ export interface InvitationOut {
   email_sent: boolean;
 }
 
+export interface InvitationSummaryOut {
+  id: string;
+  email: string;
+  role: UserRole;
+  expires_at: string;
+  accepted_at: string | null;
+}
+
 export interface GroupOut {
   id: string;
   name: string;

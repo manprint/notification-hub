@@ -77,3 +77,13 @@ class InvitationOut(BaseModel):
 class InvitationAcceptIn(BaseModel):
     token: str
     password: str = Field(min_length=12)
+
+
+class InvitationSummaryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    email: str
+    role: str
+    expires_at: datetime
+    accepted_at: datetime | None

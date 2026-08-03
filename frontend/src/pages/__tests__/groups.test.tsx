@@ -2,11 +2,13 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import GroupsPage from "../GroupsPage";
+import { setRefreshToken } from "../../api/client";
 import { fixtureDeleteImpact } from "../../api/mocks/handlers";
 import { renderWithProviders } from "./testUtils";
 
 describe("GroupsPage", () => {
   it("T-UI12 test_cancellazione_gruppo_mostra_impatto: mostra i conteggi e richiede il nome esatto", async () => {
+    setRefreshToken("refresh-token-fixture");
     const user = userEvent.setup();
     renderWithProviders(<GroupsPage />);
 

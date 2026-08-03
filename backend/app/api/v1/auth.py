@@ -26,6 +26,7 @@ from app.schemas.auth import (
     InvitationAcceptIn,
     InvitationIn,
     InvitationOut,
+    InvitationSummaryOut,
     LoginIn,
     LogoutIn,
     MeOut,
@@ -387,6 +388,52 @@ async def create_invitation(
         invite_url=invite_url,
         email_sent=email_sent,
     )
+
+
+@invitations_router.get("", response_model=list[InvitationSummaryOut])
+async def list_invitations(
+    claims: AccessClaims = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(db),  # noqa: B008
+) -> list[InvitationSummaryOut]:
+    result = await session.execute(
+        select(Invitation)
+        .where(
+            Invitation.tenant_id == uuid.UUID(claims.tid),
+            Invitation.accepted_at.is_(None),
+        )
+        .order_by(Invitation.expires_at.asc())
+    )
+    return [InvitationSummaryOut.model_validate(i) for i in result.scalars().all()]
+
+
+@invitations_router.delete("/{invitation_id}", status_code=204)
+async def revoke_invitation(
+    invitation_id: str,
+    claims: AccessClaims = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(db),  # noqa: B008
+) -> None:
+    result = await session.execute(
+        select(Invitation).where(
+            Invitation.id == uuid.UUID(invitation_id),
+            Invitation.tenant_id == uuid.UUID(claims.tid),
+        )
+    )
+    invitation = result.scalar_one_or_none()
+    if invitation is None:
+        raise Problem(
+            status=404,
+            type=PROBLEM_TYPES["not_found"],
+            title="Not Found",
+            detail="Invitation not found.",
+        )
+    if invitation.accepted_at is not None:
+        raise Problem(
+            status=409,
+            type=PROBLEM_TYPES["conflict"],
+            title="Conflict",
+            detail="Invitation already accepted.",
+        )
+    await session.delete(invitation)
 
 
 @invitations_router.post("/accept", status_code=201)

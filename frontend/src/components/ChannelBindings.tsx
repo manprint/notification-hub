@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { apiGet, apiPost, apiPut } from "../api/client";
+import { apiDelete, apiGet, apiPost, apiPut } from "../api/client";
 import type { ApiError, ChannelType, DeliveryChannelOut, GroupChannelBindingOut, Severity } from "../api/types";
 import ErrorBanner from "../components/ErrorBanner";
 
@@ -42,6 +42,24 @@ export default function ChannelBindings({ groupId, channels }: ChannelBindingsPr
     }
   }
 
+  async function unbind(channelId: string) {
+    setError(null);
+    try {
+      await apiDelete(`/api/v1/groups/${groupId}/channels/${channelId}`);
+      await queryClient.invalidateQueries({ queryKey: ["group-channel-bindings", groupId] });
+    } catch (err) {
+      setError(err as ApiError);
+    }
+  }
+
+  function handleChange(channelId: string, value: string) {
+    if (value === "") {
+      void unbind(channelId);
+    } else {
+      void bind(channelId, value as Severity);
+    }
+  }
+
   return (
     <div>
       {error && <ErrorBanner error={error} />}
@@ -63,11 +81,9 @@ export default function ChannelBindings({ groupId, channels }: ChannelBindingsPr
                 <td>
                   <select
                     value={binding?.min_severity ?? ""}
-                    onChange={(event) => void bind(channel.id, event.target.value as Severity)}
+                    onChange={(event) => handleChange(channel.id, event.target.value)}
                   >
-                    <option value="" disabled>
-                      Non collegato
-                    </option>
+                    <option value="">Non collegato</option>
                     {SEVERITIES.map((s) => (
                       <option key={s} value={s}>
                         {s}
