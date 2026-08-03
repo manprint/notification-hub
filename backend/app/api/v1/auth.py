@@ -360,6 +360,23 @@ async def create_invitation(
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> InvitationOut:
     settings = get_settings()
+    if body.role == UserRole.OWNER and claims.role != UserRole.OWNER:
+        raise Problem(
+            status=403,
+            type=PROBLEM_TYPES["forbidden"],
+            title="Forbidden",
+            detail="Only an owner can grant the owner role.",
+        )
+
+    existing = await find_user_by_email(body.email)
+    if existing is not None:
+        raise Problem(
+            status=409,
+            type=PROBLEM_TYPES["conflict"],
+            title="Conflict",
+            detail="Email already registered.",
+        )
+
     token_plain, token_hash = new_refresh_token()
 
     invitation = Invitation(
@@ -408,13 +425,13 @@ async def list_invitations(
 
 @invitations_router.delete("/{invitation_id}", status_code=204)
 async def revoke_invitation(
-    invitation_id: str,
+    invitation_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> None:
     result = await session.execute(
         select(Invitation).where(
-            Invitation.id == uuid.UUID(invitation_id),
+            Invitation.id == invitation_id,
             Invitation.tenant_id == uuid.UUID(claims.tid),
         )
     )
@@ -456,13 +473,40 @@ async def accept_invitation(body: InvitationAcceptIn) -> dict:
             detail="Invitation expired.",
         )
 
+    # users.email e UNIQUE a livello globale: senza questo controllo un invito
+    # a un indirizzo gia registrato usciva come 500 (violazione di vincolo).
+    if await find_user_by_email(invitation_identity.email) is not None:
+        raise Problem(
+            status=409,
+            type=PROBLEM_TYPES["conflict"],
+            title="Conflict",
+            detail="Email already registered.",
+        )
+
     tenant_id = uuid.UUID(invitation_identity.tenant_id)
     user_id = uuid.uuid4()
     async with tenant_session(tenant_id) as session:
+        tenant_result = await session.execute(select(Tenant).where(Tenant.id == tenant_id))
+        tenant = tenant_result.scalar_one()
+        if tenant.status != TenantStatus.ACTIVE:
+            raise Problem(
+                status=401,
+                type=PROBLEM_TYPES["unauthorized"],
+                title="Unauthorized",
+                detail="Invalid or already accepted invitation.",
+            )
+
         invitation_result = await session.execute(
             select(Invitation).where(Invitation.id == uuid.UUID(invitation_identity.id))
         )
         invitation = invitation_result.scalar_one()
+        if invitation.accepted_at is not None:
+            raise Problem(
+                status=401,
+                type=PROBLEM_TYPES["unauthorized"],
+                title="Unauthorized",
+                detail="Invalid or already accepted invitation.",
+            )
 
         user = User(
             id=user_id,

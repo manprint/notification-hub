@@ -11,6 +11,7 @@ from app.core.logging import get_logger
 from app.core.metrics import maintenance_job_runs_total
 from app.db.sync_session import sync_session_factory, tenant_session_sync
 from app.db.types import DeliveryStatus
+from app.models.channel import DeliveryChannel
 from app.models.delivery import Delivery
 from app.models.invitation import Invitation
 from app.models.notification import Notification
@@ -116,12 +117,20 @@ def reconcile_deliveries() -> None:
 
     for tenant_id in _all_tenant_ids():
         with tenant_session_sync(tenant_id) as session:
+            # Solo le delivery verso canali attivi: dispatch_delivery esce
+            # subito su un canale disabilitato lasciando la riga `pending`, e
+            # senza questo filtro il job la riaccodava a ogni giro, per sempre.
+            enabled_channels = select(DeliveryChannel.id).where(
+                DeliveryChannel.tenant_id == tenant_id,
+                DeliveryChannel.enabled.is_(True),
+            )
             due = (
                 session.execute(
                     select(Delivery.id).where(
                         Delivery.tenant_id == tenant_id,
                         Delivery.status.in_([DeliveryStatus.PENDING, DeliveryStatus.FAILED]),
                         Delivery.next_attempt_at <= now,
+                        Delivery.channel_id.in_(enabled_channels),
                     )
                 )
                 .scalars()

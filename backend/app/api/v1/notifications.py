@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
-from app.api.deps import current_claims, db
+from app.api.deps import current_claims, db, require_member
 from app.core.config import get_settings
 from app.core.errors import PROBLEM_TYPES, Problem
 from app.core.security import AccessClaims
@@ -26,6 +26,7 @@ from app.schemas.notification import (
     NotificationListItemOut,
     NotificationListOut,
 )
+from app.services.authz import accessible_group_ids, assert_group_access
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -49,20 +50,26 @@ def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
         ) from exc
 
 
-def _apply_filters(
+async def _apply_filters(
     conditions: list,
+    session: AsyncSession,
+    claims: AccessClaims,
     *,
-    tenant_id: uuid.UUID,
-    group_id: str | None,
-    receiver_id: str | None,
+    group_id: uuid.UUID | None,
+    receiver_id: uuid.UUID | None,
     severity_min: Severity | None,
     q: str | None,
     from_: datetime | None,
     to: datetime | None,
-) -> None:
+) -> bool:
+    """Costruisce le condizioni di filtro. Restituisce False quando il
+    chiamante non puo vedere nulla (member/viewer senza gruppi associati):
+    senza il vincolo di appartenenza, member e viewer leggevano le notifiche
+    di tutti i gruppi del tenant, non solo dei propri."""
+    tenant_id = uuid.UUID(claims.tid)
     conditions.append(Notification.tenant_id == tenant_id)
     if receiver_id is not None:
-        conditions.append(Notification.receiver_id == uuid.UUID(receiver_id))
+        conditions.append(Notification.receiver_id == receiver_id)
     if severity_min is not None:
         conditions.append(Notification.severity >= severity_min)
     if q is not None:
@@ -75,20 +82,29 @@ def _apply_filters(
         conditions.append(Notification.received_at >= from_)
     if to is not None:
         conditions.append(Notification.received_at <= to)
+
+    receiver_conditions = [Receiver.tenant_id == tenant_id]
     if group_id is not None:
+        await assert_group_access(session, claims, group_id, write=False)
+        receiver_conditions.append(Receiver.group_id == group_id)
+
+    allowed = await accessible_group_ids(session, claims)
+    if allowed is not None:
+        if not allowed:
+            return False
+        receiver_conditions.append(Receiver.group_id.in_(allowed))
+
+    if len(receiver_conditions) > 1:
         conditions.append(
-            Notification.receiver_id.in_(
-                select(Receiver.id).where(
-                    Receiver.tenant_id == tenant_id, Receiver.group_id == uuid.UUID(group_id)
-                )
-            )
+            Notification.receiver_id.in_(select(Receiver.id).where(*receiver_conditions))
         )
+    return True
 
 
 @router.get("", response_model=NotificationListOut)
 async def list_notifications(
-    group_id: str | None = Query(default=None),  # noqa: B008
-    receiver_id: str | None = Query(default=None),  # noqa: B008
+    group_id: uuid.UUID | None = Query(default=None),  # noqa: B008
+    receiver_id: uuid.UUID | None = Query(default=None),  # noqa: B008
     status_filter: NotificationStatus | None = Query(default=None, alias="status"),  # noqa: B008
     severity_min: Severity | None = Query(default=None),  # noqa: B008
     q: str | None = Query(default=None),  # noqa: B008
@@ -104,9 +120,10 @@ async def list_notifications(
     arrivano nuove notifiche fra una pagina e l'altra."""
     tenant_id = uuid.UUID(claims.tid)
     conditions: list = []
-    _apply_filters(
+    visible = await _apply_filters(
         conditions,
-        tenant_id=tenant_id,
+        session,
+        claims,
         group_id=group_id,
         receiver_id=receiver_id,
         severity_min=severity_min,
@@ -114,6 +131,8 @@ async def list_notifications(
         from_=from_,
         to=to,
     )
+    if not visible:
+        return NotificationListOut(notifications=[], next_cursor=None, unread_count=0)
     if status_filter is not None:
         conditions.append(Notification.status == status_filter)
 
@@ -136,11 +155,21 @@ async def list_notifications(
     rows = rows[:limit]
     next_cursor = _encode_cursor(rows[-1].received_at, rows[-1].id) if has_more and rows else None
 
-    unread_result = await session.execute(
-        select(func.count(Notification.id)).where(
-            Notification.tenant_id == tenant_id,
-            Notification.status == NotificationStatus.UNREAD,
+    unread_conditions = [
+        Notification.tenant_id == tenant_id,
+        Notification.status == NotificationStatus.UNREAD,
+    ]
+    allowed = await accessible_group_ids(session, claims)
+    if allowed is not None:
+        unread_conditions.append(
+            Notification.receiver_id.in_(
+                select(Receiver.id).where(
+                    Receiver.tenant_id == tenant_id, Receiver.group_id.in_(allowed)
+                )
+            )
         )
+    unread_result = await session.execute(
+        select(func.count(Notification.id)).where(*unread_conditions)
     )
     unread_count = unread_result.scalar_one()
 
@@ -166,31 +195,34 @@ async def list_notifications(
 
 
 async def _get_notification_or_404(
-    session: AsyncSession, tenant_id: uuid.UUID, notification_id: str
+    session: AsyncSession, claims: AccessClaims, notification_id: uuid.UUID
 ) -> Notification:
+    tenant_id = uuid.UUID(claims.tid)
     result = await session.execute(
-        select(Notification).where(
-            Notification.id == uuid.UUID(notification_id), Notification.tenant_id == tenant_id
-        )
+        select(Notification, Receiver.group_id)
+        .join(Receiver, Receiver.id == Notification.receiver_id)
+        .where(Notification.id == notification_id, Notification.tenant_id == tenant_id)
     )
-    notification = result.scalar_one_or_none()
-    if notification is None:
+    row = result.first()
+    if row is None:
         raise Problem(
             status=404,
             type=PROBLEM_TYPES["not_found"],
             title="Not Found",
             detail="Notification not found.",
         )
+    notification, group_id = row
+    await assert_group_access(session, claims, group_id, write=False)
     return notification
 
 
 @router.get("/{notification_id}", response_model=NotificationDetailOut)
 async def get_notification(
-    notification_id: str,
+    notification_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> NotificationDetailOut:
-    notification = await _get_notification_or_404(session, uuid.UUID(claims.tid), notification_id)
+    notification = await _get_notification_or_404(session, claims, notification_id)
     settings = get_settings()
     content_url = None
     if notification.storage_backend == "object":
@@ -217,14 +249,14 @@ async def get_notification(
 
 @router.get("/{notification_id}/content")
 async def get_notification_content(
-    notification_id: str,
+    notification_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> StreamingResponse:
     """Streaming del corpo completo, proxy da MinIO se offloaded (spec 6.5,
     9.5): mai una presigned URL esposta al browser, il download passa sempre
     dall'API, che applica ruolo e RLS."""
-    notification = await _get_notification_or_404(session, uuid.UUID(claims.tid), notification_id)
+    notification = await _get_notification_or_404(session, claims, notification_id)
 
     if notification.storage_backend == "inline":
         content = notification.content or ""
@@ -247,12 +279,12 @@ async def get_notification_content(
 
 @router.patch("/{notification_id}", response_model=NotificationDetailOut)
 async def mark_notification_status(
-    notification_id: str,
+    notification_id: uuid.UUID,
     body: MarkStatusIn,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> NotificationDetailOut:
-    notification = await _get_notification_or_404(session, uuid.UUID(claims.tid), notification_id)
+    notification = await _get_notification_or_404(session, claims, notification_id)
     notification.status = body.status
     await session.flush()
 
@@ -286,11 +318,11 @@ async def bulk_mark_read(
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> BulkReadOut:
-    tenant_id = uuid.UUID(claims.tid)
     conditions: list = []
-    _apply_filters(
+    visible = await _apply_filters(
         conditions,
-        tenant_id=tenant_id,
+        session,
+        claims,
         group_id=body.group_id,
         receiver_id=body.receiver_id,
         severity_min=body.severity_min,
@@ -298,6 +330,8 @@ async def bulk_mark_read(
         from_=body.from_,
         to=body.to,
     )
+    if not visible:
+        return BulkReadOut(marked_read=0)
     conditions.append(Notification.status == NotificationStatus.UNREAD)
 
     result = await session.execute(select(Notification).where(*conditions))
@@ -311,12 +345,12 @@ async def bulk_mark_read(
 
 @router.delete("/{notification_id}", status_code=204)
 async def delete_notification(
-    notification_id: str,
-    claims: AccessClaims = Depends(current_claims),  # noqa: B008
+    notification_id: uuid.UUID,
+    claims: AccessClaims = Depends(require_member),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> None:
     """Il trigger AFTER DELETE (migrazione 0002) accoda storage_key in
     pending_object_deletions per i payload offloaded (invariante I-8): qui
     basta cancellare la riga."""
-    notification = await _get_notification_or_404(session, uuid.UUID(claims.tid), notification_id)
+    notification = await _get_notification_or_404(session, claims, notification_id)
     await session.delete(notification)

@@ -8,6 +8,7 @@ from app.api.deps import current_claims, db, require_admin
 from app.core.errors import PROBLEM_TYPES, Problem
 from app.core.security import AccessClaims
 from app.models.binding import GroupChannelBinding
+from app.models.channel import DeliveryChannel
 from app.models.group import Group
 from app.schemas.group import (
     GroupChannelBindingCreate,
@@ -16,8 +17,26 @@ from app.schemas.group import (
     GroupOut,
     GroupUpdate,
 )
+from app.services.authz import accessible_group_ids, assert_group_access
 
 router = APIRouter(prefix="/groups", tags=["groups"])
+
+
+async def _get_group_or_404(
+    session: AsyncSession, tenant_id: uuid.UUID, group_id: uuid.UUID
+) -> Group:
+    result = await session.execute(
+        select(Group).where(Group.id == group_id, Group.tenant_id == tenant_id)
+    )
+    group = result.scalar_one_or_none()
+    if group is None:
+        raise Problem(
+            status=404,
+            type=PROBLEM_TYPES["not_found"],
+            title="Not Found",
+            detail="Group not found.",
+        )
+    return group
 
 
 @router.get("", response_model=list[GroupOut])
@@ -25,9 +44,18 @@ async def list_groups(
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> list[GroupOut]:
-    result = await session.execute(select(Group).where(Group.tenant_id == uuid.UUID(claims.tid)))
-    groups = result.scalars().all()
-    return [GroupOut.model_validate(g) for g in groups]
+    """member e viewer vedono solo i gruppi a cui sono associati: senza questo
+    filtro, togliere l'associazione a un utente non gli toglieva il gruppo
+    dalla dashboard (la lista restituiva tutti i gruppi del tenant)."""
+    conditions = [Group.tenant_id == uuid.UUID(claims.tid)]
+    allowed = await accessible_group_ids(session, claims)
+    if allowed is not None:
+        if not allowed:
+            return []
+        conditions.append(Group.id.in_(allowed))
+
+    result = await session.execute(select(Group).where(*conditions).order_by(Group.name.asc()))
+    return [GroupOut.model_validate(g) for g in result.scalars().all()]
 
 
 @router.post("", response_model=GroupOut, status_code=201)
@@ -51,48 +79,23 @@ async def create_group(
 
 @router.get("/{group_id}", response_model=GroupOut)
 async def get_group(
-    group_id: str,
+    group_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> GroupOut:
-    result = await session.execute(
-        select(Group).where(
-            Group.id == uuid.UUID(group_id),
-            Group.tenant_id == uuid.UUID(claims.tid),
-        )
-    )
-    group = result.scalar_one_or_none()
-    if group is None:
-        raise Problem(
-            status=404,
-            type=PROBLEM_TYPES["not_found"],
-            title="Not Found",
-            detail="Group not found.",
-        )
+    group = await _get_group_or_404(session, uuid.UUID(claims.tid), group_id)
+    await assert_group_access(session, claims, group_id, write=False)
     return GroupOut.model_validate(group)
 
 
 @router.patch("/{group_id}", response_model=GroupOut)
 async def update_group(
-    group_id: str,
+    group_id: uuid.UUID,
     body: GroupUpdate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> GroupOut:
-    result = await session.execute(
-        select(Group).where(
-            Group.id == uuid.UUID(group_id),
-            Group.tenant_id == uuid.UUID(claims.tid),
-        )
-    )
-    group = result.scalar_one_or_none()
-    if group is None:
-        raise Problem(
-            status=404,
-            type=PROBLEM_TYPES["not_found"],
-            title="Not Found",
-            detail="Group not found.",
-        )
+    group = await _get_group_or_404(session, uuid.UUID(claims.tid), group_id)
 
     if body.name is not None:
         group.name = body.name
@@ -105,7 +108,7 @@ async def update_group(
 
 @router.delete("/{group_id}", status_code=204)
 async def delete_group(
-    group_id: str,
+    group_id: uuid.UUID,
     confirm: str = Query(...),  # noqa: B008
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
@@ -113,20 +116,7 @@ async def delete_group(
     """Cascade su receiver, notifiche, delivery e oggetti MinIO (via trigger),
     confermata digitando il nome esatto del gruppo (spec 9.3): niente
     cancellazioni accidentali di dati che nessuna UI ripristina."""
-    result = await session.execute(
-        select(Group).where(
-            Group.id == uuid.UUID(group_id),
-            Group.tenant_id == uuid.UUID(claims.tid),
-        )
-    )
-    group = result.scalar_one_or_none()
-    if group is None:
-        raise Problem(
-            status=404,
-            type=PROBLEM_TYPES["not_found"],
-            title="Not Found",
-            detail="Group not found.",
-        )
+    group = await _get_group_or_404(session, uuid.UUID(claims.tid), group_id)
     if confirm != group.name:
         raise Problem(
             status=422,
@@ -139,14 +129,18 @@ async def delete_group(
 
 @router.get("/{group_id}/channels", response_model=list[GroupChannelBindingOut])
 async def list_group_channels(
-    group_id: str,
+    group_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> list[GroupChannelBindingOut]:
+    tenant_id = uuid.UUID(claims.tid)
+    await _get_group_or_404(session, tenant_id, group_id)
+    await assert_group_access(session, claims, group_id, write=False)
+
     result = await session.execute(
         select(GroupChannelBinding).where(
-            GroupChannelBinding.group_id == uuid.UUID(group_id),
-            GroupChannelBinding.tenant_id == uuid.UUID(claims.tid),
+            GroupChannelBinding.group_id == group_id,
+            GroupChannelBinding.tenant_id == tenant_id,
         )
     )
     bindings = result.scalars().all()
@@ -155,37 +149,67 @@ async def list_group_channels(
 
 @router.post("/{group_id}/channels", response_model=GroupChannelBindingOut, status_code=201)
 async def bind_group_channel(
-    group_id: str,
+    group_id: uuid.UUID,
     body: GroupChannelBindingCreate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> GroupChannelBindingOut:
+    """Idempotente: un secondo POST sulla stessa coppia (gruppo, canale)
+    aggiorna il binding esistente invece di violare il vincolo di unicita e
+    far uscire un 500 dal database."""
     tenant_id = uuid.UUID(claims.tid)
+    await _get_group_or_404(session, tenant_id, group_id)
 
-    binding = GroupChannelBinding(
-        id=uuid.uuid4(),
-        tenant_id=tenant_id,
-        group_id=uuid.UUID(group_id),
-        channel_id=uuid.UUID(body.channel_id),
-        min_severity=body.min_severity,
-        enabled=body.enabled,
+    channel_result = await session.execute(
+        select(DeliveryChannel.id).where(
+            DeliveryChannel.id == body.channel_id,
+            DeliveryChannel.tenant_id == tenant_id,
+        )
     )
-    session.add(binding)
+    if channel_result.scalar_one_or_none() is None:
+        raise Problem(
+            status=404,
+            type=PROBLEM_TYPES["not_found"],
+            title="Not Found",
+            detail="Delivery channel not found.",
+        )
+
+    existing_result = await session.execute(
+        select(GroupChannelBinding).where(
+            GroupChannelBinding.group_id == group_id,
+            GroupChannelBinding.channel_id == body.channel_id,
+            GroupChannelBinding.tenant_id == tenant_id,
+        )
+    )
+    binding = existing_result.scalar_one_or_none()
+    if binding is not None:
+        binding.min_severity = body.min_severity
+        binding.enabled = body.enabled
+    else:
+        binding = GroupChannelBinding(
+            id=uuid.uuid4(),
+            tenant_id=tenant_id,
+            group_id=group_id,
+            channel_id=body.channel_id,
+            min_severity=body.min_severity,
+            enabled=body.enabled,
+        )
+        session.add(binding)
     await session.flush()
     return GroupChannelBindingOut.model_validate(binding)
 
 
 @router.delete("/{group_id}/channels/{channel_id}", status_code=204)
 async def unbind_group_channel(
-    group_id: str,
-    channel_id: str,
+    group_id: uuid.UUID,
+    channel_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> None:
     result = await session.execute(
         select(GroupChannelBinding).where(
-            GroupChannelBinding.group_id == uuid.UUID(group_id),
-            GroupChannelBinding.channel_id == uuid.UUID(channel_id),
+            GroupChannelBinding.group_id == group_id,
+            GroupChannelBinding.channel_id == channel_id,
             GroupChannelBinding.tenant_id == uuid.UUID(claims.tid),
         )
     )

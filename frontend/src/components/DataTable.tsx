@@ -39,7 +39,7 @@ export default function DataTable<T>({
   }
 
   return (
-    <div>
+    <div className="table-wrap">
       <table>
         <thead>
           <tr>

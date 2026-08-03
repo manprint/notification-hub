@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.db.types import ChannelType, DeliveryStatus
+from app.db.types import ChannelType, DeliveryStatus, Severity
 
 
 class DeliveryChannelCreate(BaseModel):
@@ -39,11 +39,21 @@ class DeliveryChannelTestOut(BaseModel):
 class DeliveryOut(BaseModel):
     """Costruito a mano dal router (non via model_validate): status e un
     enum Python, channel_id/notification_id/id sono UUID che vanno resi
-    stringa esplicitamente per l'output diagnostico (spec 9.4)."""
+    stringa esplicitamente per l'output diagnostico (spec 9.4).
+
+    channel_name, receiver_name, severity, content_preview e received_at
+    vengono dalla join: la riga deve dire da sola quale notifica e stata
+    inoltrata e verso dove, altrimenti la pagina Consegne e illeggibile.
+    """
 
     id: str
     notification_id: str
     channel_id: str
+    channel_name: str
+    receiver_name: str
+    severity: Severity
+    content_preview: str
+    received_at: datetime
     status: DeliveryStatus
     attempts: int
     next_attempt_at: datetime

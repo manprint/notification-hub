@@ -38,3 +38,25 @@ describe("ChannelsPage", () => {
     expect(screen.queryByLabelText(/soglia minima/i)).not.toBeInTheDocument();
   });
 });
+
+describe("ChannelsPage override", () => {
+  it("il receiver si sceglie da un elenco, non digitando un UUID a mano", async () => {
+    setRefreshToken("refresh-token-fixture");
+    renderWithProviders(<ChannelsPage />);
+
+    const receiverField = await screen.findByLabelText(/^receiver$/i);
+    expect(receiverField.tagName).toBe("SELECT");
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "Backup notturno" })).toBeInTheDocument();
+    });
+  });
+
+  it("non propone tipi di canale che il backend rifiuta", async () => {
+    setRefreshToken("refresh-token-fixture");
+    renderWithProviders(<ChannelsPage />);
+
+    const typeField = await screen.findByLabelText(/tipo/i);
+    const values = Array.from(typeField.querySelectorAll("option")).map((o) => o.value);
+    expect(values).toEqual(["slack", "google_chat"]);
+  });
+});

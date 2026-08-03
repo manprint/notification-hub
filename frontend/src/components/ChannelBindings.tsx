@@ -61,7 +61,7 @@ export default function ChannelBindings({ groupId, channels }: ChannelBindingsPr
   }
 
   return (
-    <div>
+    <div className="table-wrap">
       {error && <ErrorBanner error={error} />}
       <table>
         <thead>
@@ -101,5 +101,5 @@ export default function ChannelBindings({ groupId, channels }: ChannelBindingsPr
 }
 
 function channelTypeLabel(type: ChannelType): string {
-  return { slack: "Slack", google_chat: "Google Chat", generic_webhook: "Webhook generico" }[type];
+  return { slack: "Slack", google_chat: "Google Chat" }[type];
 }

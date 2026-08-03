@@ -5,7 +5,7 @@ from hashlib import sha256
 
 import jwt
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from pydantic import BaseModel
 
 from app.core.config import get_settings
@@ -29,10 +29,13 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, hash_value: str) -> bool:
+    """InvalidHashError oltre a VerifyMismatchError: una riga con un
+    password_hash non in formato argon2 (dato importato o seed a mano) faceva
+    uscire un 500 dal login invece di un 401."""
     try:
         _ph.verify(hash_value, password)
         return True
-    except VerifyMismatchError:
+    except (VerifyMismatchError, InvalidHashError, VerificationError):
         return False
 
 

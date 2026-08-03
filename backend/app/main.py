@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException
 
 from app.core.config import get_settings
@@ -49,6 +50,21 @@ def create_app() -> FastAPI:
             type=problem_type_for_status(exc.status_code),
             title=exc.detail or "HTTP Error",
             detail=exc.detail or "",
+        )
+        return problem_response(p)
+
+    @app.exception_handler(IntegrityError)
+    async def integrity_error_handler(request: Request, exc: IntegrityError) -> JSONResponse:
+        """Rete di sicurezza: una violazione di vincolo (unicita, chiave
+        esterna) e un conflitto sui dati della richiesta, non un guasto del
+        server. Gli endpoint la prevengono a monte, ma senza questo handler
+        ogni caso non previsto uscirebbe come 500 opaco."""
+        logger.warning("integrity_error", error=str(exc.orig))
+        p = Problem(
+            status=status.HTTP_409_CONFLICT,
+            type=PROBLEM_TYPES["conflict"],
+            title="Conflict",
+            detail="The request conflicts with the current state of the data.",
         )
         return problem_response(p)
 

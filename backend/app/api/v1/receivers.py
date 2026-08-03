@@ -24,6 +24,7 @@ from app.schemas.receiver import (
     TestSeverityIn,
     TestSeverityOut,
 )
+from app.services.authz import accessible_group_ids, assert_group_access
 from app.services.severity import InvalidPatternError, compile_pattern, resolve_severity
 
 router = APIRouter(tags=["receivers"])
@@ -32,11 +33,11 @@ SLUG_LENGTH_BYTES = 16  # secrets.token_urlsafe(16) -> 22 caratteri (spec 4.2)
 
 
 async def _get_receiver_or_404(
-    session: AsyncSession, tenant_id: uuid.UUID, receiver_id: str
+    session: AsyncSession, tenant_id: uuid.UUID, receiver_id: uuid.UUID
 ) -> Receiver:
     result = await session.execute(
         select(Receiver).where(
-            Receiver.id == uuid.UUID(receiver_id),
+            Receiver.id == receiver_id,
             Receiver.tenant_id == tenant_id,
         )
     )
@@ -49,6 +50,23 @@ async def _get_receiver_or_404(
             detail="Receiver not found.",
         )
     return receiver
+
+
+async def _assert_group_exists(
+    session: AsyncSession, tenant_id: uuid.UUID, group_id: uuid.UUID
+) -> None:
+    from app.models.group import Group
+
+    result = await session.execute(
+        select(Group.id).where(Group.id == group_id, Group.tenant_id == tenant_id)
+    )
+    if result.scalar_one_or_none() is None:
+        raise Problem(
+            status=404,
+            type=PROBLEM_TYPES["not_found"],
+            title="Not Found",
+            detail="Group not found.",
+        )
 
 
 async def _validate_max_body_bytes(
@@ -70,18 +88,20 @@ async def _validate_max_body_bytes(
 
 @router.post("/groups/{group_id}/receivers", response_model=ReceiverOut, status_code=201)
 async def create_receiver(
-    group_id: str,
+    group_id: uuid.UUID,
     body: ReceiverCreate,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> ReceiverOut:
     tenant_id = uuid.UUID(claims.tid)
+    await _assert_group_exists(session, tenant_id, group_id)
+    await assert_group_access(session, claims, group_id, write=True)
     max_body_bytes = await _validate_max_body_bytes(session, tenant_id, body.max_body_bytes)
 
     receiver = Receiver(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
-        group_id=uuid.UUID(group_id),
+        group_id=group_id,
         slug=secrets.token_urlsafe(SLUG_LENGTH_BYTES),
         name=body.name,
         status="active",
@@ -97,26 +117,50 @@ async def create_receiver(
 
 @router.get("/groups/{group_id}/receivers", response_model=list[ReceiverOut])
 async def list_receivers(
-    group_id: str,
+    group_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> list[ReceiverOut]:
+    await assert_group_access(session, claims, group_id, write=False)
     result = await session.execute(
-        select(Receiver).where(
-            Receiver.group_id == uuid.UUID(group_id),
+        select(Receiver)
+        .where(
+            Receiver.group_id == group_id,
             Receiver.tenant_id == uuid.UUID(claims.tid),
         )
+        .order_by(Receiver.name.asc())
+    )
+    return [ReceiverOut.model_validate(r) for r in result.scalars().all()]
+
+
+@router.get("/receivers", response_model=list[ReceiverOut])
+async def list_all_receivers(
+    claims: AccessClaims = Depends(current_claims),  # noqa: B008
+    session: AsyncSession = Depends(db),  # noqa: B008
+) -> list[ReceiverOut]:
+    """Tutti i receiver visibili al chiamante, per i selettori della UI che
+    non partono da un gruppo (override per receiver nella pagina Canali)."""
+    conditions = [Receiver.tenant_id == uuid.UUID(claims.tid)]
+    allowed = await accessible_group_ids(session, claims)
+    if allowed is not None:
+        if not allowed:
+            return []
+        conditions.append(Receiver.group_id.in_(allowed))
+
+    result = await session.execute(
+        select(Receiver).where(*conditions).order_by(Receiver.name.asc())
     )
     return [ReceiverOut.model_validate(r) for r in result.scalars().all()]
 
 
 @router.get("/receivers/{receiver_id}", response_model=ReceiverOut)
 async def get_receiver(
-    receiver_id: str,
+    receiver_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> ReceiverOut:
     receiver = await _get_receiver_or_404(session, uuid.UUID(claims.tid), receiver_id)
+    await assert_group_access(session, claims, receiver.group_id, write=False)
     out = ReceiverOut.model_validate(receiver)
 
     from app.core.redis import get_redis
@@ -129,13 +173,14 @@ async def get_receiver(
 
 @router.patch("/receivers/{receiver_id}", response_model=ReceiverOut)
 async def update_receiver(
-    receiver_id: str,
+    receiver_id: uuid.UUID,
     body: ReceiverUpdate,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> ReceiverOut:
     tenant_id = uuid.UUID(claims.tid)
     receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
+    await assert_group_access(session, claims, receiver.group_id, write=True)
 
     if body.name is not None:
         receiver.name = body.name
@@ -156,17 +201,18 @@ async def update_receiver(
 
 @router.delete("/receivers/{receiver_id}", status_code=204)
 async def delete_receiver(
-    receiver_id: str,
+    receiver_id: uuid.UUID,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> None:
     receiver = await _get_receiver_or_404(session, uuid.UUID(claims.tid), receiver_id)
+    await assert_group_access(session, claims, receiver.group_id, write=True)
     await session.delete(receiver)
 
 
 @router.post("/receivers/{receiver_id}/rotate-slug", response_model=ReceiverOut)
 async def rotate_slug(
-    receiver_id: str,
+    receiver_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> ReceiverOut:
@@ -180,15 +226,19 @@ async def rotate_slug(
 
 @router.get("/receivers/{receiver_id}/severity-rules", response_model=list[SeverityRuleOut])
 async def list_severity_rules(
-    receiver_id: str,
+    receiver_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> list[SeverityRuleOut]:
+    tenant_id = uuid.UUID(claims.tid)
+    receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
+    await assert_group_access(session, claims, receiver.group_id, write=False)
+
     result = await session.execute(
         select(SeverityRule)
         .where(
-            SeverityRule.receiver_id == uuid.UUID(receiver_id),
-            SeverityRule.tenant_id == uuid.UUID(claims.tid),
+            SeverityRule.receiver_id == receiver_id,
+            SeverityRule.tenant_id == tenant_id,
         )
         .order_by(SeverityRule.priority.asc())
     )
@@ -199,11 +249,15 @@ async def list_severity_rules(
     "/receivers/{receiver_id}/severity-rules", response_model=SeverityRuleOut, status_code=201
 )
 async def create_severity_rule(
-    receiver_id: str,
+    receiver_id: uuid.UUID,
     body: SeverityRuleCreate,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> SeverityRuleOut:
+    tenant_id = uuid.UUID(claims.tid)
+    receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
+    await assert_group_access(session, claims, receiver.group_id, write=True)
+
     try:
         compile_pattern(body.pattern, body.case_insensitive)
     except InvalidPatternError as exc:
@@ -216,8 +270,8 @@ async def create_severity_rule(
 
     rule = SeverityRule(
         id=uuid.uuid4(),
-        tenant_id=uuid.UUID(claims.tid),
-        receiver_id=uuid.UUID(receiver_id),
+        tenant_id=tenant_id,
+        receiver_id=receiver_id,
         priority=body.priority,
         pattern=body.pattern,
         case_insensitive=body.case_insensitive,
@@ -230,11 +284,11 @@ async def create_severity_rule(
 
 
 async def _get_rule_or_404(
-    session: AsyncSession, tenant_id: uuid.UUID, rule_id: str
+    session: AsyncSession, tenant_id: uuid.UUID, rule_id: uuid.UUID
 ) -> SeverityRule:
     result = await session.execute(
         select(SeverityRule).where(
-            SeverityRule.id == uuid.UUID(rule_id),
+            SeverityRule.id == rule_id,
             SeverityRule.tenant_id == tenant_id,
         )
     )
@@ -251,12 +305,15 @@ async def _get_rule_or_404(
 
 @router.patch("/severity-rules/{rule_id}", response_model=SeverityRuleOut)
 async def update_severity_rule(
-    rule_id: str,
+    rule_id: uuid.UUID,
     body: SeverityRuleUpdate,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> SeverityRuleOut:
-    rule = await _get_rule_or_404(session, uuid.UUID(claims.tid), rule_id)
+    tenant_id = uuid.UUID(claims.tid)
+    rule = await _get_rule_or_404(session, tenant_id, rule_id)
+    receiver = await _get_receiver_or_404(session, tenant_id, rule.receiver_id)
+    await assert_group_access(session, claims, receiver.group_id, write=True)
 
     new_pattern = body.pattern if body.pattern is not None else rule.pattern
     new_case_insensitive = (
@@ -290,27 +347,31 @@ async def update_severity_rule(
 
 @router.delete("/severity-rules/{rule_id}", status_code=204)
 async def delete_severity_rule(
-    rule_id: str,
+    rule_id: uuid.UUID,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> None:
-    rule = await _get_rule_or_404(session, uuid.UUID(claims.tid), rule_id)
+    tenant_id = uuid.UUID(claims.tid)
+    rule = await _get_rule_or_404(session, tenant_id, rule_id)
+    receiver = await _get_receiver_or_404(session, tenant_id, rule.receiver_id)
+    await assert_group_access(session, claims, receiver.group_id, write=True)
     await session.delete(rule)
 
 
 @router.post("/receivers/{receiver_id}/test-severity", response_model=TestSeverityOut)
 async def test_severity(
-    receiver_id: str,
+    receiver_id: uuid.UUID,
     body: TestSeverityIn,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> TestSeverityOut:
     tenant_id = uuid.UUID(claims.tid)
     receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
+    await assert_group_access(session, claims, receiver.group_id, write=False)
 
     rules_result = await session.execute(
         select(SeverityRule).where(
-            SeverityRule.receiver_id == uuid.UUID(receiver_id),
+            SeverityRule.receiver_id == receiver_id,
             SeverityRule.tenant_id == tenant_id,
             SeverityRule.enabled.is_(True),
         )
@@ -335,7 +396,7 @@ async def test_severity(
 
 @router.get("/groups/{group_id}/delete-impact", response_model=DeleteImpactOut)
 async def group_delete_impact(
-    group_id: str,
+    group_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> DeleteImpactOut:
@@ -345,10 +406,10 @@ async def group_delete_impact(
     from app.models.notification import Notification
 
     tenant_id = uuid.UUID(claims.tid)
-    group_uuid = uuid.UUID(group_id)
+    await assert_group_access(session, claims, group_id, write=False)
 
     receivers_result = await session.execute(
-        select(Receiver.id).where(Receiver.group_id == group_uuid, Receiver.tenant_id == tenant_id)
+        select(Receiver.id).where(Receiver.group_id == group_id, Receiver.tenant_id == tenant_id)
     )
     receiver_ids = [row[0] for row in receivers_result.all()]
 

@@ -1,5 +1,6 @@
 import os
 from hashlib import sha256
+from urllib.parse import urlparse
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -26,6 +27,14 @@ def decrypt_secret(blob: bytes) -> str:
 
 
 def mask_webhook(url: str) -> str:
+    """Suggerimento mostrato nella UI: schema, host e le ultime 4 cifre.
+
+    L'implementazione precedente restituiva `url[:-4] + "/...//" + url[-4:]`,
+    cioe l'URL completo con un separatore infilato dentro: il path del webhook
+    (che e l'intero segreto) finiva in chiaro nella lista dei canali.
+    """
     if len(url) <= 8:
-        return url
-    return url[: len(url) - 4] + "/...//" + url[-4:]
+        return "***"
+    parsed = urlparse(url)
+    host = f"{parsed.scheme}://{parsed.hostname}" if parsed.scheme and parsed.hostname else ""
+    return f"{host}/***{url[-4:]}"

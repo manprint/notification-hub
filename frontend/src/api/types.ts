@@ -4,7 +4,9 @@
 export type Severity = "critical" | "error" | "warning" | "info" | "debug";
 export type NotificationStatus = "unread" | "read";
 export type DeliveryStatus = "pending" | "sending" | "sent" | "failed" | "dead";
-export type ChannelType = "slack" | "google_chat" | "generic_webhook";
+// Solo i due tipi previsti dall'enum channel_type del database: un terzo
+// valore lato UI produceva sempre e solo un 422 al salvataggio.
+export type ChannelType = "slack" | "google_chat";
 export type UserRole = "owner" | "admin" | "member" | "viewer";
 export type UserStatus = "active" | "disabled";
 export type ReceiverStatus = "active" | "disabled";
@@ -40,6 +42,7 @@ export interface UserOut {
   role: UserRole;
   status: UserStatus;
   last_login_at: string | null;
+  group_ids: string[];
 }
 
 export interface InvitationOut {
@@ -137,6 +140,11 @@ export interface DeliveryOut {
   id: string;
   notification_id: string;
   channel_id: string;
+  channel_name: string;
+  receiver_name: string;
+  severity: Severity;
+  content_preview: string;
+  received_at: string;
   status: DeliveryStatus;
   attempts: number;
   next_attempt_at: string;

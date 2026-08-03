@@ -1,0 +1,37 @@
+## Gestione utenze
+
+Al momento la creazione delle utenze richiede l'invio delle mail.
+Voglio che sia possibile creare un utenza direttamente dal pannello di admin (sezione owner) specificado direttamente la mail e la password che l'utente utilizzerà per loggarsi.
+
+
+- utenza
+- gruppi di receiver
+
+- possibilità di associare un utenza a uno o più gruppi di receiver
+- un utenza deve avete la CRUD per creare/modificare/cancellare nuovi receiver (a seconda del suo grado di membership)
+  - owner: crud completa su tutti i possibili gruppi
+  - admin: crud completa su tutti i possibili gruppi
+  - member: crud completa sui gruppi a cui è associato
+  - viever: solo visualizzazione delle modifiche sui gruppi a cui è associato
+
+## Gestione utenti/gruppi di receiver.
+
+Voglio che per ogni utente possa associare uno o più gruppi di receiver che deve poter gestire.
+Devo poter specificare uno o più gruppi al momento della creazione dell'utente o dopo tramite modifica dell'utente.
+Rispetto ai gruppi, è necessario rispettare le seguenti gerarchie di CRUD:
+- un utenza deve avere la CRUD per creare/modificare/cancellare nuovi receiver (a seconda del suo grado di membership)
+    - owner: crud completa su tutti i possibili gruppi
+    - admin: crud completa su tutti i possibili gruppi
+    - member: crud completa sui gruppi a cui è associato
+    - viever: solo visualizzazione delle modifiche sui gruppi a cui è associato
+
+## Opus REVIEW
+Ho bigogno che mi fai una review completa dell'applicazione alla ricerca di bug.
+I primi che ho notato io sono:
+- Se ad un utenza rimuovo un gruppo con owner/admin, quell'utenza continua a vedere il gruppo.
+- La sezione consegne non capisco cosa faccia e come funzionale
+- La pagina dei canali è sformattata e in alcune sezioni trasborda dai limiti delle box definite.
+- La sezione override in canali non funziona (internal server error)
+
+Guardati prima questi e poi fammi una hard review di tutto.
+Correggi quello che è baggato.

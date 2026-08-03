@@ -9,6 +9,7 @@ import type {
   GroupOut,
   OverrideMode,
   ReceiverChannelOverrideOut,
+  ReceiverOut,
   Severity,
 } from "../api/types";
 import ChannelBindings from "../components/ChannelBindings";
@@ -17,7 +18,7 @@ import ErrorBanner from "../components/ErrorBanner";
 import { useSession } from "../hooks/useSession";
 import { ADMIN_ROLES, hasRole } from "../lib/roles";
 
-const CHANNEL_TYPES: ChannelType[] = ["slack", "google_chat", "generic_webhook"];
+const CHANNEL_TYPES: ChannelType[] = ["slack", "google_chat"];
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
 
 function CreateChannelForm() {
@@ -43,6 +44,9 @@ function CreateChannelForm() {
   return (
     <div className="card">
       <h3>Nuovo canale</h3>
+      <p className="card-hint">
+        Un canale è la destinazione degli inoltri: il webhook di uno spazio Slack o Google Chat.
+      </p>
       {error && <ErrorBanner error={error} />}
       <form onSubmit={(event) => void handleSubmit(event)}>
         <div className="form-row">
@@ -54,7 +58,7 @@ function CreateChannelForm() {
           <select id="channel-type" value={type} onChange={(event) => setType(event.target.value as ChannelType)}>
             {CHANNEL_TYPES.map((t) => (
               <option key={t} value={t}>
-                {t}
+                {channelTypeLabel(t)}
               </option>
             ))}
           </select>
@@ -65,6 +69,7 @@ function CreateChannelForm() {
             id="channel-webhook"
             type="password"
             required
+            placeholder="https://hooks.slack.com/services/…"
             value={webhookUrl}
             onChange={(event) => setWebhookUrl(event.target.value)}
           />
@@ -75,6 +80,10 @@ function CreateChannelForm() {
       </form>
     </div>
   );
+}
+
+function channelTypeLabel(type: ChannelType): string {
+  return { slack: "Slack", google_chat: "Google Chat" }[type];
 }
 
 function EditChannelForm({ channel, onDone }: { channel: DeliveryChannelOut; onDone: () => void }) {
@@ -156,7 +165,9 @@ function DeleteChannelButton({ channel }: { channel: DeliveryChannelOut }) {
           expectedText={channel.name}
           onConfirm={() => void confirmDelete()}
           onCancel={() => setOpen(false)}
-        />
+        >
+          <p>Verranno rimossi anche i collegamenti ai gruppi, gli override e lo storico consegne.</p>
+        </ConfirmDialog>
       ) : (
         <button onClick={() => setOpen(true)}>Elimina</button>
       )}
@@ -192,30 +203,41 @@ function ChannelRow({ channel, canManage }: { channel: DeliveryChannelOut; canMa
   return (
     <tr>
       <td>{channel.name}</td>
-      <td>{channel.type}</td>
+      <td>{channelTypeLabel(channel.type)}</td>
       <td>
         <code>{channel.webhook_hint}</code>
       </td>
       <td>{channel.enabled ? "attivo" : "disattivo"}</td>
-      <td>
-        {channel.last_success_at && <div>ultimo successo: {channel.last_success_at}</div>}
-        {channel.last_error_at && <div>ultimo errore: {channel.last_error}</div>}
+      <td className="cell-diagnostics">
+        {channel.last_success_at && <div>ultimo successo: {formatDate(channel.last_success_at)}</div>}
+        {channel.last_error_at && (
+          <div>
+            ultimo errore ({formatDate(channel.last_error_at)}): {channel.last_error}
+          </div>
+        )}
+        {!channel.last_success_at && !channel.last_error_at && <span>nessun invio registrato</span>}
       </td>
       <td>
         {canManage && (
-          <>
-            <button onClick={() => void runTest()}>Invia messaggio di prova</button>
+          <div className="row-actions">
+            <button onClick={() => void runTest()}>Prova</button>
             <button onClick={() => void toggleEnabled()}>{channel.enabled ? "Disattiva" : "Attiva"}</button>
             <button onClick={() => setEditing(true)}>Modifica</button>
             <DeleteChannelButton channel={channel} />
-          </>
+          </div>
         )}
         {testResult && (
-          <div>{testResult.sent ? `Inviato (${testResult.detail})` : `Fallito: ${testResult.detail}`}</div>
+          <div className="cell-diagnostics">
+            {testResult.sent ? `Inviato (${testResult.detail})` : `Fallito: ${testResult.detail}`}
+          </div>
         )}
       </td>
     </tr>
   );
+}
+
+function formatDate(value: string): string {
+  return new Date(value).toLocaleString("it-IT");
 }
 
 function ReceiverOverridesPanel({
@@ -240,32 +262,34 @@ function ReceiverOverridesPanel({
 
   if (error) return <ErrorBanner error={error} />;
   if (!overrides || overrides.length === 0) {
-    return <p style={{ color: "var(--color-text-muted)" }}>Nessun override per questo receiver.</p>;
+    return <p className="card-hint">Nessun override per questo receiver: valgono le soglie di gruppo.</p>;
   }
 
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>Canale</th>
-          <th>Modalità</th>
-          <th>Soglia minima</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {overrides.map((o) => (
-          <tr key={o.id}>
-            <td>{channelName(o.channel_id)}</td>
-            <td>{o.mode}</td>
-            <td>{o.min_severity ?? "—"}</td>
-            <td>
-              <button onClick={() => void remove(o.channel_id)}>Rimuovi</button>
-            </td>
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Canale</th>
+            <th>Modalità</th>
+            <th>Soglia minima</th>
+            <th></th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {overrides.map((o) => (
+            <tr key={o.id}>
+              <td>{channelName(o.channel_id)}</td>
+              <td>{o.mode === "mute" ? "silenziato" : "soglia sostituita"}</td>
+              <td>{o.min_severity ?? "—"}</td>
+              <td>
+                <button onClick={() => void remove(o.channel_id)}>Rimuovi</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -277,6 +301,14 @@ function ReceiverOverrideForm({ channels }: { channels: DeliveryChannelOut[] }) 
   const [error, setError] = useState<ApiError | null>(null);
   const [success, setSuccess] = useState(false);
   const queryClient = useQueryClient();
+
+  // Il receiver si sceglie da un elenco: prima era un campo di testo libero in
+  // cui incollare un UUID a mano, e qualunque valore non-UUID faceva rispondere
+  // 500 all'API.
+  const { data: receivers } = useQuery<ReceiverOut[], ApiError>({
+    queryKey: ["receivers-all"],
+    queryFn: () => apiGet<ReceiverOut[]>("/api/v1/receivers"),
+  });
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -298,17 +330,31 @@ function ReceiverOverrideForm({ channels }: { channels: DeliveryChannelOut[] }) 
   return (
     <div className="card">
       <h3>Override per receiver</h3>
+      <p className="card-hint">
+        Un override cambia il comportamento di un singolo receiver verso un canale già collegato al suo
+        gruppo: <strong>silenzia</strong> gli inoltri oppure <strong>sostituisce</strong> la soglia di
+        gruppo con un'altra.
+      </p>
       {error && <ErrorBanner error={error} />}
       {success && <p>Override salvato.</p>}
       <form onSubmit={(event) => void handleSubmit(event)}>
         <div className="form-row">
-          <label htmlFor="override-receiver">Receiver ID</label>
-          <input
+          <label htmlFor="override-receiver">Receiver</label>
+          <select
             id="override-receiver"
             required
             value={receiverId}
             onChange={(event) => setReceiverId(event.target.value)}
-          />
+          >
+            <option value="" disabled>
+              Scegli un receiver
+            </option>
+            {receivers?.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="form-row">
           <label htmlFor="override-channel">Canale</label>
@@ -335,8 +381,8 @@ function ReceiverOverrideForm({ channels }: { channels: DeliveryChannelOut[] }) 
             value={mode}
             onChange={(event) => setMode(event.target.value as OverrideMode)}
           >
-            <option value="override">override</option>
-            <option value="mute">mute</option>
+            <option value="override">sostituisci la soglia</option>
+            <option value="mute">silenzia</option>
           </select>
         </div>
         {mode === "override" && (
@@ -355,7 +401,7 @@ function ReceiverOverrideForm({ channels }: { channels: DeliveryChannelOut[] }) 
             </select>
           </div>
         )}
-        <button type="submit" className="primary">
+        <button type="submit" className="primary" disabled={!receiverId || !channelId}>
           Salva override
         </button>
       </form>
@@ -391,26 +437,34 @@ export default function ChannelsPage() {
       {canManage && <CreateChannelForm />}
 
       <div className="card">
-        <table>
-          <thead>
-            <tr>
-              <th>Nome</th>
-              <th>Tipo</th>
-              <th>Webhook</th>
-              <th>Stato</th>
-              <th>Diagnostica</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {channels?.map((c) => <ChannelRow key={c.id} channel={c} canManage={canManage} />)}
-          </tbody>
-        </table>
+        <h3>Canali configurati</h3>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Nome</th>
+                <th>Tipo</th>
+                <th>Webhook</th>
+                <th>Stato</th>
+                <th>Diagnostica</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {channels?.map((c) => <ChannelRow key={c.id} channel={c} canManage={canManage} />)}
+            </tbody>
+          </table>
+        </div>
+        {channels && channels.length === 0 && <p className="card-hint">Nessun canale configurato.</p>}
       </div>
 
       {canManage && channels && (
         <div className="card">
           <h3>Soglie per gruppo</h3>
+          <p className="card-hint">
+            Una notifica di un receiver del gruppo viene inoltrata a un canale quando la sua severity
+            raggiunge la soglia scelta qui. «Non collegato» significa nessun inoltro.
+          </p>
           <select value={selectedGroupId} onChange={(event) => setSelectedGroupId(event.target.value)}>
             <option value="">Scegli un gruppo</option>
             {groups?.map((g) => (

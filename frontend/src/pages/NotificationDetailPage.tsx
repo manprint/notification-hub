@@ -36,6 +36,19 @@ export default function NotificationDetailPage() {
     navigate("/notifications", { replace: true });
   }
 
+  // L'endpoint del contenuto richiede il Bearer token: un <a href download>
+  // partiva senza header Authorization e riceveva 401. Va scaricato dal client
+  // API e consegnato al browser come blob.
+  async function downloadContent() {
+    const text = await apiGet<string>(`/api/v1/notifications/${id}/content`);
+    const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `notifica-${id}.txt`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div>
       <h1>Dettaglio notifica</h1>
@@ -63,9 +76,7 @@ export default function NotificationDetailPage() {
           <div>
             <p>{`Contenuto salvato su object storage (${data.content_size} byte).`}</p>
             {data.content_url && (
-              <a href={data.content_url} download>
-                <button>Scarica contenuto completo</button>
-              </a>
+              <button onClick={() => void downloadContent()}>Scarica contenuto completo</button>
             )}
           </div>
         )}

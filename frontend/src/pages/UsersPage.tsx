@@ -1,10 +1,73 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiDelete, apiGet, apiPatch, apiPost } from "../api/client";
-import type { ApiError, InvitationOut, InvitationSummaryOut, UserOut, UserRole } from "../api/types";
+import type {
+  ApiError,
+  GroupOut,
+  InvitationOut,
+  InvitationSummaryOut,
+  UserOut,
+  UserRole,
+} from "../api/types";
 import ErrorBanner from "../components/ErrorBanner";
 
 const ROLES: UserRole[] = ["owner", "admin", "member", "viewer"];
+
+function GroupPicker({
+  groups,
+  value,
+  onChange,
+}: {
+  groups: GroupOut[];
+  value: string[];
+  onChange: (groupIds: string[]) => void;
+}) {
+  function toggle(groupId: string, checked: boolean) {
+    onChange(checked ? [...value, groupId] : value.filter((id) => id !== groupId));
+  }
+
+  if (groups.length === 0) {
+    return <p className="group-picker-empty">Nessun gruppo di receiver disponibile.</p>;
+  }
+
+  return (
+    <div className="group-picker">
+      {groups.map((g) => (
+        <label key={g.id}>
+          <input
+            type="checkbox"
+            checked={value.includes(g.id)}
+            onChange={(event) => toggle(g.id, event.target.checked)}
+          />
+          {g.name}
+        </label>
+      ))}
+    </div>
+  );
+}
+
+function GroupsCell({
+  groups,
+  value,
+  onChange,
+}: {
+  groups: GroupOut[];
+  value: string[];
+  onChange: (groupIds: string[]) => void;
+}) {
+  const selectedNames = groups.filter((g) => value.includes(g.id)).map((g) => g.name);
+
+  return (
+    <details>
+      <summary className="group-summary">
+        {selectedNames.length > 0 ? selectedNames.join(", ") : "Nessuno"}
+      </summary>
+      <div className="group-summary-editor">
+        <GroupPicker groups={groups} value={value} onChange={onChange} />
+      </div>
+    </details>
+  );
+}
 
 function PendingInvitations() {
   const queryClient = useQueryClient();
@@ -31,6 +94,7 @@ function PendingInvitations() {
       <h3>Inviti in sospeso</h3>
       {error && <ErrorBanner error={error} />}
       {actionError && <ErrorBanner error={actionError} />}
+      <div className="table-wrap">
       <table>
         <thead>
           <tr>
@@ -53,6 +117,7 @@ function PendingInvitations() {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -121,11 +186,78 @@ function InviteForm() {
   );
 }
 
+function CreateUserForm({ groups }: { groups: GroupOut[] }) {
+  const queryClient = useQueryClient();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState<UserRole>("member");
+  const [groupIds, setGroupIds] = useState<string[]>([]);
+  const [error, setError] = useState<ApiError | null>(null);
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    setError(null);
+    try {
+      await apiPost<UserOut>("/api/v1/users", { email, password, role, group_ids: groupIds });
+      setEmail("");
+      setPassword("");
+      setGroupIds([]);
+      await queryClient.invalidateQueries({ queryKey: ["users"] });
+    } catch (err) {
+      setError(err as ApiError);
+    }
+  }
+
+  return (
+    <div className="card">
+      <h3>Crea utenza</h3>
+      {error && <ErrorBanner error={error} />}
+      <form onSubmit={(event) => void handleSubmit(event)}>
+        <div className="toolbar">
+          <input
+            type="email"
+            placeholder="nuova-utenza@esempio.it"
+            required
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+          <input
+            type="password"
+            placeholder="Password"
+            required
+            minLength={12}
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+          <select value={role} onChange={(event) => setRole(event.target.value as UserRole)}>
+            {ROLES.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+          <button type="submit" className="primary">
+            Crea
+          </button>
+        </div>
+        <div className="form-row">
+          <label>Gruppi di receiver da gestire</label>
+          <GroupPicker groups={groups} value={groupIds} onChange={setGroupIds} />
+        </div>
+      </form>
+    </div>
+  );
+}
+
 export default function UsersPage() {
   const queryClient = useQueryClient();
   const { data: users, error } = useQuery<UserOut[], ApiError>({
     queryKey: ["users"],
     queryFn: () => apiGet<UserOut[]>("/api/v1/users"),
+  });
+  const { data: groups } = useQuery<GroupOut[], ApiError>({
+    queryKey: ["groups"],
+    queryFn: () => apiGet<GroupOut[]>("/api/v1/groups"),
   });
   const [actionError, setActionError] = useState<ApiError | null>(null);
 
@@ -133,6 +265,16 @@ export default function UsersPage() {
     setActionError(null);
     try {
       await apiPatch(`/api/v1/users/${userId}`, { role });
+      await queryClient.invalidateQueries({ queryKey: ["users"] });
+    } catch (err) {
+      setActionError(err as ApiError);
+    }
+  }
+
+  async function changeGroups(userId: string, groupIds: string[]) {
+    setActionError(null);
+    try {
+      await apiPatch(`/api/v1/users/${userId}`, { group_ids: groupIds });
       await queryClient.invalidateQueries({ queryKey: ["users"] });
     } catch (err) {
       setActionError(err as ApiError);
@@ -163,15 +305,18 @@ export default function UsersPage() {
         </div>
       )}
 
+      <CreateUserForm groups={groups ?? []} />
       <InviteForm />
       <PendingInvitations />
 
       <div className="card">
+        <div className="table-wrap">
         <table>
           <thead>
             <tr>
               <th>Email</th>
               <th>Ruolo</th>
+              <th>Gruppi gestiti</th>
               <th>Stato</th>
               <th></th>
             </tr>
@@ -192,6 +337,13 @@ export default function UsersPage() {
                     ))}
                   </select>
                 </td>
+                <td>
+                  <GroupsCell
+                    groups={groups ?? []}
+                    value={user.group_ids}
+                    onChange={(groupIds) => void changeGroups(user.id, groupIds)}
+                  />
+                </td>
                 <td>{user.status}</td>
                 <td>
                   <button onClick={() => void remove(user.id)}>Rimuovi</button>
@@ -200,6 +352,7 @@ export default function UsersPage() {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );

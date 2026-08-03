@@ -36,5 +36,14 @@ def test_manomissione_rilevata():
 def test_mask_webhook_non_rivela_il_segreto():
     url = "https://hooks.slack.com/services/T000/B000/XYZSEGRETO"
     masked = mask_webhook(url)
-    assert "XYZSEGRETO" not in masked
-    assert masked.endswith("RETO")
+    assert masked == "https://hooks.slack.com/***RETO"
+    # Nessun segmento del path deve sopravvivere: la versione precedente
+    # reinseriva l'URL intero spezzato da un separatore, quindi "XYZSEGRETO"
+    # non compariva ma "XYZSEG", "T000" e "B000" si.
+    for secret_part in ("XYZSEGRETO", "XYZSEG", "T000", "B000", "services"):
+        assert secret_part not in masked
+
+
+@pytest.mark.unit
+def test_mask_webhook_url_corta():
+    assert mask_webhook("http://x") == "***"

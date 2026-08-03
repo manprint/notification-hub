@@ -2,7 +2,7 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.db.types import Severity
+from app.db.types import OverrideMode, Severity
 
 
 class GroupCreate(BaseModel):
@@ -30,7 +30,9 @@ class GroupOut(BaseModel):
 
 
 class GroupChannelBindingCreate(BaseModel):
-    channel_id: str
+    # uuid.UUID e non str: un id malformato deve dare 422 dalla validazione,
+    # non una ValueError non gestita dentro l'endpoint (cioe un 500).
+    channel_id: uuid.UUID
     min_severity: Severity
     enabled: bool = True
 
@@ -51,13 +53,13 @@ class GroupChannelBindingOut(BaseModel):
 
 
 class ReceiverChannelOverrideCreate(BaseModel):
-    channel_id: str
-    mode: str = Field(pattern="^(override|mute)$")
+    channel_id: uuid.UUID
+    mode: OverrideMode
     min_severity: Severity | None = None
 
 
 class ReceiverChannelOverrideUpdate(BaseModel):
-    mode: str | None = Field(default=None, pattern="^(override|mute)$")
+    mode: OverrideMode | None = None
     min_severity: Severity | None = None
 
 
@@ -67,5 +69,5 @@ class ReceiverChannelOverrideOut(BaseModel):
     id: uuid.UUID
     receiver_id: uuid.UUID
     channel_id: uuid.UUID
-    mode: str
+    mode: OverrideMode
     min_severity: Severity | None

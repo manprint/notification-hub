@@ -10,6 +10,7 @@ from app.models.refresh_token import RefreshToken
 from app.models.severity_rule import SeverityRule
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.models.user_group_membership import UserGroupMembership
 
 __all__ = [
     "Tenant",
@@ -25,4 +26,5 @@ __all__ = [
     "ReceiverChannelOverride",
     "Delivery",
     "PendingObjectDeletion",
+    "UserGroupMembership",
 ]

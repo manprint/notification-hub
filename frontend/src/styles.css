@@ -92,6 +92,26 @@ td {
   text-align: left;
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+  /* Webhook mascherati, URL di errore e pattern RE2 sono stringhe lunghe
+     senza spazi: senza questo spezzano la cella e sfondano la card. */
+  overflow-wrap: anywhere;
+}
+
+/* Contenitore obbligatorio per ogni tabella dentro una card: se le colonne
+   non ci stanno scorre la tabella, non la pagina. */
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.table-wrap table {
+  min-width: 100%;
+}
+
+code {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
 }
 
 .app-shell {
@@ -131,6 +151,9 @@ td {
 
 .app-main {
   flex: 1;
+  /* min-width: 0 su un figlio flex: senza, il contenuto largo (tabelle) impone
+     la propria larghezza minima e sfonda il contenitore invece di scorrere. */
+  min-width: 0;
   padding: var(--space-4);
   max-width: 1100px;
 }
@@ -141,6 +164,32 @@ td {
   border-radius: var(--radius);
   padding: var(--space-3);
   margin-bottom: var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.card-hint {
+  margin: 0 0 var(--space-3);
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+/* Gruppo di pulsanti dentro una cella: vanno a capo invece di allargare
+   la colonna oltre il bordo della card. */
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.cell-diagnostics {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  max-width: 22rem;
+}
+
+.cell-preview {
+  max-width: 28rem;
 }
 
 .severity-badge {
@@ -215,4 +264,66 @@ td {
 .access-denied {
   color: var(--color-text-muted);
   padding: var(--space-4);
+}
+
+.group-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--space-1);
+  background: var(--color-surface);
+  min-width: 200px;
+}
+
+.group-picker-empty {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  padding: var(--space-1) var(--space-2);
+}
+
+.group-picker label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius);
+  color: var(--color-text);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.group-picker label:hover {
+  background: var(--color-surface-alt);
+}
+
+.group-picker input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+}
+
+.group-summary {
+  cursor: pointer;
+  color: var(--color-text);
+  list-style: none;
+}
+
+.group-summary::-webkit-details-marker {
+  display: none;
+}
+
+.group-summary::before {
+  content: "▸ ";
+  color: var(--color-text-muted);
+}
+
+details[open] > .group-summary::before {
+  content: "▾ ";
+}
+
+.group-summary-editor {
+  margin-top: var(--space-2);
 }

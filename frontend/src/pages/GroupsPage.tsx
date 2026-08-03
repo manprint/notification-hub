@@ -6,7 +6,7 @@ import type { ApiError, DeleteImpactOut, GroupOut, ReceiverOut, Severity } from 
 import ConfirmDialog from "../components/ConfirmDialog";
 import ErrorBanner from "../components/ErrorBanner";
 import { useSession } from "../hooks/useSession";
-import { ADMIN_ROLES, hasRole } from "../lib/roles";
+import { ADMIN_ROLES, MEMBER_ROLES, hasRole } from "../lib/roles";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
 
@@ -59,15 +59,20 @@ function NewReceiverForm({ groupId }: { groupId: string }) {
 }
 
 function GroupReceivers({ groupId }: { groupId: string }) {
-  const { data: receivers } = useQuery({
+  const { role } = useSession();
+  const { data: receivers, error } = useQuery<ReceiverOut[], ApiError>({
     queryKey: ["receivers", groupId],
     queryFn: () => apiGet<ReceiverOut[]>(`/api/v1/groups/${groupId}/receivers`),
   });
 
+  // Un errore della lista (tipicamente 403) mostrava "Nessun receiver in questo
+  // gruppo": indistinguibile da un gruppo davvero vuoto.
+  if (error) return <ErrorBanner error={error} />;
+
   return (
     <div>
       {!receivers || receivers.length === 0 ? (
-        <p style={{ color: "var(--color-text-muted)" }}>Nessun receiver in questo gruppo.</p>
+        <p className="card-hint">Nessun receiver in questo gruppo.</p>
       ) : (
         <ul>
           {receivers.map((r) => (
@@ -77,7 +82,7 @@ function GroupReceivers({ groupId }: { groupId: string }) {
           ))}
         </ul>
       )}
-      <NewReceiverForm groupId={groupId} />
+      {hasRole(role, MEMBER_ROLES) && <NewReceiverForm groupId={groupId} />}
     </div>
   );
 }

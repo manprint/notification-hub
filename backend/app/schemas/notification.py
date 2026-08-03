@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 
 from pydantic import BaseModel, Field
@@ -50,8 +51,8 @@ class BulkReadIn(BaseModel):
     """Segna in blocco per filtro (spec 9.5), non per lista di id: gli stessi
     filtri di GET /notifications, applicati a tutte le righe corrispondenti."""
 
-    group_id: str | None = None
-    receiver_id: str | None = None
+    group_id: uuid.UUID | None = None
+    receiver_id: uuid.UUID | None = None
     severity_min: Severity | None = None
     q: str | None = None
     from_: datetime | None = Field(default=None, alias="from")

@@ -27,3 +27,26 @@ describe("DeliveriesPage", () => {
     expect(sentRow?.querySelector("button")).toBeNull();
   });
 });
+
+describe("DeliveriesPage leggibilità", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setRefreshToken("refresh-token-fixture");
+  });
+
+  it("ogni riga dice quale notifica è stata inoltrata e verso quale canale", async () => {
+    renderWithProviders(<DeliveriesPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Morta")).toBeInTheDocument();
+    });
+
+    // canale di destinazione e receiver di origine, non solo id opachi
+    expect(screen.getAllByText("Slack #ops").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Backup notturno/).length).toBeGreaterThan(0);
+
+    // l'anteprima è un link alla notifica inoltrata
+    const preview = screen.getByRole("link", { name: "Backup FALLITO: disco pieno su /var" });
+    expect(preview).toHaveAttribute("href", "/notifications/n1");
+  });
+});

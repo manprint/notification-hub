@@ -1,4 +1,5 @@
 import pytest
+
 from alembic.command import downgrade, upgrade
 from alembic.config import Config
 
@@ -44,9 +45,10 @@ def test_upgrade_e_downgrade(migrated_db):
         "receiver_channel_overrides",
         "deliveries",
         "pending_object_deletions",
+        "user_group_memberships",
         "alembic_version",  # bookkeeping di alembic stesso, non della spec
     }
 
-    assert tables == expected_tables, (
-        f"Missing: {expected_tables - tables}, unexpected: {tables - expected_tables}"
-    )
+    assert (
+        tables == expected_tables
+    ), f"Missing: {expected_tables - tables}, unexpected: {tables - expected_tables}"
