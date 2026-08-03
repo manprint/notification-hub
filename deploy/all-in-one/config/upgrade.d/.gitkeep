@@ -1,0 +1,15 @@
+# Hook di aggiornamento dell'immagine all-in-one.
+#
+# Ogni file *.sh in questa directory viene eseguito dall'entrypoint quando la
+# versione dell'immagine cambia rispetto a quella registrata in
+# /data/state/version, dopo `alembic upgrade head` e prima dell'avvio dei
+# servizi. Nell'ambiente sono disponibili:
+#
+#   NOTIFYHUB_FROM_VERSION   versione precedente ("" alla prima installazione)
+#   NOTIFYHUB_TO_VERSION     versione di questa immagine
+#
+# piu' tutte le variabili applicative (DATABASE_URL_*, REDIS_URL, ...).
+# Un hook che esce diverso da zero interrompe l'avvio: i servizi non partono.
+#
+# Gli operatori possono aggiungere i propri hook in /data/config/upgrade.d/,
+# eseguiti dopo quelli dell'immagine.

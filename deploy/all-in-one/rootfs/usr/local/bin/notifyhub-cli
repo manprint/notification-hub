@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# CLI applicativa di NotifyHub dentro il container all-in-one.
+#
+#   docker exec -it notifyhub notifyhub-cli bootstrap
+#   docker exec notifyhub notifyhub-cli sync-presets
+#   docker exec notifyhub notifyhub-cli --help
+#
+# `docker exec` parte con le sole variabili dell'immagine, non con quelle che
+# l'entrypoint esporta per i servizi: senza ricostruirle, l'applicazione non
+# saprebbe dove sono database, Redis e MinIO. Qui si rileggono i segreti gia'
+# persistiti (senza rigenerare nulla) e si ricompone lo stesso ambiente.
+
+set -Eeuo pipefail
+
+# shellcheck source=/usr/local/lib/notifyhub/lib.sh
+. /usr/local/lib/notifyhub/lib.sh
+
+[ -f "${SECRETS_FILE}" ] || die "istanza non inizializzata: ${SECRETS_FILE} non esiste"
+
+load_secrets readonly
+export_runtime_env
+
+cd "${APP_DIR}"
+exec gosu "${APP_USER}:${APP_GROUP}" "${VENV_BIN}/python" -m app "$@"

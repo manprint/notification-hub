@@ -1,0 +1,168 @@
+# NotifyHub - immagine all-in-one.
+#
+# Un solo container con tutto lo stack di produzione: PostgreSQL, Redis, MinIO,
+# API, worker Celery, beat Celery, nginx con la SPA gia buildata.
+#
+# Base: Debian 13 "trixie". L'immagine python:3.12-slim-trixie E' Debian 13 con
+# in piu' l'interprete 3.12 in /usr/local, la versione su cui il backend e'
+# sviluppato e testato (ruff target py312, mypy python_version 3.12). Usare il
+# python3.13 di Debian significherebbe girare su un interprete mai testato.
+#
+# Build: dal Makefile in radice, `make all-in-one-build`.
+#
+# Persistenza: un solo volume /data (sottocartelle per servizio) e un solo
+# volume /logs (una sottocartella per servizio).
+
+# syntax=docker/dockerfile:1.7
+
+ARG BASE_IMAGE=python:3.12-slim-trixie
+ARG NODE_IMAGE=node:22-trixie-slim
+
+# ---------------------------------------------------------------------------
+# 1. build della SPA
+# ---------------------------------------------------------------------------
+FROM ${NODE_IMAGE} AS frontend-builder
+
+WORKDIR /build
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# ---------------------------------------------------------------------------
+# 2. dipendenze Python in un virtualenv isolato
+# ---------------------------------------------------------------------------
+FROM ${BASE_IMAGE} AS python-builder
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_ROOT_USER_ACTION=ignore
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python -m venv /opt/notifyhub/venv
+ENV PATH=/opt/notifyhub/venv/bin:$PATH
+
+COPY backend/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt \
+    && pip install --no-cache-dir "supervisor==4.3.0"
+
+# ---------------------------------------------------------------------------
+# 3. binari MinIO (server + client), pinnati per release
+# ---------------------------------------------------------------------------
+FROM ${BASE_IMAGE} AS minio-downloader
+
+ARG MINIO_RELEASE=RELEASE.2025-09-07T16-13-09Z
+ARG MC_RELEASE=RELEASE.2025-08-13T08-35-41Z
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in \
+        amd64) march=linux-amd64 ;; \
+        arm64) march=linux-arm64 ;; \
+        *) echo "architettura non supportata: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /usr/local/bin/minio \
+        "https://dl.min.io/server/minio/release/${march}/archive/minio.${MINIO_RELEASE}"; \
+    curl -fsSL -o /usr/local/bin/mc \
+        "https://dl.min.io/client/mc/release/${march}/archive/mc.${MC_RELEASE}"; \
+    chmod 0755 /usr/local/bin/minio /usr/local/bin/mc; \
+    /usr/local/bin/minio --version; \
+    /usr/local/bin/mc --version
+
+# ---------------------------------------------------------------------------
+# 4. immagine finale
+# ---------------------------------------------------------------------------
+FROM ${BASE_IMAGE}
+
+ARG APP_VERSION=1.0.0
+ARG PG_MAJOR=17
+ARG BUILD_DATE=unknown
+ARG VCS_REF=unknown
+
+LABEL org.opencontainers.image.title="NotifyHub all-in-one" \
+      org.opencontainers.image.description="NotifyHub completo in un solo container: postgres, redis, minio, api, worker, beat, nginx" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.base.name="debian:13"
+
+ENV NOTIFYHUB_VERSION=${APP_VERSION} \
+    PG_MAJOR=${PG_MAJOR} \
+    NOTIFYHUB_HOME=/opt/notifyhub \
+    NOTIFYHUB_DATA_DIR=/data \
+    NOTIFYHUB_LOG_DIR=/logs \
+    PATH=/opt/notifyhub/venv/bin:/usr/lib/postgresql/${PG_MAJOR}/bin:$PATH \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    LANG=C.UTF-8 \
+    DEBIAN_FRONTEND=noninteractive
+
+# postgresql-common creerebbe un cluster "main" in /var/lib/postgresql che qui
+# non serve: il cluster vive in /data/postgres e lo crea l'entrypoint.
+RUN set -eux; \
+    mkdir -p /etc/postgresql-common; \
+    echo 'create_main_cluster = false' > /etc/postgresql-common/createcluster.conf; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        postgresql-${PG_MAJOR} \
+        postgresql-client-${PG_MAJOR} \
+        redis-server \
+        redis-tools \
+        nginx-light \
+        tini \
+        gosu \
+        ca-certificates \
+        curl \
+        procps \
+        libpq5 \
+        gzip \
+        tzdata \
+    ; \
+    rm -rf /var/lib/apt/lists/*; \
+    # nginx-light installa un site di default che non usiamo
+    rm -f /etc/nginx/sites-enabled/default; \
+    # utente unico per tutto cio' che non deve girare da root
+    groupadd --system --gid 1000 notifyhub; \
+    useradd --system --uid 1000 --gid 1000 --home-dir /opt/notifyhub --shell /usr/sbin/nologin notifyhub; \
+    mkdir -p /data /logs /run/notifyhub /var/run/postgresql; \
+    chown postgres:postgres /var/run/postgresql
+
+COPY --from=python-builder /opt/notifyhub/venv /opt/notifyhub/venv
+COPY --from=minio-downloader /usr/local/bin/minio /usr/local/bin/mc /usr/local/bin/
+COPY --from=frontend-builder /build/dist /usr/share/notifyhub/html
+
+COPY backend/ /opt/notifyhub/app/
+COPY deploy/all-in-one/config/ /etc/notifyhub/
+COPY deploy/all-in-one/rootfs/ /
+
+RUN set -eux; \
+    chmod 0755 /usr/local/bin/notifyhub-*; \
+    rm -rf /opt/notifyhub/app/tests /opt/notifyhub/app/__pycache__; \
+    find /opt/notifyhub/app -name '__pycache__' -type d -prune -exec rm -rf {} +; \
+    printf '%s\n' "${APP_VERSION}" > /opt/notifyhub/VERSION; \
+    printf '%s\n' "${PG_MAJOR}" > /opt/notifyhub/PG_MAJOR; \
+    chown -R notifyhub:notifyhub /opt/notifyhub/app /usr/share/notifyhub; \
+    # verifica minima che l'applicazione sia importabile con le sue dipendenze
+    /opt/notifyhub/venv/bin/python -c "import fastapi, celery, alembic, boto3, structlog, supervisor.supervisord"
+
+WORKDIR /opt/notifyhub/app
+
+# unica porta pubblica: nginx. 9000 (S3) e 9100 (metriche) restano su loopback
+# salvo diversa configurazione, come nello stack Compose di produzione.
+EXPOSE 80
+
+VOLUME ["/data", "/logs"]
+
+HEALTHCHECK --interval=30s --timeout=20s --start-period=180s --retries=5 \
+    CMD /usr/local/bin/notifyhub-healthcheck
+
+# tini senza -g: il SIGTERM deve arrivare solo a supervisord, che poi ferma i
+# servizi nell'ordine inverso di avvio (nginx per primo, PostgreSQL per ultimo).
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/notifyhub-entrypoint"]
+CMD ["run"]

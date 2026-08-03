@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Backup logico del database NotifyHub e della configurazione persistita.
+#
+#   notifyhub-backup [--label ETICHETTA] [--keep N] [--output DIR]
+#
+# Produce in /data/backups:
+#   notifyhub-<etichetta>-<timestamp>.sql.gz        dump pg_dumpall (ruoli + dati)
+#   notifyhub-<etichetta>-<timestamp>.config.tar.gz configurazione e segreti
+#   notifyhub-<etichetta>-<timestamp>.manifest      versione app, major PG, data
+#
+# Non include gli oggetti MinIO in /data/minio: stanno gia' nello stesso volume
+# e un dump degli allegati puo' pesare quanto tutto il resto. Per una copia
+# completa si fa lo snapshot del volume /data a container fermo.
+#
+# Viene invocato in automatico dall'entrypoint prima di ogni cambio di versione.
+
+set -Eeuo pipefail
+
+# shellcheck source=/usr/local/lib/notifyhub/lib.sh
+. /usr/local/lib/notifyhub/lib.sh
+
+log_setup init
+
+LABEL=manual
+KEEP="${NOTIFYHUB_BACKUP_KEEP:-5}"
+OUTPUT_DIR="${BACKUP_DIR}"
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --label)  LABEL="$2"; shift 2 ;;
+        --keep)   KEEP="$2"; shift 2 ;;
+        --output) OUTPUT_DIR="$2"; shift 2 ;;
+        -h|--help)
+            sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+            exit 0 ;;
+        *) die "opzione sconosciuta: $1" ;;
+    esac
+done
+
+LABEL="$(printf '%s' "${LABEL}" | tr -c 'A-Za-z0-9._-' '-')"
+DB_NAME="${NOTIFYHUB_DB_NAME:-notifyhub}"
+TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+BASENAME="notifyhub-${LABEL}-${TIMESTAMP}"
+
+mkdir -p "${OUTPUT_DIR}"
+chmod 0700 "${OUTPUT_DIR}"
+
+if ! "${PG_BIN}/pg_isready" -h "${PG_SOCKET_DIR}" -U postgres -t 5 >/dev/null 2>&1; then
+    die "PostgreSQL non e' in ascolto: il backup richiede il cluster avviato"
+fi
+
+DUMP_FILE="${OUTPUT_DIR}/${BASENAME}.sql.gz"
+log_info "dump del cluster in ${DUMP_FILE}"
+
+# pg_dumpall porta con se' ruoli e password: un ripristino su cluster vuoto
+# rimette in piedi anche le utenze applicative senza altri passaggi.
+umask 077
+if ! as_postgres "${PG_BIN}/pg_dumpall" -h "${PG_SOCKET_DIR}" -U postgres --clean --if-exists \
+    | gzip -6 > "${DUMP_FILE}.tmp"; then
+    rm -f "${DUMP_FILE}.tmp"
+    die "pg_dumpall fallito"
+fi
+mv "${DUMP_FILE}.tmp" "${DUMP_FILE}"
+
+CONFIG_ARCHIVE="${OUTPUT_DIR}/${BASENAME}.config.tar.gz"
+tar -czf "${CONFIG_ARCHIVE}" -C "${DATA_DIR}" config 2>/dev/null || true
+
+cat > "${OUTPUT_DIR}/${BASENAME}.manifest" <<EOF
+app_version=${IMAGE_VERSION}
+previous_version=$(cat "${VERSION_FILE}" 2>/dev/null || echo "")
+pg_major=${PG_MAJOR}
+database=${DB_NAME}
+created_at=${TIMESTAMP}
+dump=${DUMP_FILE}
+config=${CONFIG_ARCHIVE}
+EOF
+umask 022
+
+log_info "backup completato: $(du -h "${DUMP_FILE}" | cut -f1) in ${DUMP_FILE}"
+
+# Rotazione: si tengono gli ultimi KEEP set completi.
+if [ "${KEEP}" -gt 0 ] 2>/dev/null; then
+    mapfile -t obsolete < <(ls -1t "${OUTPUT_DIR}"/notifyhub-*.sql.gz 2>/dev/null | tail -n "+$((KEEP + 1))")
+    for old in "${obsolete[@]:-}"; do
+        [ -n "${old}" ] || continue
+        base="${old%.sql.gz}"
+        log_info "rimuovo il backup scaduto $(basename "${base}")"
+        rm -f "${base}.sql.gz" "${base}.config.tar.gz" "${base}.manifest"
+    done
+fi

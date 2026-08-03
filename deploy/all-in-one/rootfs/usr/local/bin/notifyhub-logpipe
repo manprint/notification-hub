@@ -1,0 +1,126 @@
+#!/opt/notifyhub/venv/bin/python
+"""Instrada l'output di un servizio verso i due sbocchi previsti dall'immagine.
+
+Ogni riga letta da stdin viene:
+
+  1. appesa a /logs/<servizio>/<servizio>.log cosi' com'e' (formato originale
+     del servizio: data, livello, tutto il resto), con rotazione per dimensione;
+  2. scritta su stdout come "[servizio] - <riga>", cioe' quello che si vede con
+     `docker logs -f` per tutti i servizi insieme.
+
+Il processo ignora SIGTERM e SIGINT: deve sopravvivere al servizio che sta
+loggando quel tanto che basta a svuotare la pipe, e termina sull'EOF di stdin.
+"""
+
+from __future__ import annotations
+
+import errno
+import os
+import signal
+import sys
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+class RotatingLog:
+    """File di log con rotazione per dimensione, senza dipendenze esterne."""
+
+    def __init__(self, path: str, max_bytes: int, backups: int) -> None:
+        self.path = path
+        self.max_bytes = max_bytes
+        self.backups = backups
+        self.handle = None
+        self.size = 0
+        self._open()
+
+    def _open(self) -> None:
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            self.handle = open(self.path, "a", encoding="utf-8", errors="replace")
+            self.size = self.handle.tell()
+        except OSError:
+            # /logs non montato o non scrivibile: resta comunque lo stdout.
+            self.handle = None
+
+    def _rotate(self) -> None:
+        if self.handle is None:
+            return
+        self.handle.close()
+        self.handle = None
+        try:
+            for index in range(self.backups - 1, 0, -1):
+                src = f"{self.path}.{index}"
+                dst = f"{self.path}.{index + 1}"
+                if os.path.exists(src):
+                    os.replace(src, dst)
+            if self.backups > 0:
+                os.replace(self.path, f"{self.path}.1")
+            else:
+                os.unlink(self.path)
+        except OSError as exc:
+            if exc.errno not in (errno.ENOENT,):
+                pass
+        self._open()
+
+    def write(self, line: str) -> None:
+        if self.handle is None:
+            return
+        data = line + "\n"
+        encoded = len(data.encode("utf-8", "replace"))
+        if self.max_bytes > 0 and self.size + encoded > self.max_bytes:
+            self._rotate()
+            if self.handle is None:
+                return
+        try:
+            self.handle.write(data)
+            self.handle.flush()
+            self.size += encoded
+        except OSError:
+            self.handle = None
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("uso: notifyhub-logpipe <servizio>", file=sys.stderr)
+        return 2
+
+    service = sys.argv[1]
+    log_dir = os.environ.get("NOTIFYHUB_LOG_DIR", "/logs")
+    max_bytes = _int_env("LOG_MAX_BYTES", 10 * 1024 * 1024)
+    backups = _int_env("LOG_BACKUPS", 5)
+
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    sink = RotatingLog(os.path.join(log_dir, service, f"{service}.log"), max_bytes, backups)
+    prefix = f"[{service}] - "
+    out = sys.stdout
+    stream = open(sys.stdin.fileno(), "r", encoding="utf-8", errors="replace", newline="")
+
+    while True:
+        try:
+            line = stream.readline()
+        except (KeyboardInterrupt, OSError):
+            break
+        if not line:
+            break
+        line = line.rstrip("\r\n")
+        sink.write(line)
+        try:
+            out.write(prefix + line + "\n")
+            out.flush()
+        except BrokenPipeError:
+            break
+        except OSError:
+            break
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

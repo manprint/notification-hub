@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# supervisorctl gia' puntato alla configurazione dell'immagine.
+#
+#   notifyhub-ctl status
+#   notifyhub-ctl restart worker
+#   notifyhub-ctl tail -f api
+exec /opt/notifyhub/venv/bin/supervisorctl -c /etc/notifyhub/supervisord.conf "$@"

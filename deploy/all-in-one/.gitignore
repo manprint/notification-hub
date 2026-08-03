@@ -1,0 +1,2 @@
+# Configurazione locale dell'istanza: contiene segreti, non va versionata.
+.env

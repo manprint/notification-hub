@@ -1,0 +1,508 @@
+#!/usr/bin/env bash
+# Entrypoint dell'immagine all-in-one di NotifyHub.
+#
+# Tutto cio' che deve essere coerente prima che l'applicazione accetti
+# traffico avviene qui, in sequenza e con il cluster PostgreSQL avviato in
+# locale ma non ancora sotto supervisord:
+#
+#   layout /data e /logs -> segreti -> cluster PG -> ruoli -> backup
+#   pre-aggiornamento -> alembic upgrade head -> hook di versione ->
+#   sync-presets -> bucket MinIO -> stato versione -> supervisord
+#
+# Solo dopo questa sequenza supervisord avvia i servizi. Un aggiornamento
+# 1.0.0 -> 2.0.0 quindi non puo' mai far partire api/worker/beat contro uno
+# schema non migrato.
+
+set -Eeuo pipefail
+
+# shellcheck source=/usr/local/lib/notifyhub/lib.sh
+. /usr/local/lib/notifyhub/lib.sh
+
+NOTIFYHUB_LOG_TAG=init
+
+# die() ha gia' spiegato il problema: qui si riporta solo il comando che e'
+# fallito senza che nessuno lo avesse previsto.
+trap '[ -n "${NOTIFYHUB_FATAL:-}" ] || log_error "avvio fallito: comando \"${BASH_COMMAND}\" uscito con ${?}"' ERR
+
+PG_TEMP_STARTED=0
+MINIO_TEMP_PID=""
+
+cleanup_on_exit() {
+    local rc=$?
+    if [ -n "${MINIO_TEMP_PID}" ] && kill -0 "${MINIO_TEMP_PID}" 2>/dev/null; then
+        kill -TERM "${MINIO_TEMP_PID}" 2>/dev/null || true
+        wait "${MINIO_TEMP_PID}" 2>/dev/null || true
+        MINIO_TEMP_PID=""
+    fi
+    if [ "${PG_TEMP_STARTED}" = "1" ]; then
+        pg_stop_local || true
+    fi
+    return "${rc}"
+}
+trap cleanup_on_exit EXIT
+
+# ---------------------------------------------------------------------------
+# layout dei volumi
+# ---------------------------------------------------------------------------
+ensure_layout() {
+    mkdir -p "${RUN_DIR}" "${PG_SOCKET_DIR}"
+    chmod 0755 "${RUN_DIR}"
+    chown postgres:postgres "${PG_SOCKET_DIR}"
+
+    mkdir -p "${DATA_DIR}" "${LOG_DIR}"
+
+    local svc
+    for svc in init postgres redis minio api metrics worker beat nginx supervisor; do
+        mkdir -p "${LOG_DIR}/${svc}"
+    done
+    ensure_owner "${LOG_DIR}/postgres" postgres:postgres
+    for svc in init redis minio api metrics worker beat nginx; do
+        ensure_owner "${LOG_DIR}/${svc}" "${APP_USER}:${APP_GROUP}"
+    done
+    chmod 0755 "${LOG_DIR}" "${LOG_DIR}"/*
+
+    mkdir -p "${CONFIG_DIR}" "${STATE_DIR}" "${BACKUP_DIR}" "${MINIO_DIR}" "${REDIS_DIR}"
+    ensure_owner "${MINIO_DIR}" "${APP_USER}:${APP_GROUP}"
+    ensure_owner "${REDIS_DIR}" "${APP_USER}:${APP_GROUP}"
+    ensure_owner "${STATE_DIR}" "${APP_USER}:${APP_GROUP}"
+    ensure_owner "${BACKUP_DIR}" root:root 0700
+    chmod 0750 "${CONFIG_DIR}"
+
+    mkdir -p "${PGDATA}"
+    ensure_owner "${PGDATA}" postgres:postgres 0700
+}
+
+# ---------------------------------------------------------------------------
+# PostgreSQL
+# ---------------------------------------------------------------------------
+pg_render_conf() {
+    cat > "${RUN_DIR}/postgresql.tuning.conf" <<EOF
+# Generato a ogni avvio dall'entrypoint: non modificare, usare
+# ${CONFIG_DIR}/postgresql.custom.conf che viene incluso dopo questo file.
+listen_addresses = '${PGHOST_LOCAL}'
+port = ${PGPORT_LOCAL}
+unix_socket_directories = '${PG_SOCKET_DIR}'
+max_connections = ${PG_MAX_CONNECTIONS:-100}
+shared_buffers = ${PG_SHARED_BUFFERS:-256MB}
+effective_cache_size = ${PG_EFFECTIVE_CACHE_SIZE:-768MB}
+work_mem = ${PG_WORK_MEM:-8MB}
+maintenance_work_mem = ${PG_MAINTENANCE_WORK_MEM:-128MB}
+password_encryption = 'scram-sha-256'
+timezone = 'UTC'
+log_timezone = 'UTC'
+# I log vanno su stderr, li raccoglie notifyhub-logpipe: niente logging_collector.
+logging_collector = off
+log_destination = 'stderr'
+log_line_prefix = '%m [%p] %q%u@%d '
+log_min_duration_statement = ${PG_LOG_MIN_DURATION:-1000}
+log_checkpoints = on
+log_connections = off
+log_disconnections = off
+EOF
+    chown postgres:postgres "${RUN_DIR}/postgresql.tuning.conf"
+    chmod 0640 "${RUN_DIR}/postgresql.tuning.conf"
+
+    # /data/config resta 0750 root:root perche' contiene i segreti, quindi
+    # l'utente postgres non puo' attraversarla: la configurazione aggiuntiva
+    # dell'operatore viene copiata dove il server la puo' leggere davvero.
+    rm -f "${RUN_DIR}/postgresql.custom.conf"
+    if [ -f "${CONFIG_DIR}/postgresql.custom.conf" ]; then
+        install -m 0640 -o postgres -g postgres \
+            "${CONFIG_DIR}/postgresql.custom.conf" "${RUN_DIR}/postgresql.custom.conf"
+        log_info "applico ${CONFIG_DIR}/postgresql.custom.conf"
+    fi
+}
+
+pg_write_hba() {
+    cat > "${PGDATA}/pg_hba.conf" <<EOF
+# Gestito dall'immagine all-in-one di NotifyHub: riscritto a ogni avvio.
+# Il cluster ascolta solo su loopback dentro al container.
+local   all             all                                     trust
+host    all             all             127.0.0.1/32            scram-sha-256
+host    all             all             ::1/128                 scram-sha-256
+EOF
+    chown postgres:postgres "${PGDATA}/pg_hba.conf"
+    chmod 0600 "${PGDATA}/pg_hba.conf"
+}
+
+# Blocco di include in coda a postgresql.conf, riscritto a ogni avvio: cosi'
+# una nuova versione dell'immagine puo' cambiare il tuning senza toccare il
+# resto del file generato da initdb.
+pg_write_includes() {
+    local conf="${PGDATA}/postgresql.conf"
+    local tmp="${conf}.notifyhub.tmp"
+    sed '/# >>> notifyhub/,/# <<< notifyhub/d' "${conf}" > "${tmp}"
+    cat >> "${tmp}" <<EOF
+# >>> notifyhub
+include_if_exists = '${RUN_DIR}/postgresql.tuning.conf'
+include_if_exists = '${RUN_DIR}/postgresql.custom.conf'
+# <<< notifyhub
+EOF
+    mv "${tmp}" "${conf}"
+    chown postgres:postgres "${conf}"
+    chmod 0600 "${conf}"
+}
+
+pg_prepare() {
+    if [ ! -s "${PGDATA}/PG_VERSION" ]; then
+        if [ -n "$(ls -A "${PGDATA}" 2>/dev/null)" ]; then
+            die "${PGDATA} non e' vuota ma non contiene un cluster PostgreSQL valido: controllare il volume montato"
+        fi
+        log_info "nessun cluster in ${PGDATA}: inizializzo PostgreSQL ${PG_MAJOR}"
+        as_postgres "${PG_BIN}/initdb" \
+            --pgdata="${PGDATA}" \
+            --username=postgres \
+            --encoding=UTF8 \
+            --locale=C.UTF-8 \
+            --data-checksums \
+            --auth-local=trust \
+            --auth-host=scram-sha-256
+    else
+        local existing
+        existing="$(cat "${PGDATA}/PG_VERSION")"
+        if [ "${existing}" != "${PG_MAJOR}" ]; then
+            log_error "il cluster in ${PGDATA} e' PostgreSQL ${existing}, questa immagine contiene PostgreSQL ${PG_MAJOR}."
+            log_error "Un salto di major non e' automatico. Procedura:"
+            log_error "  1. riavviare l'immagine precedente (PostgreSQL ${existing})"
+            log_error "  2. docker exec <container> notifyhub-backup --label pre-pg${PG_MAJOR}"
+            log_error "  3. spostare /data/postgres altrove, riavviare questa immagine"
+            log_error "  4. docker exec <container> notifyhub-restore /data/backups/<file>.sql.gz"
+            die "aggiornamento major di PostgreSQL richiesto: avvio interrotto per non danneggiare i dati"
+        fi
+    fi
+
+    printf '%s\n' "${PG_MAJOR}" > "${STATE_DIR}/pg_major"
+    pg_render_conf
+    pg_write_hba
+    pg_write_includes
+}
+
+pg_start_local() {
+    log_info "avvio temporaneo di PostgreSQL per manutenzione e migrazioni"
+    as_postgres "${PG_BIN}/pg_ctl" \
+        --pgdata="${PGDATA}" \
+        --log="${LOG_DIR}/postgres/postgres.log" \
+        --timeout=120 --wait start
+    PG_TEMP_STARTED=1
+    wait_for_tcp "${PGHOST_LOCAL}" "${PGPORT_LOCAL}" 60 postgres \
+        || die "PostgreSQL non risponde su ${PGHOST_LOCAL}:${PGPORT_LOCAL}"
+}
+
+pg_stop_local() {
+    [ "${PG_TEMP_STARTED}" = "1" ] || return 0
+    log_info "arresto di PostgreSQL temporaneo (passa a supervisord)"
+    as_postgres "${PG_BIN}/pg_ctl" \
+        --pgdata="${PGDATA}" --mode=fast --timeout=120 --wait stop || true
+    PG_TEMP_STARTED=0
+}
+
+pg_bootstrap_roles() {
+    log_info "allineo ruoli e database applicativi"
+
+    local owner_lit app_lit auth_lit ingest_lit super_lit
+    owner_lit="$(sql_lit "${PG_OWNER_PASSWORD}")"
+    app_lit="$(sql_lit "${PG_APP_PASSWORD}")"
+    auth_lit="$(sql_lit "${PG_AUTH_PASSWORD}")"
+    ingest_lit="$(sql_lit "${PG_INGEST_PASSWORD}")"
+    super_lit="$(sql_lit "${POSTGRES_SUPERUSER_PASSWORD}")"
+
+    # CREATE ROLE / ALTER ROLE separati: alla riesecuzione le password vengono
+    # riallineate a quelle correnti, cosi' cambiarle da fuori funziona sempre.
+    psql_super postgres <<SQL
+DO \$\$
+DECLARE r text;
+BEGIN
+    FOREACH r IN ARRAY ARRAY['notifyhub_owner','notifyhub_app','notifyhub_auth','notifyhub_ingest'] LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
+            EXECUTE format('CREATE ROLE %I LOGIN', r);
+        END IF;
+    END LOOP;
+END \$\$;
+
+ALTER ROLE postgres          WITH PASSWORD ${super_lit};
+ALTER ROLE notifyhub_owner   WITH LOGIN PASSWORD ${owner_lit}  NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+ALTER ROLE notifyhub_app     WITH LOGIN PASSWORD ${app_lit}    NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+ALTER ROLE notifyhub_auth    WITH LOGIN PASSWORD ${auth_lit}   NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+ALTER ROLE notifyhub_ingest  WITH LOGIN PASSWORD ${ingest_lit} NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+SQL
+
+    if [ "$(psql_super postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '${NOTIFYHUB_DB_NAME}'")" != "1" ]; then
+        log_info "creo il database ${NOTIFYHUB_DB_NAME}"
+        psql_super postgres -c "CREATE DATABASE ${NOTIFYHUB_DB_NAME} OWNER notifyhub_owner"
+    fi
+
+    # notifyhub_owner deve essere proprietario del database (alembic crea
+    # estensioni e cambia lo schema) e gli altri ruoli devono poterlo usare.
+    psql_super "${NOTIFYHUB_DB_NAME}" <<SQL
+ALTER DATABASE ${NOTIFYHUB_DB_NAME} OWNER TO notifyhub_owner;
+ALTER SCHEMA public OWNER TO notifyhub_owner;
+GRANT CONNECT ON DATABASE ${NOTIFYHUB_DB_NAME} TO notifyhub_app, notifyhub_ingest, notifyhub_auth;
+GRANT USAGE ON SCHEMA public TO notifyhub_app, notifyhub_ingest, notifyhub_auth;
+SQL
+}
+
+# ---------------------------------------------------------------------------
+# versione, backup, migrazioni
+# ---------------------------------------------------------------------------
+read_state_version() {
+    if [ -f "${VERSION_FILE}" ]; then
+        tr -d '[:space:]' < "${VERSION_FILE}"
+    else
+        printf ''
+    fi
+}
+
+check_version_transition() {
+    PREVIOUS_VERSION="$(read_state_version)"
+    if [ -z "${PREVIOUS_VERSION}" ]; then
+        VERSION_CHANGED=1
+        log_info "prima installazione, versione ${IMAGE_VERSION}"
+    elif [ "${PREVIOUS_VERSION}" = "${IMAGE_VERSION}" ]; then
+        VERSION_CHANGED=0
+        log_info "versione invariata: ${IMAGE_VERSION}"
+    elif version_lt "${IMAGE_VERSION}" "${PREVIOUS_VERSION}"; then
+        if [ "${ALLOW_DOWNGRADE:-false}" != "true" ]; then
+            log_error "i dati in ${DATA_DIR} sono stati scritti dalla versione ${PREVIOUS_VERSION}, questa immagine e' la ${IMAGE_VERSION}."
+            log_error "Un downgrade puo' incontrare uno schema piu' recente di quello che conosce."
+            die "downgrade bloccato: impostare ALLOW_DOWNGRADE=true solo dopo aver ripristinato un backup coerente"
+        fi
+        VERSION_CHANGED=1
+        log_warn "downgrade ${PREVIOUS_VERSION} -> ${IMAGE_VERSION} forzato da ALLOW_DOWNGRADE=true"
+    else
+        VERSION_CHANGED=1
+        log_info "aggiornamento ${PREVIOUS_VERSION} -> ${IMAGE_VERSION}"
+    fi
+}
+
+backup_before_upgrade() {
+    [ "${VERSION_CHANGED}" = "1" ] || return 0
+    [ -n "${PREVIOUS_VERSION}" ] || return 0
+    if [ "${NOTIFYHUB_BACKUP_ON_UPGRADE:-true}" != "true" ]; then
+        log_warn "backup pre-aggiornamento disabilitato (NOTIFYHUB_BACKUP_ON_UPGRADE=false)"
+        return 0
+    fi
+    log_info "backup pre-aggiornamento del database"
+    /usr/local/bin/notifyhub-backup --label "pre-${IMAGE_VERSION}" \
+        || die "backup pre-aggiornamento fallito: aggiornamento interrotto"
+}
+
+run_migrations() {
+    log_info "alembic upgrade head"
+    ( cd "${APP_DIR}" && as_app "${VENV_BIN}/alembic" upgrade head ) \
+        || die "migrazioni fallite: i servizi non vengono avviati"
+    local rev
+    rev="$(cd "${APP_DIR}" && as_app "${VENV_BIN}/alembic" current 2>/dev/null | tail -n1 || true)"
+    [ -n "${rev}" ] && log_info "revisione schema corrente: ${rev}"
+    return 0
+}
+
+# Hook di aggiornamento: script eseguibili in /etc/notifyhub/upgrade.d (immagine)
+# e in /data/config/upgrade.d (operatore), eseguiti in ordine con le versioni
+# di partenza e arrivo nell'ambiente.
+run_upgrade_hooks() {
+    [ "${VERSION_CHANGED}" = "1" ] || return 0
+    local dir hook
+    for dir in /etc/notifyhub/upgrade.d "${CONFIG_DIR}/upgrade.d"; do
+        [ -d "${dir}" ] || continue
+        for hook in "${dir}"/*.sh; do
+            [ -f "${hook}" ] || continue
+            log_info "hook di aggiornamento: ${hook}"
+            NOTIFYHUB_FROM_VERSION="${PREVIOUS_VERSION}" \
+            NOTIFYHUB_TO_VERSION="${IMAGE_VERSION}" \
+                bash "${hook}" || die "hook ${hook} fallito"
+        done
+    done
+}
+
+# Allinea i preset di severity predefiniti: additivo e idempotente, e' il passo
+# di aggiornamento dati che accompagna le migrazioni di schema.
+sync_presets() {
+    if [ "${VERSION_CHANGED}" != "1" ] && [ "${NOTIFYHUB_SYNC_PRESETS:-on-upgrade}" != "always" ]; then
+        return 0
+    fi
+    log_info "allineo i preset di severity dei tenant"
+    ( cd "${APP_DIR}" && as_app "${VENV_BIN}/python" -m app sync-presets ) \
+        || log_warn "sync-presets non riuscito: i preset restano quelli attuali"
+    return 0
+}
+
+# Primo tenant creato senza intervento manuale quando l'operatore fornisce
+# NOTIFYHUB_BOOTSTRAP_EMAIL: utile per un'installazione self-hosted a container
+# unico, dove non c'e' una shell interattiva a portata di mano.
+bootstrap_first_tenant() {
+    local email="${NOTIFYHUB_BOOTSTRAP_EMAIL:-}"
+    [ -n "${email}" ] || return 0
+
+    local tenants
+    tenants="$(psql_super "${NOTIFYHUB_DB_NAME}" -tAc "SELECT count(*) FROM tenants" 2>/dev/null || echo "")"
+    if [ "${tenants}" != "0" ]; then
+        return 0
+    fi
+
+    local password="${NOTIFYHUB_BOOTSTRAP_PASSWORD:-}"
+    local generated=0
+    if [ -z "${password}" ]; then
+        password="$(gen_secret 12)"
+        generated=1
+    fi
+
+    log_info "creo il primo tenant e il suo owner (${email})"
+    ( cd "${APP_DIR}" && as_app "${VENV_BIN}/python" -m app bootstrap \
+        --tenant-name "${NOTIFYHUB_BOOTSTRAP_TENANT:-NotifyHub}" \
+        --email "${email}" \
+        --password "${password}" ) || { log_warn "bootstrap del primo tenant fallito"; return 0; }
+
+    if [ "${generated}" = "1" ]; then
+        umask 077
+        printf 'email=%s\npassword=%s\n' "${email}" "${password}" > "${CONFIG_DIR}/bootstrap-credentials.txt"
+        umask 022
+        log_info "password generata per ${email}, scritta in ${CONFIG_DIR}/bootstrap-credentials.txt"
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Redis e MinIO
+# ---------------------------------------------------------------------------
+redis_render_conf() {
+    cat > "${RUN_DIR}/redis.conf" <<EOF
+# Generato a ogni avvio dall'entrypoint.
+bind ${REDIS_HOST_LOCAL}
+port ${REDIS_PORT_LOCAL}
+dir ${REDIS_DIR}
+# Redis qui e' broker Celery, rate limit e idempotenza: la persistenza AOF
+# evita di perdere le consegne accodate a un riavvio del container.
+appendonly ${REDIS_APPENDONLY:-yes}
+appendfsync everysec
+save 60 1
+maxmemory-policy noeviction
+loglevel notice
+# logfile vuoto = stderr, che notifyhub-logpipe instrada su /logs/redis.
+logfile ""
+databases 16
+EOF
+    chown "${APP_USER}:${APP_GROUP}" "${RUN_DIR}/redis.conf"
+}
+
+nginx_render_conf() {
+    local max_body_mb=$(( NOTIFYHUB_HARD_MAX_BODY_BYTES / 1048576 ))
+    [ "${max_body_mb}" -lt 1 ] && max_body_mb=1
+    sed -e "s|__CLIENT_MAX_BODY__|${max_body_mb}m|g" \
+        -e "s|__API_PORT__|${API_PORT_LOCAL}|g" \
+        /etc/notifyhub/nginx.conf > "${RUN_DIR}/nginx.conf"
+    chmod 0644 "${RUN_DIR}/nginx.conf"
+    # I worker nginx girano come notifyhub e devono poter scrivere i temporanei.
+    mkdir -p "${RUN_DIR}/nginx/client_body" "${RUN_DIR}/nginx/proxy"
+    chown -R "${APP_USER}:${APP_GROUP}" "${RUN_DIR}/nginx"
+}
+
+# La porta 9000 deve essere libera prima che supervisord avvii il suo MinIO:
+# se restasse occupata, quel programma finirebbe in FATAL e il container
+# resterebbe unhealthy senza una ragione visibile.
+minio_stop_temp() {
+    [ -n "${MINIO_TEMP_PID}" ] || return 0
+    kill -TERM "${MINIO_TEMP_PID}" 2>/dev/null || true
+    wait "${MINIO_TEMP_PID}" 2>/dev/null || true
+    MINIO_TEMP_PID=""
+    if ! wait_for_port_free "${MINIO_HOST_LOCAL}" "${MINIO_PORT_LOCAL}" 30; then
+        pkill -TERM -f "minio server ${MINIO_DIR}" 2>/dev/null || true
+        wait_for_port_free "${MINIO_HOST_LOCAL}" "${MINIO_PORT_LOCAL}" 30 \
+            || die "la porta ${MINIO_PORT_LOCAL} e' ancora occupata dopo l'arresto di MinIO temporaneo"
+    fi
+    return 0
+}
+
+minio_prepare() {
+    local marker="${STATE_DIR}/minio-${NOTIFYHUB_S3_BUCKET}.done"
+    if [ -f "${marker}" ] && [ "${VERSION_CHANGED}" != "1" ]; then
+        return 0
+    fi
+
+    log_info "verifico il bucket MinIO ${NOTIFYHUB_S3_BUCKET}"
+    mkdir -p "${MC_CONFIG_DIR}"
+    chown -R "${APP_USER}:${APP_GROUP}" "${MC_CONFIG_DIR}"
+
+    # Sottoshell con exec, non la funzione as_app: mettere in background una
+    # funzione darebbe in $! il PID della sottoshell e non quello di MinIO, e il
+    # kill successivo lascerebbe la porta 9000 occupata a supervisord.
+    ( exec gosu "${APP_USER}:${APP_GROUP}" /usr/local/bin/minio server "${MINIO_DIR}" \
+        --address "${MINIO_HOST_LOCAL}:${MINIO_PORT_LOCAL}" ) \
+        > >(exec /usr/local/bin/notifyhub-logpipe minio >&3) 2>&1 &
+    MINIO_TEMP_PID=$!
+
+    if ! wait_for_tcp "${MINIO_HOST_LOCAL}" "${MINIO_PORT_LOCAL}" 60 minio; then
+        die "MinIO non risponde su ${MINIO_HOST_LOCAL}:${MINIO_PORT_LOCAL} (dettagli in ${LOG_DIR}/minio/minio.log)"
+    fi
+
+    as_app /usr/local/bin/mc --quiet alias set local \
+        "http://${MINIO_HOST_LOCAL}:${MINIO_PORT_LOCAL}" \
+        "${NOTIFYHUB_S3_ACCESS_KEY}" "${NOTIFYHUB_S3_SECRET_KEY}" \
+        || die "credenziali MinIO non valide per il volume esistente in ${MINIO_DIR}"
+    as_app /usr/local/bin/mc --quiet mb --ignore-existing "local/${NOTIFYHUB_S3_BUCKET}" \
+        || die "creazione del bucket ${NOTIFYHUB_S3_BUCKET} fallita"
+    as_app /usr/local/bin/mc --quiet anonymous set none "local/${NOTIFYHUB_S3_BUCKET}" || true
+
+    minio_stop_temp
+
+    touch "${marker}"
+    chown "${APP_USER}:${APP_GROUP}" "${marker}"
+}
+
+# ---------------------------------------------------------------------------
+# avvio
+# ---------------------------------------------------------------------------
+boot() {
+    ensure_layout
+    # Da qui in poi tutto quello che finisce su stdout o stderr, comandi
+    # esterni compresi, esce come "[init] - ..." e viene scritto in
+    # /logs/init/init.log.
+    log_setup init
+    log_info "NotifyHub all-in-one ${IMAGE_VERSION} (PostgreSQL ${PG_MAJOR})"
+
+    load_secrets
+    export_runtime_env
+    check_version_transition
+
+    pg_prepare
+    pg_start_local
+    pg_bootstrap_roles
+    backup_before_upgrade
+    run_migrations
+    run_upgrade_hooks
+    sync_presets
+    bootstrap_first_tenant
+    pg_stop_local
+
+    redis_render_conf
+    nginx_render_conf
+    minio_prepare
+
+    printf '%s\n' "${IMAGE_VERSION}" > "${VERSION_FILE}"
+    printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${STATE_DIR}/last-start"
+
+    log_info "preparazione completata, passo il controllo a supervisord"
+    trap - EXIT
+
+    # Passaggio di consegne sui log:
+    #   fd 9  = stdout reale del container, che i programmi di supervisord
+    #           useranno come stdout_logfile: le loro righe arrivano gia'
+    #           prefissate da notifyhub-svc e non vanno incanalate due volte;
+    #   fd 1  = notifyhub-logpipe supervisor, cosi' anche i messaggi di
+    #           supervisord escono come "[supervisor] - ..." e finiscono in
+    #           /logs/supervisor/supervisor.log.
+    log_restore
+    exec 9>&1
+    exec > >(exec /usr/local/bin/notifyhub-logpipe supervisor >&9) 2>&1
+    exec "${VENV_BIN}/supervisord" -c /etc/notifyhub/supervisord.conf
+}
+
+case "${1:-run}" in
+    run)
+        boot
+        ;;
+    *)
+        # Qualsiasi altro comando viene eseguito cosi' com'e': utile per
+        # `docker run --rm -it ... bash` o per i comandi di manutenzione.
+        exec "$@"
+        ;;
+esac

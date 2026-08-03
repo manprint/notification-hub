@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Ripristino di un backup prodotto da notifyhub-backup.
+#
+#   notifyhub-restore <file.sql.gz> [--yes]
+#
+# ATTENZIONE: sovrascrive il database corrente. Il dump e' un pg_dumpall
+# --clean --if-exists, quindi elimina e ricrea ruoli e database prima di
+# ricaricare i dati. Tutto quello che c'e' adesso nel database viene perso.
+#
+# Gli oggetti MinIO non sono nel dump: se il backup e' stato preso in un momento
+# diverso dallo stato di /data/minio, alcune notifiche possono riferirsi a
+# payload non piu' presenti (l'applicazione lo gestisce, ma l'allegato manca).
+
+set -Eeuo pipefail
+
+# shellcheck source=/usr/local/lib/notifyhub/lib.sh
+. /usr/local/lib/notifyhub/lib.sh
+
+DUMP=""
+ASSUME_YES=0
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --yes|-y) ASSUME_YES=1; shift ;;
+        -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) DUMP="$1"; shift ;;
+    esac
+done
+
+[ -n "${DUMP}" ] || die "uso: notifyhub-restore <file.sql.gz> [--yes]"
+[ -f "${DUMP}" ] || die "file non trovato: ${DUMP}"
+
+if ! "${PG_BIN}/pg_isready" -h "${PG_SOCKET_DIR}" -U postgres -t 5 >/dev/null 2>&1; then
+    die "PostgreSQL non e' in ascolto: eseguire il comando dentro il container avviato"
+fi
+
+if [ "${ASSUME_YES}" != "1" ]; then
+    echo "Il ripristino di ${DUMP} ELIMINA il database attuale e lo sostituisce."
+    echo "Digitare 'ripristina' per procedere:"
+    read -r answer
+    [ "${answer}" = "ripristina" ] || die "ripristino annullato"
+fi
+
+# Dopo la conferma interattiva: da qui l'output va anche in /logs/init.
+log_setup init
+
+SUPERVISORCTL="${VENV_BIN}/supervisorctl -c /etc/notifyhub/supervisord.conf"
+APP_PROGRAMS="nginx api metrics worker beat"
+SUPERVISOR_UP=0
+if ${SUPERVISORCTL} status >/dev/null 2>&1; then
+    SUPERVISOR_UP=1
+    log_info "fermo i servizi applicativi durante il ripristino"
+    # shellcheck disable=SC2086
+    ${SUPERVISORCTL} stop ${APP_PROGRAMS} >/dev/null || true
+fi
+
+log_info "ripristino da ${DUMP}"
+if ! gzip -dc "${DUMP}" | as_postgres "${PG_BIN}/psql" --no-psqlrc -h "${PG_SOCKET_DIR}" -U postgres -d postgres \
+        -v ON_ERROR_STOP=0 -q > "${LOG_DIR}/init/restore-$(date -u +%Y%m%dT%H%M%SZ).log" 2>&1; then
+    log_error "psql ha segnalato errori: dettagli in ${LOG_DIR}/init/"
+fi
+
+# Il dump riporta le password dei ruoli a quelle del momento del backup: qui si
+# riallineano a quelle correnti, altrimenti i servizi non si riconnettono.
+reapply_role_passwords() {
+    [ -f "${SECRETS_FILE}" ] || return 0
+    set -a
+    # shellcheck disable=SC1090
+    . "${SECRETS_FILE}"
+    set +a
+    log_info "riallineo le password dei ruoli ai segreti correnti"
+    psql_super postgres <<SQL
+ALTER ROLE notifyhub_owner  WITH PASSWORD $(sql_lit "${PG_OWNER_PASSWORD}");
+ALTER ROLE notifyhub_app    WITH PASSWORD $(sql_lit "${PG_APP_PASSWORD}");
+ALTER ROLE notifyhub_auth   WITH PASSWORD $(sql_lit "${PG_AUTH_PASSWORD}");
+ALTER ROLE notifyhub_ingest WITH PASSWORD $(sql_lit "${PG_INGEST_PASSWORD}");
+ALTER ROLE postgres         WITH PASSWORD $(sql_lit "${POSTGRES_SUPERUSER_PASSWORD}");
+SQL
+}
+reapply_role_passwords
+
+if [ "${SUPERVISOR_UP}" = "1" ]; then
+    log_info "riavvio i servizi applicativi"
+    # shellcheck disable=SC2086
+    ${SUPERVISORCTL} start ${APP_PROGRAMS} >/dev/null || true
+fi
+
+log_info "ripristino completato. Un riavvio del container riallinea anche lo schema (alembic upgrade head)."

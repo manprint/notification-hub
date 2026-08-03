@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Healthcheck del container all-in-one.
+#
+# "Sano" significa: supervisord ha tutti i programmi in RUNNING, ogni servizio
+# di infrastruttura risponde sul suo protocollo, l'API dichiara /readyz con
+# tutte le dipendenze verdi, nginx serve e il worker Celery risponde al ping
+# sul broker. Se anche uno solo di questi manca, il container e' unhealthy.
+#
+# Esce 0 con un riepilogo su una riga, 1 al primo controllo fallito.
+
+set -uo pipefail
+
+VENV_BIN=/opt/notifyhub/venv/bin
+SUPERVISOR_CONF=/etc/notifyhub/supervisord.conf
+PG_MAJOR="${PG_MAJOR:-17}"
+RESULTS=()
+
+fail() {
+    printf '[health] - %s FAIL: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
+    exit 1
+}
+
+ok() {
+    RESULTS+=("$1=ok")
+}
+
+# 1. supervisord: stato di tutti i programmi
+status_output="$("${VENV_BIN}/supervisorctl" -c "${SUPERVISOR_CONF}" status 2>&1)" || true
+if [ -z "${status_output}" ] || printf '%s' "${status_output}" | grep -qi 'refused connection\|no such file'; then
+    fail "supervisord non raggiungibile (${status_output})"
+fi
+not_running="$(printf '%s\n' "${status_output}" | awk '$2 != "RUNNING" { printf "%s(%s) ", $1, $2 }')"
+if [ -n "${not_running}" ]; then
+    fail "programmi non in RUNNING: ${not_running}"
+fi
+ok supervisor
+
+# 2. PostgreSQL
+"/usr/lib/postgresql/${PG_MAJOR}/bin/pg_isready" -h 127.0.0.1 -p 5432 -U postgres -t 5 >/dev/null 2>&1 \
+    || fail "PostgreSQL non pronto"
+ok postgres
+
+# 3. Redis
+[ "$(redis-cli -h 127.0.0.1 -p 6379 ping 2>/dev/null)" = "PONG" ] || fail "Redis non risponde"
+ok redis
+
+# 4. MinIO
+curl -fsS --max-time 5 http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1 \
+    || fail "MinIO non pronto"
+ok minio
+
+# 5. API: /readyz deve essere 200 e avere tutte le dipendenze a true
+readyz="$(curl -fsS --max-time 8 http://127.0.0.1:8000/readyz 2>/dev/null)" \
+    || fail "API /readyz non 200 (dipendenze non pronte o processo non in ascolto)"
+readyz_detail="$(printf '%s' "${readyz}" | "${VENV_BIN}/python" -c '
+import json, sys
+try:
+    payload = json.load(sys.stdin)
+except ValueError:
+    sys.exit("risposta /readyz non JSON")
+bad = [name for name, value in payload.get("checks", {}).items() if not value]
+if bad or not payload.get("ready"):
+    sys.exit("dipendenze API non pronte: " + (", ".join(bad) or "ready=false"))
+' 2>&1)" || fail "${readyz_detail}"
+ok api
+
+# 6. metriche
+curl -fsS --max-time 5 "http://127.0.0.1:9100/metrics" >/dev/null 2>&1 \
+    || fail "endpoint /metrics non raggiungibile"
+ok metrics
+
+# 7. nginx, cioe' l'ingresso pubblico completo (SPA + proxy verso l'API)
+curl -fsS --max-time 5 -o /dev/null http://127.0.0.1:80/healthz || fail "nginx non instrada /healthz"
+curl -fsS --max-time 5 -o /dev/null http://127.0.0.1:80/ || fail "nginx non serve la SPA"
+ok nginx
+
+# 8. worker Celery: ping sul broker, senza caricare la configurazione dell'app
+if [ "${NOTIFYHUB_HEALTHCHECK_CELERY:-true}" = "true" ]; then
+    "${VENV_BIN}/python" - <<'PY' >/dev/null 2>&1 || fail "nessun worker Celery risponde al ping"
+import sys
+from celery import Celery
+
+app = Celery(broker="redis://127.0.0.1:6379/1")
+replies = app.control.ping(timeout=4)
+sys.exit(0 if replies else 1)
+PY
+    ok worker
+fi
+
+printf '[health] - %s OK %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${RESULTS[*]}"
+exit 0

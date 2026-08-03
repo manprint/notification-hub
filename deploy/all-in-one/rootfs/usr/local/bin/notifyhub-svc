@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Avvia un servizio sotto supervisord instradandone i log.
+#
+#   notifyhub-svc <nome> [--wait dip1,dip2,...] -- <comando> [argomenti...]
+#
+# L'output del comando (stdout e stderr insieme) passa per notifyhub-logpipe,
+# che lo scrive sia in /logs/<nome>/<nome>.log sia su stdout prefissato con
+# "[nome] - ". Le dipendenze sono porte su loopback da attendere prima di
+# eseguire il comando: supervisord rispetta l'ordine di priorita' ma non la
+# prontezza, e un worker Celery che parte prima di Redis morirebbe subito.
+
+set -uo pipefail
+
+SERVICE_NAME="${1:?uso: notifyhub-svc <nome> [--wait dip,...] -- comando}"
+shift
+
+WAIT_FOR=""
+if [ "${1:-}" = "--wait" ]; then
+    WAIT_FOR="$2"
+    shift 2
+fi
+if [ "${1:-}" = "--" ]; then
+    shift
+fi
+
+[ "$#" -gt 0 ] || { echo "notifyhub-svc: nessun comando da eseguire" >&2; exit 2; }
+
+port_for() {
+    case "$1" in
+        postgres) echo 5432 ;;
+        redis)    echo 6379 ;;
+        minio)    echo 9000 ;;
+        api)      echo 8000 ;;
+        *)        echo "" ;;
+    esac
+}
+
+wait_deps() {
+    [ -n "${WAIT_FOR}" ] || return 0
+    local dep port waited timeout
+    timeout="${NOTIFYHUB_DEP_TIMEOUT:-120}"
+    IFS=',' read -ra deps <<< "${WAIT_FOR}"
+    for dep in "${deps[@]}"; do
+        port="$(port_for "${dep}")"
+        [ -n "${port}" ] || continue
+        waited=0
+        until (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; do
+            waited=$((waited + 1))
+            if [ "${waited}" -ge "${timeout}" ]; then
+                echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ERROR dipendenza ${dep} (porta ${port}) non pronta dopo ${timeout}s"
+                return 1
+            fi
+            sleep 1
+        done
+        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) INFO dipendenza ${dep} pronta sulla porta ${port}"
+    done
+    return 0
+}
+
+{
+    wait_deps || exit 1
+    exec "$@"
+} 2>&1 | /usr/local/bin/notifyhub-logpipe "${SERVICE_NAME}"
+
+exit "${PIPESTATUS[0]}"
