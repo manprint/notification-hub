@@ -27,7 +27,8 @@ export default function LoginPage() {
   }
 
   const rateLimited = error?.status === 429;
-  const retryAfterSeconds = typeof error?.extra.retry_after === "number" ? error.extra.retry_after : null;
+  const retryAfterSeconds =
+    typeof error?.extra?.retry_after === "number" ? error.extra.retry_after : null;
   const retryAfterMinutes = retryAfterSeconds !== null ? Math.ceil(retryAfterSeconds / 60) : null;
 
   return (

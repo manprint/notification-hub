@@ -396,3 +396,81 @@ quelle confermate sono elencate qui, ognuna con il test che le tiene chiuse.
 
 `backend/`: 541 test (0 skippati), `ruff format`/`ruff check`/`mypy` puliti.
 `frontend/`: 96 test, `tsc --noEmit` ed eslint puliti.
+
+---
+
+## Verifica 4 — 2026-08-04 (copertura dei test, prima della produzione)
+
+Obiettivo: bloccare le regressioni delle evolutive future. Prima misura, poi
+tappa i buchi in ordine di rischio.
+
+### La misura era sbagliata
+
+`pytest --cov` riportava **76%**, e la prima cosa da correggere e' stata la misura:
+SQLAlchemy async esegue il lavoro del driver dentro un greenlet
+(`greenlet_spawn`), e senza `concurrency = ["greenlet", "thread"]` coverage.py non
+traccia quelle righe. Misurato sullo stesso sottoinsieme di test:
+`app/api/v1/auth.py` passava da **32% a 54%** solo cambiando la configurazione.
+
+Un numero sbagliato e' peggio di nessun numero: manda a scrivere test dove non
+servono e nasconde i buchi veri. La configurazione ora sta in
+`backend/pyproject.toml` (`[tool.coverage.run]`, branch coverage attiva).
+
+| | prima (misura corretta) | dopo |
+|---|---|---|
+| backend, righe + rami | 86% | **90,4%** |
+| backend, test | 541 | **600** |
+| frontend, righe | 84,8% | **87,1%** |
+| frontend, rami | 76,2% | **78,5%** |
+| frontend, test | 96 | **115** |
+
+### Difetti trovati scrivendo i test
+
+| # | Dove | Difetto | Effetto |
+|---|---|---|---|
+| C1 | `app/cli.py` | `bootstrap` con un'email gia' registrata creava il tenant, poi falliva sull'owner e **lasciava un tenant senza nessun utente** | Installazione fantasma: nessuno puo' entrarci, non compare da nessuna parte, ma tutti i job di manutenzione la iterano per sempre. Corretto con controllo preventivo dell'email + compensazione (cancella il tenant) se l'inserimento dell'owner fallisce comunque |
+| C2 | `app/core/errors.py` | Le risposte d'errore uscivano con `application/json` invece di `application/problem+json` | Deviazione dalla spec §9 (RFC 7807), mai notata perche' **nessun test guardava il content-type**. Un client che distingue gli errori dal media type non funzionava |
+| C3 | `frontend/src/pages/LoginPage.tsx` | `error?.extra.retry_after`: l'optional chain copriva `error`, non `extra` | **Schermata bianca sulla pagina di accesso** a ogni errore senza `extra`, cioe' a ogni guasto di rete: server irraggiungibile, TLS, offline. Nel momento peggiore, perche' l'utente non riesce nemmeno a entrare per capire. Corretto in due punti: `?.` sulla lettura e, soprattutto, `api/client.ts` che ora converte i guasti di `fetch` in un `ApiError` completo, per tutte le pagine |
+
+### Test placebo rimossi
+
+`tests/e2e/test_errors.py` conteneva due test che chiamavano `GET /healthz` e
+asseriva 200, con un commento che diceva "per ora verifichiamo che healthz
+funzioni". Erano verdi e non verificavano niente di cio' che il nome promette: e'
+cosi' che C2 e' rimasto nascosto. Sostituiti con 9 test sulla forma vera delle
+risposte d'errore (422, 401, 404, 405, 413, 415, corpo RFC 7807 completo, nessun
+dettaglio interno esposto).
+
+### Buchi chiusi, in ordine di rischio
+
+| Area | Prima | Perche' rischiava | Ora |
+|---|---|---|---|
+| `app/core/readiness.py` — `/readyz` | **0%** | Ci si appoggiano l'healthcheck del Compose e l'HEALTHCHECK dell'immagine all-in-one: se risponde sempre 200 nasconde un guasto, se risponde sempre 503 blocca un deploy | 8 test: verde con le dipendenze reali, 503 con una sola giu', i tre controlli che tornano False invece di propagare l'eccezione |
+| `POST /invitations/accept` | non coperto | E' la strada con cui entra **ogni utente dopo il primo** | 10 test: giro completo invito→accettazione→login, token usa e getta, scaduto, revocato, email gia' registrata (409, non 500), tenant sospeso, matrice dei ruoli |
+| Canali, binding, override | 61% | Decidono **dove finiscono le notifiche**: un errore qui non da' errore, smette solo di arrivare qualcosa | 13 test: cicli di vita completi, webhook mai in chiaro in nessuna lettura, host fuori allowlist (SSRF), idempotenza dell'override, isolamento fra tenant |
+| `app/api/v1/tenant.py` + quote | 48% / 71% | I numeri che spengono l'ingestion con 429 | 13 test, ramo di `max_storage_bytes` compreso |
+| `app/cli.py` | 46% | Se il bootstrap si rompe, l'installazione e' morta | 4 test che eseguono `python -m app` come **sottoprocesso**, cioe' come gira in produzione (in-process non si puo': `asyncio.run` dentro un event loop) |
+| `scripts/notifyhub-run.sh` | nessun test di comportamento | Gira in cron su macchine altrui | 21 test che eseguono lo script in `--dry-run` |
+| `ChannelBindings.tsx` (frontend) | **2,35%** | E' la tabella che decide **chi viene svegliato di notte** | 5 test: POST/PUT/DELETE secondo la transizione, errore visibile |
+| `LoginPage.tsx` | 74% righe, **14% rami** | Se si rompe, nessuno entra | 6 test: credenziali sbagliate, rate limit coi minuti, doppio invio, guasto di rete |
+| `NotificationDetailPage.tsx` | 76% righe, **25% funzioni** | E' dove si legge un allarme alle tre di notte | 10 test: fatti dell'esecuzione, assenza/ripresa, ping di avvio, segna-come-letta, download del payload, permessi |
+
+### Gate contro le regressioni future
+
+```bash
+make cov       # backend: fallisce sotto l'88% (attuale 90,4%)
+make fe-cov    # frontend: soglie in vite.config.ts (statements 85, branches 78)
+```
+
+Sono **pavimenti, non obiettivi**: si alzano quando la copertura sale, non si
+abbassano per far passare una modifica. I test sono esclusi dalla propria misura
+(gonfiavano il totale del frontend di dieci punti).
+
+### Quello che resta scoperto, consapevolmente
+
+- `app/db/session.py` e `sync_session.py` (81%/71%): le factory delle sessioni
+  non usate dai test (`ingest_session` viene esercitata, le altre no).
+- `app/api/v1/presets.py`, `users.py`, `groups.py` restano fra il 73% e l'89%: i
+  rami non coperti sono varianti di errore su percorsi gia' verificati.
+- `ChannelsPage.tsx` (60%) e `UsersPage.tsx` (77%) sono le due pagine piu' grosse
+  del frontend: coperte nei percorsi principali, non in ogni variante di form.

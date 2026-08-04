@@ -51,7 +51,11 @@ def problem_response(p: Problem) -> JSONResponse:
         "detail": p.detail,
         **p.extra,
     }
-    return JSONResponse(status_code=p.status, content=body)
+    # `application/problem+json` come chiede la spec (§9) e RFC 7807: e' il
+    # segnale con cui un client distingue un corpo d'errore strutturato da una
+    # risposta applicativa, senza doverlo dedurre dallo status. Restava
+    # `application/json` perche' nessun test guardava il content-type.
+    return JSONResponse(status_code=p.status, content=body, media_type="application/problem+json")
 
 
 PROBLEM_TYPES = {

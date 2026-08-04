@@ -31,3 +31,28 @@ markers = [
     "integration: richiede i servizi di docker-compose.test.yml",
     "e2e: percorso completo attraverso l'app ASGI",
 ]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+# SQLAlchemy async esegue il lavoro del driver dentro un greenlet (greenlet_spawn):
+# senza dichiararlo, coverage.py non traccia le righe che girano la' dentro e
+# riporta come "non coperto" codice che i test attraversano a ogni giro. Misurato:
+# app/api/v1/auth.py passava da 32% a 54% sugli stessi 7 test. Un numero sbagliato
+# e' peggio di nessun numero, perche' manda a scrivere test dove non servono e
+# nasconde i buchi veri.
+concurrency = ["greenlet", "thread"]
+omit = [
+    "app/__main__.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+# Pavimento verificato da `make cov`: una modifica che scende sotto fa fallire il
+# gate invece di passare inosservata. Va alzato quando la copertura sale.
+fail_under = 88
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

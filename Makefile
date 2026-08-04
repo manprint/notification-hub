@@ -1,6 +1,7 @@
 .PHONY: install up down reset-db up-test down-test fmt fmt-check lint types test test-unit test-int migrate migrate-test gates fe-lint fe-test fe-build \
 	all-in-one-build all-in-one-env all-in-one-up all-in-one-down all-in-one-restart all-in-one-logs all-in-one-ps \
-	all-in-one-health all-in-one-shell all-in-one-smoke all-in-one-backup all-in-one-clean
+	all-in-one-health all-in-one-shell all-in-one-smoke all-in-one-backup all-in-one-clean \
+	cov fe-cov
 
 install:
 	pip install -r backend/requirements-dev.txt
@@ -46,6 +47,12 @@ migrate:
 
 migrate-test:
 	cd backend && ENV_FILE=.env.test alembic upgrade head
+
+cov:
+	cd backend && pytest -q --cov --cov-report=term-missing
+
+fe-cov:
+	npm --prefix frontend run test -- --coverage
 
 gates: fmt-check lint types test
 

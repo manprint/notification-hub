@@ -113,11 +113,28 @@ async function rawRequest(
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
 
-  const response = await fetch(url, {
-    method,
-    headers,
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers,
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    });
+  } catch {
+    // Server irraggiungibile, DNS, TLS, offline: `fetch` rigetta con un
+    // TypeError, che non ha la forma di ApiError. Senza questa conversione ogni
+    // pagina riceveva un errore con `detail`/`extra` assenti: nel migliore dei
+    // casi un banner vuoto, nel peggiore una schermata bianca (accadeva in
+    // LoginPage, che leggeva error.extra.retry_after).
+    throw {
+      status: 0,
+      type: "/problems/network-unreachable",
+      title: "Server non raggiungibile",
+      detail:
+        "Impossibile contattare NotifyHub. Controlla la connessione e che l'istanza sia attiva.",
+      extra: {},
+    } satisfies ApiError;
+  }
 
   if (response.status === 401 && !isRetry && path !== "/api/v1/auth/refresh") {
     const refreshed = await refreshOnce();

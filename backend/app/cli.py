@@ -2,6 +2,7 @@ import asyncio
 import uuid
 
 import click
+from sqlalchemy import delete
 
 from app.core.emails import InvalidEmailError, normalize_email
 from app.core.security import hash_password
@@ -9,6 +10,7 @@ from app.db.session import async_session_factory_app, tenant_session
 from app.db.types import TenantStatus, UserRole, UserStatus
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.services.identity import find_user_by_email
 from app.services.severity_presets import sync_builtin_presets
 
 
@@ -46,6 +48,17 @@ def bootstrap(tenant_name: str, email: str, password: str) -> None:
 
 
 async def _bootstrap(tenant_name: str, email: str, password: str) -> None:
+    # L'email e unica GLOBALMENTE (spec 4.1): se e gia presa, l'insert dell'owner
+    # fallisce. Verificarlo prima di creare il tenant evita di lasciare in giro un
+    # tenant senza nessun utente, cioe un'installazione invisibile: nessuno puo
+    # entrarci, non compare in nessuna dashboard, ma i job di manutenzione la
+    # iterano per sempre.
+    if await find_user_by_email(email) is not None:
+        raise click.ClickException(
+            f"L'email {email} e gia registrata: ogni account appartiene a un solo "
+            "tenant. Usarne un'altra, oppure accedere con quella esistente."
+        )
+
     tenant_id = uuid.uuid4()
 
     # tenants non ha RLS (spec 4): l'insert avviene sulla sessione app "nuda",
@@ -63,16 +76,25 @@ async def _bootstrap(tenant_name: str, email: str, password: str) -> None:
     # users ha RLS: l'insert deve avvenire con app.tenant_id impostato sul tenant
     # appena creato, altrimenti la policy WITH CHECK lo rifiuta (I-1).
     user_id = uuid.uuid4()
-    async with tenant_session(tenant_id) as session:
-        user = User(
-            id=user_id,
-            tenant_id=tenant_id,
-            email=email,
-            password_hash=hash_password(password),
-            role=UserRole.OWNER,
-            status=UserStatus.ACTIVE,
-        )
-        session.add(user)
+    try:
+        async with tenant_session(tenant_id) as session:
+            user = User(
+                id=user_id,
+                tenant_id=tenant_id,
+                email=email,
+                password_hash=hash_password(password),
+                role=UserRole.OWNER,
+                status=UserStatus.ACTIVE,
+            )
+            session.add(user)
+    except Exception:
+        # Compensazione: il controllo sopra copre il caso normale, questo copre la
+        # corsa fra due bootstrap contemporanei e qualunque altro rifiuto. Un
+        # tenant senza owner e peggio di nessun tenant.
+        async with async_session_factory_app() as session:
+            await session.execute(delete(Tenant).where(Tenant.id == tenant_id))
+            await session.commit()
+        raise
 
     # Un tenant nuovo nasce con i preset predefiniti gia installati: senza,
     # il primo receiver partirebbe con zero regole e la sezione Preset vuota.

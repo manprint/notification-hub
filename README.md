@@ -13,7 +13,7 @@ l'unica fonte di verita. Il piano di realizzazione e in [`plan_NotifyHub/`](plan
 autenticazione, gestione di dominio (gruppi/receiver/canali/regole di severity), ingestion
 conforme alla spec, inoltro asincrono verso Slack/Google Chat con pattern outbox, job di
 manutenzione, dashboard React, deploy Docker Compose. Stato difetto-per-difetto e verifiche
-eseguite in [`docs/REVIEW.md`](docs/REVIEW.md) (sezioni "Verifica 2" e "Verifica 3"); stato per fase e famiglia di
+eseguite in [`docs/REVIEW.md`](docs/REVIEW.md) (sezioni "Verifica 2", "Verifica 3" e "Verifica 4"); stato per fase e famiglia di
 test in [`plan_NotifyHub/resume.md`](plan_NotifyHub/resume.md).
 
 | Area | Stato |
@@ -27,7 +27,8 @@ test in [`plan_NotifyHub/resume.md`](plan_NotifyHub/resume.md).
 | Job di manutenzione (8), quote, metriche, `/readyz` | presenti |
 | Dashboard React | presente, `frontend/`, build di produzione servita da nginx |
 
-`backend/`: 541 test (0 skippati), `ruff format`/`ruff check`/`mypy` puliti. `frontend/`: 96 test,
+`backend/`: 600 test (0 skippati, copertura 90,4% con `make cov`), `ruff format`/`ruff check`/`mypy`
+puliti. `frontend/`: 115 test (copertura 87,1% con `make fe-cov`),
 lint e build puliti. `scripts/smoke.sh` eseguito per intero contro lo stack di produzione
 containerizzato: 22/22 assert, exit 0.
 
