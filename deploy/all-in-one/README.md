@@ -191,7 +191,8 @@ make all-in-one-smoke
 `smoke-all-in-one.sh` e' la versione per il container unico di `scripts/smoke.sh` (che verifica lo
 stack Compose): stesse asserzioni, stesso ordine. Avvia su una rete dedicata il container
 all-in-one e il mock del webhook, attende l'healthcheck, poi verifica bootstrap, login, gruppo,
-receiver (slug di 22 caratteri), canale con webhook mascherata, regola di severity, ingestion con
+receiver (slug parlante con token di 22 caratteri e download dello script wrapper precompilato),
+canale con webhook mascherata, regola di severity, ingestion con
 match della regola, idempotenza con header `Idempotent-Replay`, 404 identico byte a byte fra slug
 inesistente e receiver disabilitato (invariante I-2), payload da 2MB su MinIO con download
 identico all'originale, consegna reale del webhook esattamente una volta, rifiuto 413 oltre il
@@ -279,7 +280,7 @@ Tutte le variabili sono documentate in [`.env.example`](.env.example). Le piu' r
 | Variabile | Default | Effetto |
 |---|---|---|
 | `HTTP_PORT` | `80` | porta pubblicata sull'host |
-| `NOTIFYHUB_PUBLIC_BASE_URL` | `http://localhost` | URL negli inviti e nei link delle notifiche |
+| `NOTIFYHUB_PUBLIC_BASE_URL` | `http://localhost` | URL pubblica: inviti, link delle notifiche, URL di ingestion in dashboard e script wrapper scaricabile. Se resta loopback, le risposte HTTP la deducono da `Host` e `X-Forwarded-Proto`; il worker Celery usa comunque questo valore |
 | `NOTIFYHUB_SECRET_KEY` | generata | firma dei token; cambiarla invalida le sessioni |
 | `NOTIFYHUB_BOOTSTRAP_EMAIL` | vuota | crea il primo tenant al primo avvio |
 | `UVICORN_WORKERS` / `WORKER_CONCURRENCY` | `2` / `4` | dimensionamento API e worker |

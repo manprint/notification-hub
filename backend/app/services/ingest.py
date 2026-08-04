@@ -4,11 +4,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import ingest_session
-from app.db.types import NotificationStatus, Severity, SeveritySource
+from app.db.types import NotificationPhase, NotificationStatus, Severity, SeveritySource
 from app.models.receiver import Receiver
 from app.services.rule_chain import load_evaluation_chain
 from app.services.severity import resolve_severity_async
@@ -27,6 +27,8 @@ class ReceiverLookup:
     rate_limit_per_min: int
     default_severity: Severity
     exit_code_severity: Severity | None
+    duration_threshold_seconds: int | None
+    duration_severity: Severity | None
 
 
 async def resolve_receiver_by_slug(slug: str) -> ReceiverLookup | None:
@@ -48,6 +50,8 @@ async def resolve_receiver_by_slug(slug: str) -> ReceiverLookup | None:
             rate_limit_per_min=receiver.rate_limit_per_min,
             default_severity=receiver.default_severity,
             exit_code_severity=receiver.exit_code_severity,
+            duration_threshold_seconds=receiver.duration_threshold_seconds,
+            duration_severity=receiver.duration_severity,
         )
 
 
@@ -87,6 +91,14 @@ class PreparedNotification:
     severity: Severity
     severity_source: SeveritySource
     matched_pattern: str | None
+    # Dati grezzi dichiarati dal mittente, ripetuti qui perche vanno persistiti
+    # sulla notifica anche quando non hanno deciso la severity.
+    duration_ms: int | None = None
+    exit_code: int | None = None
+    duration_exceeded: bool = False
+    # Fase dichiarata dal mittente (X-Phase). Non influenza la severity: decide
+    # solo quale istante del receiver si aggiorna (avvio o conclusione).
+    phase: NotificationPhase | None = None
 
 
 async def prepare_notification(
@@ -100,6 +112,10 @@ async def prepare_notification(
     default_severity: Severity,
     exit_code: int | None = None,
     exit_code_severity: Severity | None = None,
+    duration_ms: int | None = None,
+    duration_threshold_seconds: int | None = None,
+    duration_severity: Severity | None = None,
+    phase: NotificationPhase | None = None,
 ) -> PreparedNotification:
     """Normalizza, risolve la severity e decide lo storage backend. Non scrive
     nulla: il chiamante fa l'eventuale PUT su MinIO, poi chiama
@@ -120,6 +136,9 @@ async def prepare_notification(
         default_severity=default_severity,
         exit_code=exit_code,
         exit_code_severity=exit_code_severity,
+        duration_ms=duration_ms,
+        duration_threshold_seconds=duration_threshold_seconds,
+        duration_severity=duration_severity,
     )
 
     notification_id = uuid.uuid4()
@@ -136,6 +155,10 @@ async def prepare_notification(
         severity=resolution.severity,
         severity_source=resolution.source,
         matched_pattern=resolution.matched_pattern,
+        duration_ms=duration_ms,
+        exit_code=exit_code,
+        duration_exceeded=resolution.duration_exceeded,
+        phase=phase,
     )
 
 
@@ -167,10 +190,34 @@ async def persist_notification(
         severity=prepared.severity,
         severity_source=prepared.severity_source,
         matched_pattern=prepared.matched_pattern,
+        duration_ms=prepared.duration_ms,
+        exit_code=prepared.exit_code,
+        phase=prepared.phase,
         status=NotificationStatus.UNREAD,
         received_at=datetime.now(UTC),
         source_ip=source_ip,
         meta=metadata or {},
     )
     session.add(notification)
+
+    # Battito della sorveglianza: l'ultimo invio VERO si denormalizza sul
+    # receiver, cosi' il job che cerca le assenze fa una query indicizzata sui
+    # receiver invece di un max(received_at) su notifications ogni minuto. Le
+    # notifiche sintetiche non passano da qui, ed e' il punto: se aggiornassero
+    # questo istante, l'assenza si riarmerebbe da sola.
+    #
+    # Un ping di avvio (X-Phase: start) aggiorna un istante DIVERSO: dice che il
+    # job e' partito, non che ha concluso. Se contasse come conclusione la
+    # sorveglianza tacerebbe proprio nel caso peggiore, il job morto a meta'
+    # esecuzione insieme alla macchina.
+    heartbeat = (
+        {"last_start_at": notification.received_at}
+        if prepared.phase is NotificationPhase.START
+        else {"last_notification_at": notification.received_at}
+    )
+    await session.execute(
+        update(Receiver)
+        .where(Receiver.id == receiver_id, Receiver.tenant_id == tenant_id)
+        .values(**heartbeat)
+    )
     await session.flush()

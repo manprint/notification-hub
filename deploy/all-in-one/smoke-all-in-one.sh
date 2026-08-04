@@ -163,7 +163,22 @@ body=$(echo "$receiver_response" | head -n -1)
 assert_http_code 201 "$http_code" "La creazione del receiver deve restituire 201"
 receiver_id=$(echo "$body" | jq -r '.id // empty')
 receiver_slug=$(echo "$body" | jq -r '.slug // empty')
-assert_eq "22" "$(echo -n "$receiver_slug" | wc -c)" "Lo slug del receiver deve essere di 22 caratteri"
+# Slug parlante: `<gruppo>-backup-notturno-<22 caratteri casuali>`.
+assert_eq "22" "$(echo -n "${receiver_slug##*-backup-notturno-}" | wc -c)" \
+    "Lo slug del receiver deve finire con 22 caratteri casuali"
+case "$receiver_slug" in
+    *-backup-notturno-*) ;;
+    *) echo "Lo slug del receiver deve contenere il nome del receiver: $receiver_slug"; exit 1 ;;
+esac
+
+script_response=$(curl -s -w "\n%{http_code}" $BASE/api/v1/receivers/$receiver_id/wrapper-script \
+    -H "Authorization: Bearer $access_token")
+assert_http_code 200 "$(echo "$script_response" | tail -1)" \
+    "Il download dello script wrapper deve restituire 200"
+if ! echo "$script_response" | head -n -1 | grep -qF "NOTIFYHUB_SLUG:-$receiver_slug"; then
+    echo "Lo script wrapper scaricato deve contenere lo slug del receiver"
+    exit 1
+fi
 
 echo ""
 echo "Step 6: creazione del canale di consegna..."

@@ -48,6 +48,32 @@ docker compose up -d minio minio-init   # minio-init ricrea il bucket con le nuo
    redirect 301 dal blocco `listen 80` esistente.
 3. Monta i certificati nel container `nginx` via `volumes` in `docker-compose.yml`.
 
+### URL pubblica dietro reverse proxy
+
+Tutto quello che l'istanza mette in mano a qualcun altro contiene un indirizzo: il link dell'invito,
+il link della notifica inoltrata su Slack, l'URL di ingestion mostrata nella pagina del receiver e lo
+script `notifyhub-run.sh` che si scarica da quella pagina. Un indirizzo sbagliato non da errore: da
+un link che non risponde, o che risponde solo dalla macchina dell'API.
+
+Ordine con cui viene deciso (`backend/app/core/urls.py`):
+
+1. **`NOTIFYHUB_PUBLIC_BASE_URL`**, se non punta al loopback. E la dichiarazione dell'operatore ed e
+   la sola cosa da valorizzare in produzione: `https://notifyhub.example.com`, con l'eventuale
+   sottopercorso e senza slash finale (viene comunque normalizzata).
+2. **La richiesta in corso**, quando c'e: `X-Forwarded-Proto`, `X-Forwarded-Host` e
+   `X-Forwarded-Prefix` se il proxy li manda, altrimenti schema e header `Host`. Copre il caso reale
+   in cui la configurazione e rimasta al default di sviluppo dopo il deploy dietro nginx in https.
+3. La configurazione comunque, anche loopback, come ultima spiaggia.
+
+Il **worker Celery** non ha nessuna richiesta da cui dedurla: i link nelle notifiche inoltrate usano
+solo il punto 1. Se arrivano su Slack link a `localhost`, la variabile non e valorizzata.
+
+`nginx` di questo repository manda gia `Host` e `X-Forwarded-Proto` (`deploy/nginx/nginx.conf`); un
+proxy davanti a quello deve fare lo stesso, e se serve l'istanza sotto un sottopercorso deve mandare
+anche `X-Forwarded-Prefix`. Il valore viene sempre validato: credenziali nell'URL, query string,
+spazi e caratteri fuori dall'alfabeto degli URL vengono rifiutati, perche la stessa stringa finisce
+dentro uno script bash servito ad altre macchine.
+
 ## Variabili d'Ambiente
 
 Elenco completo in `.env.example`. Le principali:
@@ -67,12 +93,14 @@ Elenco completo in `.env.example`. Le principali:
 | `NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST` | Host consentiti per `webhook_url`, CSV |
 | `ACCESS_TOKEN_TTL_MINUTES` / `REFRESH_TOKEN_TTL_DAYS` | Scadenze JWT/refresh |
 | `CORS_ORIGINS` | Origin ammessi dalla SPA |
+| `NOTIFYHUB_PUBLIC_BASE_URL` | URL pubblica dell'istanza: inviti, link delle notifiche, URL di ingestion, script wrapper. Vedi "URL pubblica dietro reverse proxy" |
+| `NOTIFYHUB_WRAPPER_SCRIPT_PATH` | Percorso di `notifyhub-run.sh` servito dal pulsante "Scarica lo script". Vuoto = si cerca accanto al codice; serve solo a deploy fuori standard |
 | `TRUSTED_PROXIES` | Solo questi IP autorizzano la lettura di `X-Forwarded-For` |
 | `SMTP_HOST/_PORT/_USER/_PASSWORD/_FROM` | Opzionali: se assenti, l'invito resta un link copiabile |
 
 ## Job di Manutenzione
 
-Sette job Celery Beat, definiti in `app/tasks/maintenance.py` e schedulati in
+Otto job Celery Beat, definiti in `app/tasks/maintenance.py` e schedulati in
 `app/tasks/celery_app.py` (spec sezione 11). Il worker che li esegue e il servizio `worker`/`beat`
 del compose di produzione (profilo di default, non serve attivare nulla).
 
@@ -154,6 +182,35 @@ docker compose run --rm worker celery -A app.tasks.celery_app call app.tasks.mai
 
 **Importanza:** MEDIA. Se non gira, l'enforcement di `max_storage_bytes` lavora su dati non
 aggiornati fino al giorno successivo.
+
+### 8. `check_expected_schedules`
+
+**Ogni 60 secondi.** Sorveglianza dell'attesa dei receiver (dead man's switch):
+l'unico job che reagisce a cio' che *non* e' arrivato.
+
+Per ogni tenant attivo, prende i receiver `active` con una politica di attesa
+configurata (`missing_severity IS NOT NULL`, indice parziale
+`ix_receivers_expected_active`) e confronta `last_notification_at` con la
+scadenza calcolata da intervallo o espressione cron piu' tolleranza. Chi ha
+sforato produce una notifica sintetica con `severity_source = 'missing'`; chi e'
+tornato a inviare dopo un allarme ne produce una `recovered` con severity `info` e
+si riarma.
+
+Costo: una query indicizzata per tenant. Un'istanza dove nessuno usa la
+sorveglianza non fa nient'altro.
+
+Diagnostica:
+
+```bash
+docker compose logs worker | grep expected_schedule
+# expected_schedule_missing   receiver_id=... slug=... deadline=...
+# expected_schedule_recovered receiver_id=...
+# check_expected_schedules_done missing=1 recovered=0
+```
+
+Se un receiver allarma ogni giorno senza motivo, i sospetti sono due: il job usa
+`--only-on-failure` (i successi non inviano niente, quindi sono assenze), oppure
+la tolleranza non copre la durata del job, che invia solo a fine esecuzione.
 
 ## Quote per Tenant
 

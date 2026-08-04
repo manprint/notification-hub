@@ -8,14 +8,34 @@ import type {
   NotificationListOut,
   NotificationStatus,
   Severity,
+  SeveritySource,
 } from "../api/types";
 import DataTable, { type DataTableColumn } from "../components/DataTable";
 import ErrorBanner from "../components/ErrorBanner";
 import SeverityBadge from "../components/SeverityBadge";
 import StatusPill from "../components/StatusPill";
 import { useNotifications } from "../hooks/useNotifications";
+import {
+  SEVERITY_SOURCE_LABELS,
+  isSurveillanceSource,
+  phaseLabel,
+  severitySourceLabel,
+} from "../lib/severitySource";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
+// Origini filtrabili, nell'ordine della catena di severity. Le due della
+// sorveglianza stanno in fondo e sono quelle che si cercano piu' spesso:
+// "fammi vedere solo i job che non hanno inviato".
+const SOURCES: SeveritySource[] = [
+  "explicit",
+  "exit_code",
+  "duration",
+  "rule",
+  "preset_rule",
+  "receiver_default",
+  "missing",
+  "recovered",
+];
 
 export default function NotificationsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -25,6 +45,7 @@ export default function NotificationsPage() {
   const groupId = searchParams.get("group_id") ?? undefined;
   const severityMin = (searchParams.get("severity_min") as Severity | null) ?? undefined;
   const status = (searchParams.get("status") as NotificationStatus | null) ?? undefined;
+  const source = (searchParams.get("source") as SeveritySource | null) ?? undefined;
 
   const { data: groups } = useQuery({
     queryKey: ["groups"],
@@ -32,7 +53,13 @@ export default function NotificationsPage() {
   });
 
   const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } =
-    useNotifications({ group_id: groupId, severity_min: severityMin, status, q: q || undefined });
+    useNotifications({
+      group_id: groupId,
+      severity_min: severityMin,
+      status,
+      source,
+      q: q || undefined,
+    });
 
   const rows = data?.pages.flatMap((page: NotificationListOut) => page.notifications) ?? [];
 
@@ -45,6 +72,9 @@ export default function NotificationsPage() {
     await apiPost("/api/v1/notifications/bulk-read", {
       group_id: groupId,
       severity_min: severityMin,
+      // Lo stesso filtro della lista: "segna tutte come lette" non deve toccare
+      // cio' che il filtro sull'origine sta tenendo fuori dalla vista.
+      source,
       q: q || undefined,
     });
     await queryClient.invalidateQueries({ queryKey: ["notifications"] });
@@ -63,6 +93,33 @@ export default function NotificationsPage() {
             <span className="status-pill" style={{ marginLeft: 8 }}>{n.content_size} byte su object storage</span>
           )}
         </Link>
+      ),
+    },
+    {
+      key: "source",
+      header: "Origine",
+      render: (n) => (
+        <>
+          <span
+            className="status-pill"
+            title={
+              isSurveillanceSource(n.severity_source)
+                ? "Notifica scritta da NotifyHub: nessuno l'ha inviata"
+                : `Severity decisa da: ${severitySourceLabel(n.severity_source)}`
+            }
+          >
+            {severitySourceLabel(n.severity_source)}
+          </span>
+          {n.phase === "start" && (
+            <span
+              className="status-pill"
+              style={{ marginLeft: 6 }}
+              title="Ping di avvio: l'esito arriva a fine esecuzione"
+            >
+              {phaseLabel(n.phase)}
+            </span>
+          )}
+        </>
       ),
     },
     { key: "status", header: "Stato", render: (n) => <StatusPill status={n.status} /> },
@@ -119,6 +176,27 @@ export default function NotificationsPage() {
           {SEVERITIES.map((s) => (
             <option key={s} value={s}>
               {s}
+            </option>
+          ))}
+        </select>
+
+        <select
+          aria-label="Origine della notifica"
+          value={source ?? ""}
+          onChange={(event) => {
+            const value = event.target.value;
+            setSearchParams((prev) => {
+              const next = new URLSearchParams(prev);
+              if (value) next.set("source", value);
+              else next.delete("source");
+              return next;
+            });
+          }}
+        >
+          <option value="">Qualsiasi origine</option>
+          {SOURCES.map((item) => (
+            <option key={item} value={item}>
+              {SEVERITY_SOURCE_LABELS[item]}
             </option>
           ))}
         </select>

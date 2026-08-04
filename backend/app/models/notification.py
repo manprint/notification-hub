@@ -2,16 +2,27 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, String, Text, text
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, UUIDPrimaryKeyMixin
 from app.db.types import (
+    NotificationPhase,
     NotificationStatus,
     Severity,
     SeveritySource,
     StorageBackend,
+    notification_phase_type,
     notification_status_type,
     severity_source_type,
     severity_type,
@@ -48,6 +59,10 @@ class Notification(Base, UUIDPrimaryKeyMixin):
             ),
             name="ck_notifications_body",
         ),
+        CheckConstraint(
+            "duration_ms IS NULL OR duration_ms >= 0",
+            name="ck_notifications_duration_ms",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -69,6 +84,18 @@ class Notification(Base, UUIDPrimaryKeyMixin):
     # possono essere modificate o cancellate dopo, ma la UI deve poter mostrare
     # quale pattern ha deciso la severity di QUESTA notifica (spec 9.3/9.7).
     matched_pattern: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Dati grezzi dell'esecuzione, come li ha dichiarati il mittente negli header
+    # X-Duration-Ms e X-Exit-Code. NULL quando il mittente non li manda (una
+    # ingestion via curl a mano, o qualunque sorgente che non sia il wrapper).
+    # Restano qui anche quando non hanno deciso la severity: servono a mostrare
+    # e filtrare la durata nella dashboard e a far rivalutare la catena INTERA
+    # al replay, exit code e soglia compresi.
+    duration_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    exit_code: Mapped[int | None] = mapped_column(nullable=True)
+    # Fase dichiarata dal mittente (header X-Phase): 'start' per il ping di avvio
+    # del wrapper, 'end' per la notifica che chiude l'esecuzione. NULL quando non
+    # viene dichiarata, cioe' per tutto lo storico e per le ingestion a mano.
+    phase: Mapped[NotificationPhase | None] = mapped_column(notification_phase_type, nullable=True)
     status: Mapped[NotificationStatus] = mapped_column(
         notification_status_type, nullable=False, default="unread"
     )

@@ -22,7 +22,7 @@ from app.services.ingest import (
 )
 from app.services.quota import enforce_tenant_quotas
 from app.services.ratelimit import check_ip_rate_limit, check_slug_rate_limit
-from app.services.severity import parse_exit_code
+from app.services.severity import parse_duration_ms, parse_exit_code, parse_phase
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["ingest"])
@@ -83,10 +83,21 @@ async def ingest(
     x_severity: str | None = Header(default=None, alias="X-Severity"),  # noqa: B008
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),  # noqa: B008
     x_exit_code: str | None = Header(default=None, alias="X-Exit-Code"),  # noqa: B008
+    x_duration_ms: str | None = Header(default=None, alias="X-Duration-Ms"),  # noqa: B008
+    x_phase: str | None = Header(default=None, alias="X-Phase"),  # noqa: B008
     severity: str | None = Query(default=None),  # noqa: B008
 ) -> JSONResponse:
     try:
-        response = await _ingest(slug, request, x_severity, x_request_id, severity, x_exit_code)
+        response = await _ingest(
+            slug,
+            request,
+            x_severity=x_severity,
+            x_request_id=x_request_id,
+            severity=severity,
+            x_exit_code=x_exit_code,
+            x_duration_ms=x_duration_ms,
+            x_phase=x_phase,
+        )
     except Problem as exc:
         outcome = {
             404: "not_found",
@@ -106,10 +117,13 @@ async def ingest(
 async def _ingest(
     slug: str,
     request: Request,
+    *,
     x_severity: str | None,
     x_request_id: str | None,
     severity: str | None,
     x_exit_code: str | None = None,
+    x_duration_ms: str | None = None,
+    x_phase: str | None = None,
 ) -> JSONResponse:
     settings = get_settings()
     source_ip = _source_ip(request)
@@ -196,6 +210,10 @@ async def _ingest(
             default_severity=receiver.default_severity,
             exit_code=parse_exit_code(x_exit_code),
             exit_code_severity=receiver.exit_code_severity,
+            duration_ms=parse_duration_ms(x_duration_ms),
+            duration_threshold_seconds=receiver.duration_threshold_seconds,
+            duration_severity=receiver.duration_severity,
+            phase=parse_phase(x_phase),
         )
 
         if prepared.use_object_storage:

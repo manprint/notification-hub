@@ -79,8 +79,9 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} All services ready"
 # Step 2: Bootstrap tenant
 echo ""
 echo "Step 2: Bootstrap tenant..."
-# ".local"/".test" sono nomi a uso speciale (RFC 2606) rifiutati da EmailStr:
-# serve un dominio sintatticamente normale, non deve risolvere davvero in DNS.
+# Dominio normale: non deve risolvere in DNS (la deliverability non viene mai
+# verificata). Da quando API e CLI condividono la validazione (app/core/emails.py)
+# anche "@...local" e "@...test" sarebbero accettati.
 USER_EMAIL="owner@acme-notifyhub-smoke.io"
 USER_PASSWORD="password123"
 
@@ -162,14 +163,90 @@ assert_http_code 201 "$http_code" "Create receiver should return 201"
 
 receiver_id=$(echo "$body" | jq -r '.id // empty')
 receiver_slug=$(echo "$body" | jq -r '.slug // empty')
-slug_length=$(echo -n "$receiver_slug" | wc -c)
+receiver_ingest_url=$(echo "$body" | jq -r '.ingest_url // empty')
 
-if [ "$slug_length" -ne 22 ]; then
-    echo -e "${COLOR_RED}✗${COLOR_NC} Receiver slug should be 22 characters, got $slug_length"
+# Slug parlante: gruppo, nome del receiver e in coda i 22 caratteri casuali che
+# sono l'unica parte che vale come credenziale.
+slug_token="${receiver_slug##*-backup-notturno-}"
+if [ "$slug_token" = "$receiver_slug" ] || [ "${#slug_token}" -ne 22 ]; then
+    echo -e "${COLOR_RED}✗${COLOR_NC} Receiver slug should be '<group>-backup-notturno-<22 chars>', got $receiver_slug"
     exit 1
 fi
 
-echo -e "${COLOR_GREEN}✓${COLOR_NC} Receiver created (slug: $receiver_slug, length: 22)"
+if [ "$receiver_ingest_url" != "http://localhost/ingest/$receiver_slug" ]; then
+    echo -e "${COLOR_RED}✗${COLOR_NC} ingest_url should be http://localhost/ingest/$receiver_slug, got $receiver_ingest_url"
+    exit 1
+fi
+
+echo -e "${COLOR_GREEN}✓${COLOR_NC} Receiver created (slug: $receiver_slug)"
+
+# Step 5b: wrapper script precompilato
+echo ""
+echo "Step 5b: Download wrapper script..."
+script_response=$(curl -s -w "\n%{http_code}" -D /tmp/notifyhub-smoke-headers \
+    http://localhost/api/v1/receivers/$receiver_id/wrapper-script \
+    -H "Authorization: Bearer $access_token")
+http_code=$(echo "$script_response" | tail -1)
+script_body=$(echo "$script_response" | head -n -1)
+
+assert_http_code 200 "$http_code" "Wrapper script download should return 200"
+
+if ! grep -qi 'content-disposition: attachment; filename="notifyhub-run-backup-notturno.sh"' /tmp/notifyhub-smoke-headers; then
+    echo -e "${COLOR_RED}✗${COLOR_NC} Wrapper script should be served as a named attachment"
+    exit 1
+fi
+
+if ! echo "$script_body" | grep -qF "SLUG=\"\${NOTIFYHUB_SLUG:-$receiver_slug}\""; then
+    echo -e "${COLOR_RED}✗${COLOR_NC} Wrapper script should carry the receiver slug"
+    exit 1
+fi
+
+if ! echo "$script_body" | grep -qF 'URL="${NOTIFYHUB_URL:-http://localhost}"'; then
+    echo -e "${COLOR_RED}✗${COLOR_NC} Wrapper script should carry the public base URL"
+    exit 1
+fi
+
+# La prova che conta: quello che si scarica e' bash valido.
+echo "$script_body" > /tmp/notifyhub-smoke-wrapper.sh
+if ! bash -n /tmp/notifyhub-smoke-wrapper.sh; then
+    echo -e "${COLOR_RED}✗${COLOR_NC} Downloaded wrapper script is not valid bash"
+    exit 1
+fi
+rm -f /tmp/notifyhub-smoke-headers /tmp/notifyhub-smoke-wrapper.sh
+
+echo -e "${COLOR_GREEN}✓${COLOR_NC} Wrapper script downloaded, precompiled and syntactically valid"
+
+# Step 5c: ping di avvio (X-Phase: start)
+echo ""
+echo "Step 5c: start ping..."
+phase_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/ingest/$receiver_slug \
+    -H "X-Phase: start" -H "X-Severity: debug" \
+    --data "[notifyhub] job=smoke avvio")
+http_code=$(echo "$phase_response" | tail -1)
+body=$(echo "$phase_response" | head -n -1)
+
+assert_http_code 201 "$http_code" "Start ping should return 201"
+
+phase_severity=$(echo "$body" | jq -r '.severity // empty')
+if [ "$phase_severity" != "debug" ]; then
+    echo -e "${COLOR_RED}✗${COLOR_NC} Start ping should stay at severity debug, got $phase_severity"
+    exit 1
+fi
+
+# Il ping di avvio non e' una conclusione: deve muovere last_start_at e lasciare
+# ferma la scadenza dell'attesa (last_notification_at).
+receiver_state=$(curl -s http://localhost/api/v1/receivers/$receiver_id \
+    -H "Authorization: Bearer $access_token")
+if [ "$(echo "$receiver_state" | jq -r '.last_start_at // "null"')" = "null" ]; then
+    echo -e "${COLOR_RED}✗${COLOR_NC} Start ping should update last_start_at"
+    exit 1
+fi
+if [ "$(echo "$receiver_state" | jq -r '.last_notification_at // "null"')" != "null" ]; then
+    echo -e "${COLOR_RED}✗${COLOR_NC} Start ping must not count as a completion"
+    exit 1
+fi
+
+echo -e "${COLOR_GREEN}✓${COLOR_NC} Start ping recorded as a start, not as a completion"
 
 # Step 6: Create delivery channel
 echo ""

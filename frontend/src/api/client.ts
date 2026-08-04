@@ -102,12 +102,12 @@ function buildUrl(path: string, query?: RequestOptions["query"]): string {
   return qs ? `${path}?${qs}` : path;
 }
 
-async function request<T>(
+async function rawRequest(
   method: string,
   path: string,
   options: RequestOptions = {},
   isRetry = false,
-): Promise<T> {
+): Promise<Response> {
   const url = buildUrl(path, options.query);
   const headers: Record<string, string> = {};
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
@@ -122,7 +122,7 @@ async function request<T>(
   if (response.status === 401 && !isRetry && path !== "/api/v1/auth/refresh") {
     const refreshed = await refreshOnce();
     if (refreshed) {
-      return request<T>(method, path, options, true);
+      return rawRequest(method, path, options, true);
     }
     throw await toApiError(response);
   }
@@ -130,6 +130,16 @@ async function request<T>(
   if (!response.ok) {
     throw await toApiError(response);
   }
+
+  return response;
+}
+
+async function request<T>(
+  method: string,
+  path: string,
+  options: RequestOptions = {},
+): Promise<T> {
+  const response = await rawRequest(method, path, options);
 
   if (response.status === 204) {
     return undefined as T;
@@ -144,6 +154,37 @@ async function request<T>(
 
 export function apiGet<T>(path: string, query?: RequestOptions["query"]): Promise<T> {
   return request<T>("GET", path, { query });
+}
+
+const FILENAME_MARKER = 'filename="';
+
+/** Nome del file dalla Content-Disposition, senza dover ricostruire lato client
+ * una regola che il backend ha gia' applicato. */
+function filenameFromDisposition(header: string | null, fallback: string): string {
+  if (!header) return fallback;
+  const start = header.indexOf(FILENAME_MARKER);
+  if (start === -1) return fallback;
+  const rest = header.slice(start + FILENAME_MARKER.length);
+  const end = rest.indexOf('"');
+  const name = end === -1 ? rest : rest.slice(0, end);
+  return name.trim() === "" ? fallback : name;
+}
+
+/** Scarica un allegato di testo (lo script wrapper) tenendo il nome scelto dal
+ * server: il contenuto va in un Blob, non nella cache di react-query. */
+export async function apiGetFile(
+  path: string,
+  fallbackFilename: string,
+): Promise<{ content: string; filename: string }> {
+  const response = await rawRequest("GET", path);
+  const content = await response.text();
+  return {
+    content,
+    filename: filenameFromDisposition(
+      response.headers.get("content-disposition"),
+      fallbackFilename,
+    ),
+  };
 }
 
 export function apiPost<T>(path: string, body?: unknown): Promise<T> {

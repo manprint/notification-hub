@@ -11,6 +11,8 @@ from app.services.severity import (
     InvalidPatternError,
     compile_pattern,
     compiled_pattern_cache_info,
+    duration_exceeds_threshold,
+    parse_duration_ms,
     parse_exit_code,
     resolve_severity,
 )
@@ -85,6 +87,128 @@ def test_exit_code_zero_non_interviene():
 def test_exit_code_senza_politica_non_interviene():
     res = _resolve(content="qualsiasi", exit_code=7, exit_code_severity=None)
     assert res.source == SeveritySource.RECEIVER_DEFAULT
+
+
+# --- durata oltre la soglia ------------------------------------------------
+
+
+def _slow(**overrides):
+    """Risoluzione con una politica di durata attiva: soglia 10 minuti -> error."""
+    kwargs = {
+        "duration_threshold_seconds": 600,
+        "duration_severity": Severity.ERROR,
+    }
+    kwargs.update(overrides)
+    return _resolve(**kwargs)
+
+
+@pytest.mark.unit
+def test_durata_oltre_soglia_vince_sulle_regole():
+    rules = [FakeRule(priority=10, pattern="tutto bene", severity=Severity.DEBUG)]
+    res = _slow(rules=rules, content="tutto bene", duration_ms=1_200_000)
+    assert (res.severity, res.source) == (Severity.ERROR, SeveritySource.DURATION)
+    assert res.duration_exceeded is True
+
+
+@pytest.mark.unit
+def test_durata_sotto_soglia_lascia_decidere_le_regole():
+    rules = [FakeRule(priority=10, pattern="tutto bene", severity=Severity.DEBUG)]
+    res = _slow(rules=rules, content="tutto bene", duration_ms=300_000)
+    assert (res.severity, res.source) == (Severity.DEBUG, SeveritySource.RULE)
+    assert res.duration_exceeded is False
+
+
+@pytest.mark.unit
+def test_durata_esatta_sulla_soglia_non_scatta():
+    """La soglia e "avvisami se supera", non "durata massima ammessa"."""
+    res = _slow(content="", duration_ms=600_000)
+    assert res.source == SeveritySource.RECEIVER_DEFAULT
+
+
+@pytest.mark.unit
+def test_durata_senza_politica_non_interviene():
+    res = _resolve(content="", duration_ms=99_999_999)
+    assert res.source == SeveritySource.RECEIVER_DEFAULT
+    assert res.duration_exceeded is False
+
+
+@pytest.mark.unit
+def test_soglia_senza_durata_dichiarata_non_interviene():
+    """Un mittente che non usa il wrapper non manda l'header: la soglia tace."""
+    res = _slow(content="", duration_ms=None)
+    assert res.source == SeveritySource.RECEIVER_DEFAULT
+
+
+@pytest.mark.unit
+def test_fra_exit_code_e_durata_vince_la_piu_grave():
+    lenta = _slow(
+        content="",
+        duration_ms=1_200_000,
+        exit_code=1,
+        exit_code_severity=Severity.WARNING,
+    )
+    assert (lenta.severity, lenta.source) == (Severity.ERROR, SeveritySource.DURATION)
+
+    fallita = _slow(
+        content="",
+        duration_ms=1_200_000,
+        exit_code=1,
+        exit_code_severity=Severity.CRITICAL,
+    )
+    assert (fallita.severity, fallita.source) == (Severity.CRITICAL, SeveritySource.EXIT_CODE)
+    # Anche quando ha deciso l'exit code, la lentezza resta dichiarata.
+    assert fallita.duration_exceeded is True
+
+
+@pytest.mark.unit
+def test_pari_severity_fra_exit_code_e_durata_dichiara_exit_code():
+    res = _slow(
+        content="",
+        duration_ms=1_200_000,
+        exit_code=2,
+        exit_code_severity=Severity.ERROR,
+    )
+    assert (res.severity, res.source) == (Severity.ERROR, SeveritySource.EXIT_CODE)
+
+
+@pytest.mark.unit
+def test_severity_esplicita_batte_la_durata_ma_la_lentezza_resta_visibile():
+    res = _slow(header_severity="info", content="", duration_ms=1_200_000)
+    assert (res.severity, res.source) == (Severity.INFO, SeveritySource.EXPLICIT)
+    assert res.duration_exceeded is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("duration_ms", "soglia", "severity", "atteso"),
+    [
+        (600_001, 600, Severity.ERROR, True),
+        (600_000, 600, Severity.ERROR, False),
+        (600_001, None, Severity.ERROR, False),
+        (600_001, 600, None, False),
+        (None, 600, Severity.ERROR, False),
+    ],
+)
+def test_duration_exceeds_threshold(duration_ms, soglia, severity, atteso):
+    assert duration_exceeds_threshold(duration_ms, soglia, severity) is atteso
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("grezzo", "atteso"),
+    [
+        ("0", 0),
+        ("750123", 750123),
+        (" 42 ", 42),
+        ("-1", None),  # una durata negativa non e una durata
+        ("1.5", None),  # millisecondi interi, niente decimali
+        ("boh", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_parse_duration_ms(grezzo, atteso):
+    assert parse_duration_ms(grezzo) == atteso
 
 
 @pytest.mark.unit

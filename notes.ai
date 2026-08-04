@@ -60,3 +60,11 @@ Gestione errori ricorrenti (ad esempio in arco temporale di minuti configurabile
 Monitotaggio di durata di esecuzione dello script.
 Gestione dell'escalation.
 Integrazione con ITOP.
+
+
+***************************************
+***************************************
+
+2. Bug preesistente incontrato durante la prova, fuori dal tuo sviluppo: NOTIFYHUB_BOOTSTRAP_EMAIL con dominio special-use (.local, .test, .example) viene accettato dal bootstrap CLI ma rifiutato al login con 422 da email-validator — l'owner creato non può entrare. Dimmi se lo sistemo (validazione in bootstrap o allineamento fra i due), non l'ho toccato.
+
+Idea per dopo, non ora: ping di inizio esecuzione dal wrapper (X-Phase: start), per distinguere "cron non è partito" da "job partito alle 3 e mai finito perché la macchina è caduta a metà backup". Con i soli ping di fine i due casi sono indistinguibili — ma entrambi fanno scattare l'allarme, quindi la v1 non ne ha bisogno.

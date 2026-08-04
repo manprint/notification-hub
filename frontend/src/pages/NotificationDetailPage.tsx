@@ -5,8 +5,10 @@ import type { ApiError, NotificationDetailOut } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import ErrorBanner from "../components/ErrorBanner";
 import SeverityBadge from "../components/SeverityBadge";
+import { isSurveillanceSource, phaseLabel, severitySourceLabel } from "../lib/severitySource";
 import StatusPill from "../components/StatusPill";
 import { useSession } from "../hooks/useSession";
+import { formatDurationMs } from "../lib/duration";
 
 const DELETE_ALLOWED_ROLES = ["owner", "admin", "member"];
 
@@ -56,7 +58,7 @@ export default function NotificationDetailPage() {
       <div className="card">
         <SeverityBadge severity={data.severity} /> <StatusPill status={data.status} />
         <p>
-          Origine severity: <strong>{data.severity_source}</strong>
+          Origine severity: <strong>{severitySourceLabel(data.severity_source)}</strong>
           {data.severity_source === "rule" && data.matched_pattern && (
             <>
               {" "}
@@ -64,6 +66,25 @@ export default function NotificationDetailPage() {
             </>
           )}
         </p>
+        {isSurveillanceSource(data.severity_source) && (
+          <p className="card-hint">
+            Notifica generata da NotifyHub, non inviata da nessuno: la sorveglianza dell'attesa del
+            receiver si e' accorta che {data.severity_source === "missing" ? "un invio previsto non e' arrivato" : "gli invii sono ripresi dopo un'assenza"}.
+          </p>
+        )}
+        {data.duration_ms !== null && (
+          <p>
+            Durata esecuzione: <strong>{formatDurationMs(data.duration_ms)}</strong>
+          </p>
+        )}
+        {data.exit_code !== null && <p>Exit code: {data.exit_code}</p>}
+        {data.phase !== null && (
+          <p>
+            Fase dell'esecuzione: <strong>{phaseLabel(data.phase)}</strong>
+            {data.phase === "start" &&
+              " — ping di avvio: dice che il job e' partito, non com'e' andato."}
+          </p>
+        )}
         <p>Ricevuta: {new Date(data.received_at).toLocaleString("it-IT")}</p>
         {data.source_ip && <p>Sorgente: {data.source_ip}</p>}
       </div>

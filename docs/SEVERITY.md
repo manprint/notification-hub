@@ -7,8 +7,10 @@ configura quella decisione.
 - [La catena di precedenza](#la-catena-di-precedenza)
 - [1. Severity esplicita](#1-severity-esplicita)
 - [2. Exit code diverso da zero](#2-exit-code-diverso-da-zero)
-- [3. Regole di severity (analisi del contenuto)](#3-regole-di-severity-analisi-del-contenuto)
-- [4. Severity di default del receiver](#4-severity-di-default-del-receiver)
+- [3. Durata oltre la soglia](#3-durata-oltre-la-soglia)
+- [4. Regole di severity (analisi del contenuto)](#4-regole-di-severity-analisi-del-contenuto)
+- [5. Severity di default del receiver](#5-severity-di-default-del-receiver)
+- [Quando la notifica non arriva](#quando-la-notifica-non-arriva)
 - [Lo script wrapper `notifyhub-run.sh`](#lo-script-wrapper-notifyhub-runsh)
 - [Provare prima di mettere in produzione](#provare-prima-di-mettere-in-produzione)
 - [Dalla severity all'inoltro sui canali](#dalla-severity-allinoltro-sui-canali)
@@ -22,9 +24,10 @@ configura quella decisione.
 
 Ogni notifica riceve **una** severity fra `debug`, `info`, `warning`, `error`,
 `critical`. La sceglie il server al momento dell'ingestione, seguendo quattro
-passaggi in ordine fisso: chi invia può **dichiararla**, altrimenti un **exit
-code diverso da zero** la impone, altrimenti le **regole** la deducono dal
-contenuto, altrimenti vale la **severity di default**.
+passaggi in ordine fisso: chi invia può **dichiararla**, altrimenti la impone
+l'**esito dell'esecuzione** (exit code diverso da zero, oppure durata oltre la
+soglia configurata), altrimenti le **regole** la deducono dal contenuto,
+altrimenti vale la **severity di default**.
 
 Le regole sono di due tipi e vengono provate in quest'ordine: prima quelle
 scritte sul singolo receiver, poi quelle dei **preset** applicati — insiemi di
@@ -33,6 +36,11 @@ condivisi fra i receiver e modificabili dalla dashboard.
 
 La severity non è un'etichetta decorativa: è la soglia che decide se il
 messaggio finisce su Slack o Google Chat, o se resta solo in dashboard.
+
+Tutto questo vale per le notifiche che **arrivano**. Il guasto che non ne
+produce nessuna — macchina spenta, cron rimosso, rete assente — lo copre la
+[sorveglianza dell'attesa](#quando-la-notifica-non-arriva), che è l'unica cosa
+in questa guida a nascere dal server e non da un invio.
 
 ---
 
@@ -45,25 +53,33 @@ messaggio finisce su Slack o Google Chat, o se resta solo in dashboard.
                     └──────────────────┬───────────────────────┘
                                        │ no (o valore non valido)
                     ┌──────────────────▼───────────────────────┐
-                    │ 2. Exit code diverso da zero?            │
-                    │    header X-Exit-Code + politica del     │──sì──▶ severity_source = exit_code
-                    │    receiver                              │
+                    │ 2/3. Esito dell'esecuzione               │
+                    │  exit code != 0  (X-Exit-Code)           │──sì──▶ severity_source = exit_code
+                    │  durata > soglia (X-Duration-Ms)         │──sì──▶ severity_source = duration
+                    │  entrambi → vince la severity più grave  │
                     └──────────────────┬───────────────────────┘
-                                       │ assente, uguale a 0, o politica disattivata
+                                       │ nessuno dei due (header assenti, exit 0,
+                                       │ durata sotto soglia, politiche disattivate)
                     ┌──────────────────▼───────────────────────┐
-                    │ 3a. Regole scritte sul receiver          │
+                    │ 4a. Regole scritte sul receiver          │
                     │    match sul contenuto INTERO, in ordine │──sì──▶ severity_source = rule
                     └──────────────────┬───────────────────────┘
                                        │ nessuna ha fatto match
                     ┌──────────────────▼───────────────────────┐
-                    │ 3b. Regole dei preset applicati          │
+                    │ 4b. Regole dei preset applicati          │
                     │    nell'ordine dei preset                │──sì──▶ severity_source = preset_rule
                     └──────────────────┬───────────────────────┘
                                        │ nessuna regola ha fatto match
                     ┌──────────────────▼───────────────────────┐
-                    │ 4. Severity di default del receiver      │───────▶ severity_source = receiver_default
+                    │ 5. Severity di default del receiver      │───────▶ severity_source = receiver_default
                     └──────────────────────────────────────────┘
 ```
+
+Exit code e durata sono **due fatti indipendenti allo stesso livello**, non due
+passaggi in fila: se scattano entrambi vince la severity più grave delle due, e a
+pari severity la notifica dichiara `exit_code`. Nessuno dei due può nascondere
+l'altro — un job fallito con politica `warning` che ha anche sforato una soglia
+`error` esce `error`.
 
 La catena, con i valori configurati sul receiver che stai guardando, è
 riassunta anche in dashboard: dettaglio del receiver, riquadro **Come viene
@@ -145,7 +161,61 @@ solo, a ogni esecuzione.
 
 ---
 
-## 3. Regole di severity (analisi del contenuto)
+## 3. Durata oltre la soglia
+
+C'è un guasto che né l'exit code né nessuna regola sul contenuto sa vedere: il
+job che **finisce bene, ma troppo tardi**. Il backup notturno che di solito
+chiude in 5 minuti e stanotte ne ha impiegati 40 ha finito con exit code 0 e non
+ha stampato una riga di errore, ma qualcosa non va — un disco che sta morendo, un
+lock che non arriva, una rete che rallenta.
+
+Chi invia dichiara quanto è durata l'esecuzione, in millisecondi:
+
+```bash
+curl --data "@log.txt" -H "X-Duration-Ms: 1200000" http://notifyhub/ingest/SLUG
+```
+
+Cosa farne lo decide il **receiver**, nel suo dettaglio, con due campi che vanno
+sempre insieme:
+
+| Campo | Significato |
+|---|---|
+| **Soglia di durata** | Quantità + unità (secondi, minuti, ore). Vuota = nessun controllo. |
+| **Severity oltre la soglia di durata** | Severity applicata quando la durata supera la soglia. *nessun effetto* = controllo disattivato. |
+
+Impostarne uno solo è un errore (`422`): una soglia senza severity non saprebbe
+cosa assegnare, una severity senza soglia non scatterebbe mai. Per disattivare il
+controllo si svuotano entrambi.
+
+Il confronto è **stretto**: soglia di 10 minuti significa "avvisami se supera i
+10 minuti", quindi un'esecuzione di esattamente 10 minuti non fa scattare niente.
+
+Esempio della configurazione tipica — un backup che gira in 5 minuti, soglia a
+10, severity `error`:
+
+| Esecuzione | Exit code | Durata | Risultato |
+|---|---|---|---|
+| notte normale | 0 | 5m | `info` (default del receiver) |
+| notte lenta | 0 | 20m | **`error`**, `severity_source = duration` |
+| notte fallita | 1 | 30s | `critical` (politica sull'exit code) |
+| fallita e lenta | 1 | 20m | `critical` — vince la più grave delle due |
+
+Un valore non numerico o negativo viene ignorato come una severity esplicita non
+valida, e l'ingestione non fallisce.
+
+> **La durata viene registrata sempre**, anche senza nessuna soglia configurata:
+> resta nel dettaglio della notifica e nell'elenco, e la si ritrova nel messaggio
+> inviato ai canali. Serve anche a scoprire *dove* mettere la soglia — prima si
+> guarda quanto durano davvero le esecuzioni, poi si sceglie il numero. E se la
+> soglia viene aggiunta dopo, il [replay](#sui-messaggi-già-arrivati) mostra su
+> quali esecuzioni passate avrebbe fatto scattare l'allarme.
+
+Lo [script wrapper](#lo-script-wrapper-notifyhub-runsh) misura e invia questo
+header da solo, a ogni esecuzione: nel crontab non cambia niente.
+
+---
+
+## 4. Regole di severity (analisi del contenuto)
 
 È il cuore della configurazione: dashboard, dettaglio del receiver, sezione
 **Regole di severity**. Ogni regola ha:
@@ -373,7 +443,7 @@ Tre regole di scrittura, verificate da `tests/unit/test_severity_presets_catalog
 
 ---
 
-## 4. Severity di default del receiver
+## 5. Severity di default del receiver
 
 È l'ultima parola quando nessuna regola ha fatto match. Si imposta nel dettaglio
 del receiver, campo **Severity di default**, ed è anche il valore scelto alla
@@ -390,6 +460,140 @@ Come sceglierla:
 
 ---
 
+## Quando la notifica non arriva
+
+Un backup che fallisce manda un messaggio. Un backup che **non parte** non manda
+niente: la macchina è spenta, cron è stato disabilitato, la rete verso NotifyHub
+non c'è. Nessuna regola sul contenuto può vedere un contenuto che non esiste, e
+l'unico che può accorgersene è il server.
+
+Si dichiara sul receiver ogni quanto ci si aspetta un invio; un job di Celery
+beat controlla ogni minuto chi ha sforato e scrive una **notifica di assenza**
+con la severity configurata. Da lì in poi è una notifica come le altre: si vede
+in elenco, ha un dettaglio, e passa dallo stesso instradamento per severity verso
+Slack e Google Chat.
+
+### Configurazione
+
+| Campo del receiver | Significato |
+|---|---|
+| `expected_every_seconds` | intervallo fisso: "mi aspetto un invio ogni 24 ore" |
+| `expected_cron` + `expected_timezone` | la stessa riga che sta nel crontab: `0 3 * * 1-5`, col fuso in cui quella macchina la interpreta |
+| `expected_grace_seconds` | tolleranza: jitter di cron e durata del job |
+| `missing_severity` | severity della notifica di assenza. `NULL` su tutto = sorveglianza spenta |
+
+**Intervallo o cron, non entrambi.** L'intervallo è più semplice e non ha fusi
+orari; l'espressione cron serve ai job non equispaziati. `0 3 * * 1-5` con un
+intervallo fisso di 24 ore darebbe un falso allarme ogni sabato mattina, ed è
+esattamente il motivo per cui esistono entrambe le modalità.
+
+In dashboard: pagina del receiver → *Modifica receiver* → riquadro **Sorveglianza
+dell'attesa**. La vista di sola lettura mostra la politica, l'ultimo invio vero e
+la data entro cui è atteso il prossimo.
+
+### Come si conta la scadenza
+
+Con l'intervallo: `ultimo invio + intervallo + tolleranza`.
+
+Con il cron: si guarda l'ultima occorrenza prevista. Se l'invio di quella
+occorrenza è arrivato, si attende la prossima; se non è arrivato, la scadenza è
+quella, più la tolleranza. Il conto avviene nel fuso dichiarato, quindi `0 3 * * *`
+su `Europe/Rome` resta "le 3 di notte" anche nella notte in cui cambia l'ora
+legale.
+
+Un receiver che non ha mai ricevuto niente conta da quando la politica è entrata
+in vigore (`expected_since`), non dall'inizio dei tempi: appena si accende la
+sorveglianza c'è una finestra intera prima del primo allarme.
+
+### Una notifica per assenza, non una al minuto
+
+Quando l'assenza scatta, il receiver resta segnato (`missing_alerted_at`) e non
+produce altre notifiche: una macchina spenta per una settimana genera **una**
+notifica, non 10.080.
+
+Al primo invio vero la sorveglianza si riarma e scrive una notifica di
+**ripresa** con severity `info`, che chiude il cerchio sul canale dove era
+arrivato l'allarme. Le notifiche sintetiche non contano come invio: se
+contassero, l'assenza si riarmerebbe da sola.
+
+| Origine (`severity_source`) | Severity | Chi l'ha scritta |
+|---|---|---|
+| `missing` | `missing_severity` del receiver | il server, job `check_expected_schedules` |
+| `recovered` | sempre `info` | il server, allo stesso giro |
+
+Nella sezione **Notifiche** le due origini si leggono nella colonna *Origine* e
+si isolano col filtro *Origine della notifica* (`?source=missing`): "fammi vedere
+solo i job che non hanno inviato". Nel dettaglio, `source_ip` vuoto e la nota in
+testa dicono che il messaggio non l'ha mandato nessuno.
+
+### Non e' partito, o non ha finito?
+
+L'assenza dice che la conclusione non e' arrivata, non **perche'**. Sono due
+guasti diversi da cercare in posti diversi:
+
+- il cron non e' scattato (macchina spenta, riga rimossa dal crontab, unita
+  systemd disabilitata);
+- il job e' partito alle 3 e si e' interrotto a metà (macchina caduta, OOM killer,
+  riavvio, processo ucciso).
+
+Per distinguerli serve che qualcuno dica "sto partendo". Il wrapper lo fa con
+`--ping-start`: prima di eseguire il comando manda un ping con l'header
+`X-Phase: start` e severity `debug`.
+
+```cron
+0 3 * * *  /opt/notifyhub-run.sh -q --ping-start -- /usr/local/bin/backup.sh /dati
+```
+
+Il ping di avvio **non** e' un esito, e questo e' il punto:
+
+- aggiorna `receivers.last_start_at`, non `last_notification_at`. Se contasse come
+  conclusione, la sorveglianza tacerebbe proprio nel caso peggiore — il job morto
+  a metà lavoro;
+- viaggia con severity `debug` esplicita, cosi' nessuna regola sul contenuto puo'
+  promuovere un "avvio" a `critical` e mandarlo su Slack;
+- se non parte, il comando viene eseguito comunque: perdere un ping degrada la
+  diagnosi, fermare un backup per un ping perso sarebbe peggio del guasto.
+
+Con il dato disponibile la notifica di assenza cambia una riga:
+
+| Situazione | Cosa dice l'allarme |
+|---|---|
+| avvio dopo l'ultima conclusione | «l'esecuzione partita il … non ha mai inviato la conclusione: il job **E' partito e si e' interrotto**» |
+| nessun avvio dopo l'ultima conclusione | «non ne risulta partita nessun'altra: il job **non e' stato avviato**» |
+| nessun ping di avvio mai ricevuto | «non e' possibile dire … questo receiver non riceve ping di avvio (`--ping-start`)» |
+
+L'ultima riga e' voluta: senza il dato il sistema dichiara di non sapere invece di
+indovinare. Nell'elenco delle notifiche i ping di avvio portano la marca *avvio*,
+e in dashboard il receiver mostra *Ultimo avvio* accanto a *Ultima conclusione*.
+
+Il costo e' un invio in piu' per esecuzione (quota e rate limit compresi): per un
+backup notturno sono due notifiche al giorno, per un controllo ogni 5 minuti sono
+576. Per questo l'opzione e' esplicita e non attiva per default.
+
+
+### Trappole
+
+**`--only-on-failure` e la sorveglianza non convivono.** Se il job invia solo
+quando fallisce, ogni esecuzione riuscita è un'assenza e l'allarme scatta ogni
+giorno senza motivo. Con la sorveglianza attiva il wrapper deve inviare sempre;
+per non far comparire i successi sui canali basta abbassarne la severity
+(`--severity-ok debug`), non tacere.
+
+**Receiver disabilitato e tenant sospeso non allarmano.** Sono stati voluti, non
+guasti: sarebbero in assenza per definizione, per sempre.
+
+**Il guardiano non guarda se stesso.** Vive dentro NotifyHub: vede morire le
+macchine sorvegliate, non sé stesso. Se cade NotifyHub non se ne accorge nessuno,
+e per quello serve un controllo esterno che interroghi `/healthz`.
+
+**Tolleranza troppo stretta.** Un job che dura venti minuti e parte alle 3 arriva
+alle 3:20: con tolleranza di cinque minuti l'assenza scatta ogni notte. La
+tolleranza deve coprire il ritardo di partenza **più** la durata del job, perché
+la notifica parte a fine esecuzione.
+
+
+---
+
 ## Lo script wrapper `notifyhub-run.sh`
 
 `scripts/notifyhub-run.sh` esegue un comando, ne raccoglie l'output e lo invia a
@@ -399,11 +603,27 @@ NotifyHub insieme all'esito.
 notifyhub-run.sh -s SLUG_DEL_RECEIVER -- /usr/local/bin/backup.sh /dati
 ```
 
-Ogni invio porta l'header `X-Exit-Code` con l'exit code reale del comando. Il
-wrapper **non** decide la severity: la decide il receiver, con la politica del
-[passaggio 2](#2-exit-code-diverso-da-zero). Il risultato pratico con la
+**Da dove prenderlo.** Nella pagina del receiver c'è il pulsante **Scarica lo
+script**: restituisce questo stesso file con URL dell'istanza e slug già scritti
+in due variabili in cima, nel blocco `configurazione`. Le variabili restano
+modificabili a mano, e `NOTIFYHUB_URL`/`NOTIFYHUB_SLUG` e le opzioni `-u`/`-s`
+continuano a scavalcarle. L'URL è quella pubblica risolta dal server (reverse
+proxy e https compresi), la stessa mostrata come "URL di invio" nella pagina: non
+va indovinata, e non cambia di nascosto fra dashboard e script.
+
+Ogni invio porta due dati misurati dal wrapper:
+
+| Header | Contenuto |
+|---|---|
+| `X-Exit-Code` | exit code reale del comando |
+| `X-Duration-Ms` | durata dell'esecuzione in millisecondi |
+
+Il wrapper **non** decide la severity: la decidono le politiche del receiver, i
+[passaggi 2 e 3](#2-exit-code-diverso-da-zero). Il risultato pratico con la
 configurazione di default è "comando fallito = `critical`", ma la regola vive
-sul server e si cambia senza toccare le macchine.
+sul server e si cambia senza toccare le macchine — e la soglia di durata si
+aggiunge dalla dashboard su un crontab già in produzione, senza toccare niente
+sulle macchine.
 
 Rientrano nel caso "diverso da zero" anche il comando inesistente (exit 127) e
 il timeout di `--timeout` (exit 124).
@@ -416,13 +636,17 @@ code, a meno di `--strict`.
 ### Il messaggio prodotto
 
 ```
-[notifyhub] job=backup notturno esito=errore exit=3 durata=41s host=srv01 avvio=2026-08-03T03:00:01+02:00
+[notifyhub] job=backup notturno esito=errore exit=3 durata=41.320s (41320ms) host=srv01 avvio=2026-08-03T03:00:01+02:00
 [notifyhub] comando: /usr/local/bin/backup.sh /dati
 [notifyhub] output (66 byte):
 Avvio backup di /dati
 copiati 128 file
 ERRORE: disco pieno su /var
 ```
+
+La durata compare in forma leggibile e in millisecondi: `41.320s` sotto il
+minuto, `12m30s` sopra, `1h02m03s` oltre l'ora. È la stessa resa che si vede in
+dashboard e nel messaggio inviato ai canali.
 
 L'intestazione è testo come tutto il resto, quindi è aggredibile dalle regole
 (`esito=errore`, `exit=3`) se vuoi trattarla come contenuto. L'unico taglio che
@@ -452,7 +676,7 @@ segnala i byte omessi.
 
 ```cron
 NOTIFYHUB_URL=http://notifyhub.interno
-NOTIFYHUB_SLUG=Kj8mQ2xN7vB4pR9wLs3tYc
+NOTIFYHUB_SLUG=maritime-elog-test-cw2k2WWnmLalhpeyvfnCCQ
 
 # Al posto di:  0 3 * * * /usr/local/bin/backup.sh /dati
 0 3 * * *  /opt/notifyhub-run.sh -q -n "backup notturno" --timeout 7200 -- /usr/local/bin/backup.sh /dati
@@ -472,9 +696,11 @@ Nel dettaglio del receiver, sezione **Prova severity**, ci sono due strumenti.
 
 ### Su un testo inventato
 
-Si incolla un contenuto di esempio, opzionalmente un exit code simulato, e la
-dashboard mostra la severity risolta, il passaggio che ha deciso e — se ha vinto
-una regola — quale pattern ha fatto match. Non scrive nessuna notifica.
+Si incolla un contenuto di esempio, opzionalmente un exit code e una durata
+simulati, e la dashboard mostra la severity risolta, il passaggio che ha deciso e
+— se ha vinto una regola — quale pattern ha fatto match. Non scrive nessuna
+notifica. La durata simulata è il modo per provare una soglia senza dover
+aspettare che un job vada davvero lungo.
 
 ```bash
 curl -X POST http://notifyhub/api/v1/receivers/$RECEIVER_ID/test-severity \
@@ -488,16 +714,26 @@ curl -X POST http://notifyhub/api/v1/receivers/$RECEIVER_ID/test-severity \
   "severity": "error",
   "source": "rule",
   "matched_rule_id": "9c1e…",
-  "matched_pattern": "ERROR|ERRORE|FALL(ITO|IMENTO)"
+  "matched_pattern": "ERROR|ERRORE|FALL(ITO|IMENTO)",
+  "duration_exceeded": false
 }
 ```
+
+Con una durata simulata oltre la soglia (`{"content": "tutto liscio",
+"duration_ms": 1200000}`) la risposta diventa `"source": "duration"` e
+`"duration_exceeded": true`. Il campo `duration_exceeded` resta `true` anche
+quando ha deciso un altro passaggio: dice che quell'esecuzione era comunque
+lenta.
 
 ### Sui messaggi già arrivati
 
 Il pulsante **Prova sulle ultime notifiche ricevute** rivaluta gli ultimi
-messaggi realmente arrivati su quel receiver con le regole *attuali*, e mostra
-riga per riga la severity registrata all'epoca accanto a quella che avrebbero
-oggi, marcando con `cambia` quelle che differiscono.
+messaggi realmente arrivati su quel receiver con le politiche *attuali* — regole,
+politica sull'exit code e soglia di durata — e mostra riga per riga la severity
+registrata all'epoca accanto a quella che avrebbero oggi, marcando con `cambia`
+quelle che differiscono. Exit code e durata di ogni esecuzione sono conservati
+sulla notifica, quindi la rivalutazione è fedele: è il modo per vedere su quali
+notti passate una soglia appena scelta avrebbe suonato.
 
 È il modo per rispondere alla domanda che il testo inventato non copre: *questa
 modifica che effetto ha sul traffico vero?*
@@ -558,8 +794,12 @@ e perché è fallito.
   | 1 | `ERRORE\|ERROR\|FALL(ITO\|IMENTO)\|failed` | error |
   | 2 | `attenzione\|WARN\|spazio residuo` | warning |
 
-- Soglia del canale: `error`. Il backup riuscito resta in dashboard, quello
-  fallito arriva su Slack.
+- Soglia di durata: misura qualche notte a vuoto, guarda le durate registrate nel
+  dettaglio delle notifiche, poi imposta la soglia al **doppio** del tempo tipico
+  con severity `error`. Un backup da 5 minuti che ne impiega 20 diventa un allarme
+  anche se è finito con exit code 0.
+- Soglia del canale: `error`. Il backup riuscito e nei tempi resta in dashboard,
+  quello fallito o lento arriva su Slack.
 
 ### Log applicativo inoltrato in streaming
 
@@ -597,6 +837,14 @@ Una regola in cima alla lista che assegna `debug`:
 Il messaggio resta consultabile in dashboard ma non supera nessuna soglia di
 inoltro.
 
+### Job che deve stare dentro una finestra
+
+Un job notturno che deve finire prima che ricominci il lavoro degli utenti: la
+soglia non serve a dire "è andato male", ma "sta invadendo la finestra". Soglia di
+durata pari al tempo residuo della finestra, severity `warning`, politica
+sull'exit code lasciata a `critical`. Chi guarda Slack distingue subito il job
+fallito (`critical`) dal job che ha sforato (`warning`).
+
 ### Job dove il fallimento non è grave
 
 Un job che fallisce spesso e senza conseguenze: metti la politica sull'exit code
@@ -611,6 +859,9 @@ a `warning` invece di `critical`. Nessuna modifica agli script sulle macchine.
 | Scatta la regola sbagliata | Un'altra regola **più in alto nella lista** ha fatto match prima e ha fermato la catena. Guarda `matched_pattern` nel dettaglio della notifica, poi usa le frecce per spostare le regole. |
 | La regola non scatta mai | Pattern con lookahead o backreference (non esistono in RE2), oppure caratteri speciali non protetti: `[ERRORE]` va scritto `\[ERRORE\]`. Provalo con **Prova severity**. |
 | Tutto è `critical`, le regole sembrano ignorate | Il mittente sta inviando `X-Exit-Code` diverso da zero e la politica del receiver è `critical`: è il passaggio 2 che vince, `severity_source` dice `exit_code`. |
+| La soglia di durata non scatta mai | Il mittente non manda `X-Duration-Ms` (non passa dal wrapper, o è una versione precedente alla 1.2.0): senza durata dichiarata il passaggio 3 tace. Nel dettaglio della notifica il campo durata è vuoto. |
+| La soglia di durata scatta ma la notifica non arriva su Slack | La severity scelta per la soglia è sotto la soglia del canale: una soglia di durata `warning` su un canale a `error` resta in dashboard. |
+| Salvando la soglia di durata arriva `422` | Soglia e severity vanno impostate insieme: o entrambe, o nessuna delle due. |
 | La severity esplicita viene ignorata | Valore fuori dai cinque ammessi: viene scartato in silenzio. `severity_source` lo conferma. |
 | `severity_source` dice sempre `receiver_default` | Nessuna regola attiva sul receiver e nessun preset applicato, o tutte disattivate. Il riquadro **Catena effettiva** lo mostra a colpo d'occhio. |
 | Una regola di un preset non scatta | Un'altra regola vince prima: guarda la **Catena effettiva**, dove le regole proprie del receiver compaiono sopra quelle dei preset. |
@@ -635,8 +886,23 @@ l'ingestione che usa lo slug come sola credenziale.
 | Prova la catena su un testo | `POST /api/v1/receivers/{id}/test-severity` | viewer |
 | Rivaluta le ultime notifiche | `GET /api/v1/receivers/{id}/severity-rules/replay` | viewer |
 | Catena effettiva (regole proprie + preset, in ordine) | `GET /api/v1/receivers/{id}/severity-chain` | viewer |
-| Severity di default e politica exit code | `PATCH /api/v1/receivers/{id}` | member |
-| Invio | `POST /ingest/{slug}` con `X-Severity`, `?severity=`, `X-Exit-Code` | — (slug) |
+| Severity di default, politica exit code e soglia di durata | `PATCH /api/v1/receivers/{id}` | member |
+| Invio | `POST /ingest/{slug}` con `X-Severity`, `?severity=`, `X-Exit-Code`, `X-Duration-Ms` | — (slug) |
+
+Campi del receiver che governano i passaggi 2 e 3:
+
+```bash
+curl -X PATCH http://notifyhub/api/v1/receivers/$RECEIVER_ID \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"exit_code_severity": "critical",
+       "duration_threshold_seconds": 600,
+       "duration_severity": "error"}'
+```
+
+`duration_threshold_seconds` e `duration_severity` vanno inviati insieme; per
+disattivare il controllo si mandano entrambi a `null`. La durata e l'exit code di
+ogni esecuzione si rileggono su `GET /api/v1/notifications/{id}` (campi
+`duration_ms`, `exit_code`) e nell'elenco delle notifiche.
 
 Preset:
 
@@ -681,11 +947,13 @@ una volta; il backend rinumera 10, 20, 30...
 ```
 
 Politica sull'exit code — `null` è un valore, non "campo assente": disattiva la
-politica.
+politica. Vale allo stesso modo per la coppia della durata.
 
 ```json
 { "exit_code_severity": "warning" }
 { "exit_code_severity": null }
+{ "duration_threshold_seconds": 600, "duration_severity": "error" }
+{ "duration_threshold_seconds": null, "duration_severity": null }
 ```
 
 Risposte di errore rilevanti: `422` se il pattern non è compilabile da RE2 (il
@@ -707,12 +975,20 @@ receiver appartiene a un gruppo non associato all'utenza.
 | CRUD preset e loro regole | `backend/app/api/v1/presets.py` |
 | Tabelle dei preset | migrazione `0009` |
 | Scansione del contenuto in ingestione | `backend/app/services/ingest.py` |
-| Endpoint di ingestione (`X-Severity`, `?severity=`, `X-Exit-Code`) | `backend/app/api/ingest.py` |
+| Endpoint di ingestione (`X-Severity`, `?severity=`, `X-Exit-Code`, `X-Duration-Ms`) | `backend/app/api/ingest.py` |
 | CRUD regole, riordino, prova, replay | `backend/app/api/v1/receivers.py` |
 | Politica exit code per receiver | migrazione `0007`, colonna `receivers.exit_code_severity` |
+| Soglia di durata per receiver, durata ed exit code sulle notifiche | migrazione `0010`, colonne `receivers.duration_threshold_seconds`, `receivers.duration_severity`, `notifications.duration_ms`, `notifications.exit_code` |
+| Durata leggibile nei messaggi ai canali | `backend/app/outbound/formatters/duration.py`, `frontend/src/lib/duration.ts` |
 | Unicità delle priorità | migrazione `0008` |
 | Soglie di inoltro e override | `backend/app/services/outbound_resolver.py` |
 | Ordine delle severity | `backend/app/db/types.py` (`SEVERITY_ORDER`) |
 | Pannello regole in dashboard | `frontend/src/components/SeverityRulesPanel.tsx` |
 | Sezione Preset e pannello preset del receiver | `frontend/src/pages/PresetsPage.tsx`, `frontend/src/components/ReceiverPresetsPanel.tsx` |
 | Script wrapper | `scripts/notifyhub-run.sh` |
+| Sorveglianza dell'attesa: calcolo e testi | `backend/app/services/surveillance.py` |
+| Job che genera assenza e ripresa | `check_expected_schedules` in `backend/app/tasks/maintenance.py`, ogni 60s |
+| Colonne dell'attesa | migrazione `0012` su `receivers` |
+| Fase dell'esecuzione (`X-Phase`) | migrazione `0013`: `notifications.phase`, `receivers.last_start_at`; parser in `services/severity.py` |
+| Download dello script precompilato | `backend/app/services/wrapper_script.py`, endpoint `GET /api/v1/receivers/{id}/wrapper-script` |
+| Slug parlante e URL pubblica | `backend/app/services/slug.py`, `backend/app/core/urls.py`, migrazione `0011` |

@@ -3,6 +3,7 @@ import uuid
 
 import click
 
+from app.core.emails import InvalidEmailError, normalize_email
 from app.core.security import hash_password
 from app.db.session import async_session_factory_app, tenant_session
 from app.db.types import TenantStatus, UserRole, UserStatus
@@ -33,6 +34,14 @@ def bootstrap(tenant_name: str, email: str, password: str) -> None:
     non crea schema, solo dati. Va lanciato con `ALLOW_PUBLIC_REGISTRATION=false`
     per creare il primo tenant di un'istanza self-hosted (spec 10.2).
     """
+    # Stessa validazione dell'API, e forma normalizzata: un owner creato qui con
+    # un'email che il login rifiuta sarebbe un utente inutilizzabile, rimediabile
+    # solo con una UPDATE a mano (vedi app/core/emails.py).
+    try:
+        email = normalize_email(email)
+    except InvalidEmailError as exc:
+        raise click.BadParameter(str(exc), param_hint="--email") from exc
+
     asyncio.run(_bootstrap(tenant_name, email, password))
 
 

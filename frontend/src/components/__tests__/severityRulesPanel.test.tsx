@@ -11,14 +11,29 @@ import type { ReceiverOut, SeverityRuleOut } from "../../api/types";
 const receiver: ReceiverOut = {
   id: "r1",
   group_id: "g1",
-  slug: "Kj8mQ2xN7vB4pR9wLs3tYc",
+  slug: "maritime-backup-notturno-Kj8mQ2xN7vB4pR9wLs3tYc",
+  ingest_url:
+    "https://notifyhub.example.com/ingest/maritime-backup-notturno-Kj8mQ2xN7vB4pR9wLs3tYc",
   name: "Backup notturno",
   status: "active",
   ingestion_module: "http_raw",
   default_severity: "info",
   exit_code_severity: "critical",
+  duration_threshold_seconds: 600,
+  duration_severity: "error",
   max_body_bytes: 1_048_576,
   rate_limit_per_min: 60,
+  expected_every_seconds: null,
+  expected_cron: null,
+  expected_timezone: null,
+  expected_grace_seconds: null,
+  missing_severity: null,
+  last_notification_at: null,
+  last_start_at: null,
+  missing_alerted_at: null,
+  expected_since: null,
+  expected_deadline_at: null,
+  expected_late: false,
 };
 
 const twoRules: SeverityRuleOut[] = [
@@ -58,12 +73,22 @@ describe("SeverityRulesPanel", () => {
 
     const chain = await screen.findByRole("list");
     const passi = within(chain).getAllByRole("listitem");
-    expect(passi).toHaveLength(4);
+    expect(passi).toHaveLength(5);
     expect(passi[0].textContent).toContain("Severity esplicita");
     expect(passi[1].textContent).toContain("Exit code diverso da zero");
-    expect(passi[2].textContent).toContain("1 attiva"); // la seconda e' disattivata
-    expect(passi[2].textContent).toContain("preset applicati");
-    expect(passi[3].textContent).toContain("Default del receiver");
+    expect(passi[2].textContent).toContain("Durata oltre la soglia");
+    expect(passi[2].textContent).toContain("10m00s");
+    expect(passi[3].textContent).toContain("1 attiva"); // la seconda e' disattivata
+    expect(passi[3].textContent).toContain("preset applicati");
+    expect(passi[4].textContent).toContain("Default del receiver");
+  });
+
+  it("dice che la durata non ha effetto quando non c'e' soglia", async () => {
+    renderPanel(twoRules, { duration_threshold_seconds: null, duration_severity: null });
+
+    const chain = await screen.findByRole("list");
+    const passi = within(chain).getAllByRole("listitem");
+    expect(passi[2].textContent).toContain("nessuna soglia su questo receiver");
   });
 
   it("dice che l'exit code non ha effetto quando la politica e' disattivata", async () => {

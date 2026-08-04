@@ -3,6 +3,11 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
+# L'import ha un effetto: allinea il criterio di validazione delle email fra API
+# e CLI, ammettendo i domini di rete privata (vedi app/core/emails.py). Va prima
+# di qualunque EmailStr, ed e' qui perche' questo modulo e' l'unico che ne
+# dichiara.
+from app.core import emails as _emails  # noqa: F401
 from app.db.types import UserRole, UserStatus
 
 

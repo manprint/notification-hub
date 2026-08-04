@@ -16,6 +16,7 @@ from app.core.security import (
     new_refresh_token,
     verify_password,
 )
+from app.core.urls import public_base_url
 from app.db.session import tenant_session
 from app.db.types import TenantStatus, UserRole, UserStatus
 from app.models.invitation import Invitation
@@ -363,10 +364,10 @@ async def _send_invitation_email(email: str, invite_url: str) -> bool:
 @invitations_router.post("", response_model=InvitationOut, status_code=201)
 async def create_invitation(
     body: InvitationIn,
+    request: Request,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> InvitationOut:
-    settings = get_settings()
     if body.role == UserRole.OWNER and claims.role != UserRole.OWNER:
         raise Problem(
             status=403,
@@ -401,7 +402,7 @@ async def create_invitation(
 
     # Il token viaggia solo nel frammento dell'URL (mai trasmesso al server) e
     # la SPA lo gira nel body della POST di /invitations/accept (spec 9.2).
-    invite_url = f"{settings.notifyhub_public_base_url}/invite#token={token_plain}"
+    invite_url = f"{public_base_url(request)}/invite#token={token_plain}"
     email_sent = await _send_invitation_email(body.email, invite_url)
 
     return InvitationOut(

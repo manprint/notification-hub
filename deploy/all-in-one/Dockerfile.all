@@ -138,6 +138,9 @@ COPY --from=minio-downloader /usr/local/bin/minio /usr/local/bin/mc /usr/local/b
 COPY --from=frontend-builder /build/dist /usr/share/notifyhub/html
 
 COPY backend/ /opt/notifyhub/app/
+# Template del wrapper servito dalla pagina del receiver: stesso file del
+# repository, nessuna seconda copia da tenere allineata.
+COPY scripts/notifyhub-run.sh /opt/notifyhub/app/scripts/notifyhub-run.sh
 COPY deploy/all-in-one/config/ /etc/notifyhub/
 COPY deploy/all-in-one/rootfs/ /
 

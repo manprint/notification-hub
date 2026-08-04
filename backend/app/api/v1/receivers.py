@@ -1,15 +1,17 @@
 """Receiver e SeverityRule (spec 9.3): CRUD, rotate-slug, test-severity."""
 
-import secrets
 import uuid
+from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_claims, db, require_admin, require_member
 from app.core.errors import PROBLEM_TYPES, Problem
 from app.core.security import AccessClaims
+from app.core.urls import ingest_url, public_base_url
+from app.models.group import Group
 from app.models.receiver import Receiver
 from app.models.severity_preset import (
     ReceiverSeverityPreset,
@@ -24,6 +26,7 @@ from app.schemas.preset import (
     SeverityChainItemOut,
 )
 from app.schemas.receiver import (
+    DURATION_POLICY_HALF_CONFIGURED,
     DeleteImpactOut,
     ReceiverCreate,
     ReceiverOut,
@@ -36,14 +39,101 @@ from app.schemas.receiver import (
     SeverityRuleUpdate,
     TestSeverityIn,
     TestSeverityOut,
+    _validate_expected_fields,
 )
 from app.services.authz import accessible_group_ids, assert_group_access
 from app.services.rule_chain import load_evaluation_chain
 from app.services.severity import InvalidPatternError, compile_pattern, resolve_severity_async
+from app.services.slug import build_receiver_slug
+from app.services.surveillance import alert_deadline, schedule_from_receiver
+from app.services.wrapper_script import (
+    WrapperTemplateError,
+    load_template,
+    render_wrapper_script,
+    script_filename,
+)
 
 router = APIRouter(tags=["receivers"])
 
-SLUG_LENGTH_BYTES = 16  # secrets.token_urlsafe(16) -> 22 caratteri (spec 4.2)
+
+def _receiver_out(receiver: Receiver, request: Request) -> ReceiverOut:
+    """ReceiverOut con l'URL di ingestion risolta sulla richiesta in corso:
+    dietro reverse proxy e' l'unico posto che sa a quale nome ha risposto
+    l'istanza, e il valore deve coincidere con quello dello script scaricabile."""
+    out = ReceiverOut.model_validate(receiver)
+    out.ingest_url = ingest_url(receiver.slug, request)
+
+    # Scadenza dell'attesa: il conto con l'espressione cron e il suo fuso non si
+    # fa nel browser, e la dashboard deve mostrare la stessa data che usa il job.
+    schedule = schedule_from_receiver(receiver)
+    if schedule is not None:
+        reference = receiver.last_notification_at or receiver.expected_since
+        if reference is not None:
+            now = datetime.now(UTC)
+            deadline = alert_deadline(schedule, reference=reference, now=now)
+            out.expected_deadline_at = deadline
+            out.expected_late = now > deadline
+    return out
+
+
+def _apply_expected_policy(receiver: Receiver, body: ReceiverUpdate) -> None:
+    """Politica di attesa in PATCH, verificata sullo stato FINALE.
+
+    Vale lo stesso ragionamento della coppia della durata: una PATCH puo toccare
+    uno solo dei cinque campi lasciando gli altri a quello che era salvato,
+    quindi il controllo non puo stare nello schema. Qui si ricompone lo stato che
+    resterebbe scritto e si rifiuta con 422 leggibile invece di far scattare il
+    CHECK del database con un 500.
+    """
+    fields = (
+        "expected_every_seconds",
+        "expected_cron",
+        "expected_timezone",
+        "expected_grace_seconds",
+        "missing_severity",
+    )
+    if not any(field in body.model_fields_set for field in fields):
+        return
+
+    final = {
+        field: (
+            getattr(body, field) if field in body.model_fields_set else getattr(receiver, field)
+        )
+        for field in fields
+    }
+
+    try:
+        _validate_expected_fields(
+            every_seconds=final["expected_every_seconds"],
+            cron=final["expected_cron"],
+            timezone=final["expected_timezone"],
+            grace_seconds=final["expected_grace_seconds"],
+            severity=final["missing_severity"],
+        )
+    except ValueError as exc:
+        raise Problem(
+            status=422,
+            type=PROBLEM_TYPES["validation_error"],
+            title="Validation Error",
+            detail=str(exc),
+        ) from exc
+
+    was_active = receiver.missing_severity is not None
+    now_active = final["missing_severity"] is not None
+    for field, value in final.items():
+        setattr(receiver, field, value)
+
+    if not now_active:
+        # Sorveglianza spenta: niente stato residuo, altrimenti riaccendendola
+        # si erediterebbe un allarme di mesi prima.
+        receiver.expected_since = None
+        receiver.missing_alerted_at = None
+    elif not was_active:
+        # Appena accesa: si conta da adesso, non dall'inizio dei tempi. Un
+        # receiver che non ha mai ricevuto niente ha comunque una finestra intera
+        # prima del primo allarme.
+        receiver.expected_since = datetime.now(UTC)
+        receiver.missing_alerted_at = None
 
 
 async def _get_receiver_or_404(
@@ -66,21 +156,21 @@ async def _get_receiver_or_404(
     return receiver
 
 
-async def _assert_group_exists(
+async def _get_group_or_404(
     session: AsyncSession, tenant_id: uuid.UUID, group_id: uuid.UUID
-) -> None:
-    from app.models.group import Group
-
+) -> Group:
     result = await session.execute(
-        select(Group.id).where(Group.id == group_id, Group.tenant_id == tenant_id)
+        select(Group).where(Group.id == group_id, Group.tenant_id == tenant_id)
     )
-    if result.scalar_one_or_none() is None:
+    group = result.scalar_one_or_none()
+    if group is None:
         raise Problem(
             status=404,
             type=PROBLEM_TYPES["not_found"],
             title="Not Found",
             detail="Group not found.",
         )
+    return group
 
 
 async def _validate_max_body_bytes(
@@ -104,11 +194,12 @@ async def _validate_max_body_bytes(
 async def create_receiver(
     group_id: uuid.UUID,
     body: ReceiverCreate,
+    request: Request,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> ReceiverOut:
     tenant_id = uuid.UUID(claims.tid)
-    await _assert_group_exists(session, tenant_id, group_id)
+    group = await _get_group_or_404(session, tenant_id, group_id)
     await assert_group_access(session, claims, group_id, write=True)
     max_body_bytes = await _validate_max_body_bytes(session, tenant_id, body.max_body_bytes)
 
@@ -116,23 +207,35 @@ async def create_receiver(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
         group_id=group_id,
-        slug=secrets.token_urlsafe(SLUG_LENGTH_BYTES),
+        slug=build_receiver_slug(group.name, body.name),
         name=body.name,
         status="active",
         ingestion_module="http_raw",
         default_severity=body.default_severity,
         exit_code_severity=body.exit_code_severity,
+        duration_threshold_seconds=body.duration_threshold_seconds,
+        duration_severity=body.duration_severity,
+        expected_every_seconds=body.expected_every_seconds,
+        expected_cron=body.expected_cron,
+        expected_timezone=body.expected_timezone,
+        expected_grace_seconds=body.expected_grace_seconds,
+        missing_severity=body.missing_severity,
+        # L'attesa si conta da adesso: il receiver appena creato non ha ancora
+        # ricevuto niente, e senza questo istante il primo controllo non saprebbe
+        # da dove misurare.
+        expected_since=datetime.now(UTC) if body.missing_severity is not None else None,
         max_body_bytes=max_body_bytes,
         rate_limit_per_min=body.rate_limit_per_min,
     )
     session.add(receiver)
     await session.flush()
-    return ReceiverOut.model_validate(receiver)
+    return _receiver_out(receiver, request)
 
 
 @router.get("/groups/{group_id}/receivers", response_model=list[ReceiverOut])
 async def list_receivers(
     group_id: uuid.UUID,
+    request: Request,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> list[ReceiverOut]:
@@ -145,11 +248,12 @@ async def list_receivers(
         )
         .order_by(Receiver.name.asc())
     )
-    return [ReceiverOut.model_validate(r) for r in result.scalars().all()]
+    return [_receiver_out(r, request) for r in result.scalars().all()]
 
 
 @router.get("/receivers", response_model=list[ReceiverOut])
 async def list_all_receivers(
+    request: Request,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> list[ReceiverOut]:
@@ -165,18 +269,19 @@ async def list_all_receivers(
     result = await session.execute(
         select(Receiver).where(*conditions).order_by(Receiver.name.asc())
     )
-    return [ReceiverOut.model_validate(r) for r in result.scalars().all()]
+    return [_receiver_out(r, request) for r in result.scalars().all()]
 
 
 @router.get("/receivers/{receiver_id}", response_model=ReceiverOut)
 async def get_receiver(
     receiver_id: uuid.UUID,
+    request: Request,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> ReceiverOut:
     receiver = await _get_receiver_or_404(session, uuid.UUID(claims.tid), receiver_id)
     await assert_group_access(session, claims, receiver.group_id, write=False)
-    out = ReceiverOut.model_validate(receiver)
+    out = _receiver_out(receiver, request)
 
     from app.core.redis import get_redis
 
@@ -190,6 +295,7 @@ async def get_receiver(
 async def update_receiver(
     receiver_id: uuid.UUID,
     body: ReceiverUpdate,
+    request: Request,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> ReceiverOut:
@@ -214,8 +320,34 @@ async def update_receiver(
     if "exit_code_severity" in body.model_fields_set:
         receiver.exit_code_severity = body.exit_code_severity
 
+    # Soglia di durata: idem per il None, ma la coppia va verificata sullo stato
+    # FINALE. Una PATCH che cambia solo la severity su un receiver che ha gia la
+    # soglia e legittima; quella che ne lascia una sola valorizzata no, e va
+    # respinta qui con un 422 leggibile invece di far scattare il CHECK del
+    # database con un 500.
+    threshold = receiver.duration_threshold_seconds
+    duration_severity = receiver.duration_severity
+    if "duration_threshold_seconds" in body.model_fields_set:
+        threshold = body.duration_threshold_seconds
+    if "duration_severity" in body.model_fields_set:
+        duration_severity = body.duration_severity
+    if (threshold is None) != (duration_severity is None):
+        raise Problem(
+            status=422,
+            type=PROBLEM_TYPES["validation_error"],
+            title="Validation Error",
+            detail=DURATION_POLICY_HALF_CONFIGURED,
+        )
+    receiver.duration_threshold_seconds = threshold
+    receiver.duration_severity = duration_severity
+
+    _apply_expected_policy(receiver, body)
+
+    # Il rename NON riscrive lo slug: e' la credenziale con cui gli script in
+    # produzione stanno inviando, cambiarla di nascosto li spegnerebbe. Per
+    # riallinearlo ai nomi nuovi c'e' rotate-slug (vedi services/slug.py).
     await session.flush()
-    return ReceiverOut.model_validate(receiver)
+    return _receiver_out(receiver, request)
 
 
 @router.delete("/receivers/{receiver_id}", status_code=204)
@@ -232,15 +364,71 @@ async def delete_receiver(
 @router.post("/receivers/{receiver_id}/rotate-slug", response_model=ReceiverOut)
 async def rotate_slug(
     receiver_id: uuid.UUID,
+    request: Request,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> ReceiverOut:
     """Rigenera lo slug. Ad admin+ anche se il member puo creare receiver:
-    rigenerare uno slug rompe gli script gia in produzione (spec 4.1)."""
-    receiver = await _get_receiver_or_404(session, uuid.UUID(claims.tid), receiver_id)
-    receiver.slug = secrets.token_urlsafe(SLUG_LENGTH_BYTES)
+    rigenerare uno slug rompe gli script gia in produzione (spec 4.1).
+
+    Il token casuale e' nuovo e il prefisso viene ricostruito sui nomi ATTUALI
+    di gruppo e receiver: e' anche il modo per allineare lo slug dopo un rename,
+    e per dare la forma parlante a un receiver creato prima della 0011."""
+    tenant_id = uuid.UUID(claims.tid)
+    receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
+    group = await _get_group_or_404(session, tenant_id, receiver.group_id)
+    receiver.slug = build_receiver_slug(group.name, receiver.name)
     await session.flush()
-    return ReceiverOut.model_validate(receiver)
+    return _receiver_out(receiver, request)
+
+
+@router.get("/receivers/{receiver_id}/wrapper-script", response_class=Response)
+async def download_wrapper_script(
+    receiver_id: uuid.UUID,
+    request: Request,
+    claims: AccessClaims = Depends(current_claims),  # noqa: B008
+    session: AsyncSession = Depends(db),  # noqa: B008
+) -> Response:
+    """`scripts/notifyhub-run.sh` con URL e slug di questo receiver gia' dentro.
+
+    Serve lo stesso file del repository, con riscritte le due righe del blocco
+    "configurazione": nessuna seconda copia dello script da tenere allineata, e
+    l'URL e' quella pubblica risolta sulla richiesta, cioe' quella che vede il
+    browser dell'operatore (reverse proxy e https compresi).
+
+    Basta il permesso di lettura sul gruppo: lo script contiene lo slug, che la
+    pagina del receiver mostra comunque a chiunque possa vederla.
+    """
+    tenant_id = uuid.UUID(claims.tid)
+    receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
+    await assert_group_access(session, claims, receiver.group_id, write=False)
+    group = await _get_group_or_404(session, tenant_id, receiver.group_id)
+
+    try:
+        script = render_wrapper_script(
+            load_template(),
+            base_url=public_base_url(request),
+            slug=receiver.slug,
+            receiver_name=receiver.name,
+            group_name=group.name,
+        )
+    except WrapperTemplateError as exc:
+        raise Problem(
+            status=500,
+            type=PROBLEM_TYPES["internal_error"],
+            title="Internal Server Error",
+            detail=f"Wrapper script template unavailable: {exc}",
+        ) from exc
+
+    return Response(
+        content=script,
+        media_type="text/x-shellscript; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{script_filename(receiver.name)}"',
+            # Contiene la credenziale di ingestion: fuori da ogni cache.
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.get("/receivers/{receiver_id}/severity-rules", response_model=list[SeverityRuleOut])
@@ -500,6 +688,9 @@ async def test_severity(
         default_severity=receiver.default_severity,
         exit_code=body.exit_code,
         exit_code_severity=receiver.exit_code_severity,
+        duration_ms=body.duration_ms,
+        duration_threshold_seconds=receiver.duration_threshold_seconds,
+        duration_severity=receiver.duration_severity,
     )
 
     return TestSeverityOut(
@@ -509,6 +700,7 @@ async def test_severity(
         matched_pattern=resolution.matched_pattern,
         matched_preset_id=resolution.matched_preset_id,
         matched_preset_name=resolution.matched_preset_name,
+        duration_exceeded=resolution.duration_exceeded,
     )
 
 
@@ -557,12 +749,22 @@ async def replay_severity_rules(
             content = notification.content_preview
             truncated = True
 
+        # Rivalutazione della catena INTERA, non solo delle regole: exit code e
+        # durata di quella esecuzione sono persistiti sulla notifica, quindi il
+        # replay li rimette in gioco con le politiche di adesso. Senza, una
+        # notifica decisa dall'exit code risulterebbe sempre "cambiata" solo
+        # perche il replay non sapeva che il comando era fallito.
         resolution = await resolve_severity_async(
             header_severity=None,
             query_severity=None,
             rules=rules,
             content=content,
             default_severity=receiver.default_severity,
+            exit_code=notification.exit_code,
+            exit_code_severity=receiver.exit_code_severity,
+            duration_ms=notification.duration_ms,
+            duration_threshold_seconds=receiver.duration_threshold_seconds,
+            duration_severity=receiver.duration_severity,
         )
         items.append(
             SeverityReplayItemOut(

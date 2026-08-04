@@ -7,10 +7,10 @@ resta async, il worker no, per evitare un event loop per task.
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from app.core.config import get_settings
 from app.core.crypto import decrypt_secret
 from app.core.logging import get_logger
 from app.core.metrics import deliveries_total
+from app.core.urls import configured_base_url
 from app.db.sync_session import tenant_session_sync
 from app.db.types import DeliveryStatus
 from app.models.channel import DeliveryChannel
@@ -27,7 +27,6 @@ logger = get_logger(__name__)
 def dispatch_delivery(delivery_id: str, tenant_id: str) -> None:
     tid = uuid.UUID(tenant_id)
     did = uuid.UUID(delivery_id)
-    settings = get_settings()
 
     # Fase 1: marca `sending` e legge quel che serve per formattare il
     # messaggio. Transazione breve: non tiene un lock durante la chiamata
@@ -55,6 +54,9 @@ def dispatch_delivery(delivery_id: str, tenant_id: str) -> None:
 
         receiver = session.get(Receiver, notification.receiver_id)
         receiver_name = receiver.name if receiver else "receiver"
+        # La soglia sta sul receiver, la durata sulla notifica: servono insieme
+        # per dire nel messaggio non solo quanto e' durato, ma se era troppo.
+        duration_threshold_seconds = receiver.duration_threshold_seconds if receiver else None
 
         delivery.status = DeliveryStatus.SENDING
         delivery.locked_at = datetime.now(UTC)
@@ -65,8 +67,11 @@ def dispatch_delivery(delivery_id: str, tenant_id: str) -> None:
         severity = notification.severity
         content_preview = notification.content_preview
         content_size = notification.content_size
+        duration_ms = notification.duration_ms
         attempts_so_far = delivery.attempts
-        notification_url = f"{settings.notifyhub_public_base_url}/notifications/{notification.id}"
+        # Nel worker non c'e' nessuna richiesta da cui dedurre l'origine: qui
+        # l'unica autorita' e' NOTIFYHUB_PUBLIC_BASE_URL, normalizzata.
+        notification_url = f"{configured_base_url()}/notifications/{notification.id}"
 
     # Fase 2: la chiamata di rete, FUORI dalla transazione.
     result = send_webhook_sync(
@@ -77,6 +82,8 @@ def dispatch_delivery(delivery_id: str, tenant_id: str) -> None:
         content_preview=content_preview,
         content_size=content_size,
         notification_url=notification_url,
+        duration_ms=duration_ms,
+        duration_threshold_seconds=duration_threshold_seconds,
     )
 
     # Fase 3: scrive l'esito in una nuova transazione (spec 8.2).

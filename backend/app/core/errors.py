@@ -1,3 +1,5 @@
+import json
+from collections.abc import Sequence
 from typing import Any
 
 from fastapi import status
@@ -19,6 +21,26 @@ class Problem(Exception):
         self.detail = detail
         self.extra = extra or {}
         super().__init__(detail)
+
+
+def jsonable_validation_errors(errors: Sequence[Any]) -> list[dict[str, Any]]:
+    """Rende scrivibile in JSON l'elenco di `RequestValidationError.errors()`.
+
+    Pydantic ci mette dentro oggetti Python: un validator che solleva ValueError
+    lascia l'eccezione stessa in `ctx["error"]`, e un corpo binario finisce in
+    `input` come bytes. Senza questa ripulitura la risposta 422 fallirebbe in
+    serializzazione e l'utente vedrebbe un 500 al posto della spiegazione di che
+    cosa ha sbagliato nella richiesta.
+    """
+
+    def coerce(value: Any) -> Any:
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError):
+            return str(value)
+        return value
+
+    return [{key: coerce(value) for key, value in dict(error).items()} for error in errors]
 
 
 def problem_response(p: Problem) -> JSONResponse:

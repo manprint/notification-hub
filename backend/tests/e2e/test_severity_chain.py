@@ -171,6 +171,280 @@ async def test_exit_code_non_numerico_ignorato(api_client, two_tenants, owner_to
     assert resp.json()["severity_source"] == "receiver_default"
 
 
+# --- soglia di durata ------------------------------------------------------
+
+
+async def _make_slow_receiver(api_client, headers, tenant_id, **overrides) -> dict:
+    """Receiver con soglia a 10 minuti -> error, il caso della guida."""
+    body = {"duration_threshold_seconds": 600, "duration_severity": "error", **overrides}
+    return await _make_receiver(api_client, headers, tenant_id, **body)
+
+
+@pytest.mark.e2e
+async def test_durata_oltre_soglia_alza_la_severity(api_client, two_tenants, owner_token):
+    """Il caso d'uso: backup che di solito finisce in 5 minuti, soglia a 10, oggi
+    ne ha impiegati 20. Exit code 0 e nessuna riga di errore nel log."""
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, tenant_id, owner_token)
+    receiver = await _make_slow_receiver(api_client, headers, tenant_id)
+
+    resp = await api_client.post(
+        f"/ingest/{receiver['slug']}",
+        content="backup completato, 12000 file copiati",
+        headers={
+            "Content-Type": "text/plain",
+            "X-Exit-Code": "0",
+            "X-Duration-Ms": "1200000",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["severity"] == "error"
+    assert resp.json()["severity_source"] == "duration"
+
+
+@pytest.mark.e2e
+async def test_durata_sotto_soglia_non_interviene(api_client, two_tenants, owner_token):
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, tenant_id, owner_token)
+    receiver = await _make_slow_receiver(api_client, headers, tenant_id)
+
+    resp = await api_client.post(
+        f"/ingest/{receiver['slug']}",
+        content="backup completato",
+        headers={"Content-Type": "text/plain", "X-Exit-Code": "0", "X-Duration-Ms": "300000"},
+    )
+    assert resp.json()["severity"] == "info"
+    assert resp.json()["severity_source"] == "receiver_default"
+
+
+@pytest.mark.e2e
+async def test_senza_soglia_la_durata_resta_solo_un_dato(api_client, two_tenants, owner_token):
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, tenant_id, owner_token)
+    receiver = await _make_receiver(api_client, headers, tenant_id)
+    assert receiver["duration_threshold_seconds"] is None
+    assert receiver["duration_severity"] is None
+
+    resp = await api_client.post(
+        f"/ingest/{receiver['slug']}",
+        content="lentissimo ma nessuno ha chiesto di controllarlo",
+        headers={"Content-Type": "text/plain", "X-Duration-Ms": "99999999"},
+    )
+    assert resp.json()["severity_source"] == "receiver_default"
+
+    detail = await api_client.get(f"/api/v1/notifications/{resp.json()['id']}", headers=headers)
+    # Il dato viene comunque conservato: serve in dashboard e al replay se la
+    # soglia viene configurata dopo.
+    assert detail.json()["duration_ms"] == 99999999
+
+
+@pytest.mark.e2e
+async def test_fra_exit_code_e_durata_vince_la_piu_grave(api_client, two_tenants, owner_token):
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, tenant_id, owner_token)
+    # Fallimento poco grave (warning), soglia grave (error).
+    receiver = await _make_slow_receiver(
+        api_client, headers, tenant_id, exit_code_severity="warning"
+    )
+
+    lento_e_fallito = await api_client.post(
+        f"/ingest/{receiver['slug']}",
+        content="fallito, e lentamente",
+        headers={"Content-Type": "text/plain", "X-Exit-Code": "1", "X-Duration-Ms": "1200000"},
+    )
+    assert lento_e_fallito.json()["severity"] == "error"
+    assert lento_e_fallito.json()["severity_source"] == "duration"
+
+    # Politica sull'exit code piu grave della soglia: vince l'exit code.
+    patched = await api_client.patch(
+        f"/api/v1/receivers/{receiver['id']}",
+        json={"exit_code_severity": "critical"},
+        headers=headers,
+    )
+    assert patched.status_code == 200, patched.text
+
+    fallito_grave = await api_client.post(
+        f"/ingest/{receiver['slug']}",
+        content="fallito, e lentamente",
+        headers={"Content-Type": "text/plain", "X-Exit-Code": "1", "X-Duration-Ms": "1200000"},
+    )
+    assert fallito_grave.json()["severity"] == "critical"
+    assert fallito_grave.json()["severity_source"] == "exit_code"
+
+
+@pytest.mark.e2e
+async def test_severity_esplicita_batte_la_soglia(api_client, two_tenants, owner_token):
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, tenant_id, owner_token)
+    receiver = await _make_slow_receiver(api_client, headers, tenant_id)
+
+    resp = await api_client.post(
+        f"/ingest/{receiver['slug']}",
+        content="lento ma lo classifico io",
+        headers={
+            "Content-Type": "text/plain",
+            "X-Duration-Ms": "1200000",
+            "X-Severity": "debug",
+        },
+    )
+    assert resp.json()["severity"] == "debug"
+    assert resp.json()["severity_source"] == "explicit"
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize("valore", ["boh", "", "-500", "12.5"])
+async def test_durata_non_valida_ignorata(api_client, two_tenants, owner_token, valore):
+    """Un'intestazione scritta male non deve mai far fallire l'ingestion."""
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, tenant_id, owner_token)
+    receiver = await _make_slow_receiver(api_client, headers, tenant_id)
+
+    resp = await api_client.post(
+        f"/ingest/{receiver['slug']}",
+        content="messaggio",
+        headers={"Content-Type": "text/plain", "X-Duration-Ms": valore},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["severity_source"] == "receiver_default"
+
+
+@pytest.mark.e2e
+async def test_soglia_e_severity_vanno_configurate_insieme(api_client, two_tenants, owner_token):
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, tenant_id, owner_token)
+    group_id = await create_group(tenant_id, f"g-{uuid.uuid4().hex[:6]}")
+
+    mezza = await api_client.post(
+        f"/api/v1/groups/{group_id}/receivers",
+        json={"name": "solo soglia", "duration_threshold_seconds": 600},
+        headers=headers,
+    )
+    assert mezza.status_code == 422, mezza.text
+
+    receiver = await _make_slow_receiver(api_client, headers, tenant_id)
+    # PATCH che cambia solo la severity: legittima, la soglia c'e gia.
+    solo_severity = await api_client.patch(
+        f"/api/v1/receivers/{receiver['id']}",
+        json={"duration_severity": "critical"},
+        headers=headers,
+    )
+    assert solo_severity.status_code == 200
+    assert solo_severity.json()["duration_threshold_seconds"] == 600
+
+    # PATCH che smonterebbe una sola delle due: 422, non un 500 dal CHECK.
+    rotta = await api_client.patch(
+        f"/api/v1/receivers/{receiver['id']}",
+        json={"duration_severity": None},
+        headers=headers,
+    )
+    assert rotta.status_code == 422, rotta.text
+
+    # Entrambe a null: politica disattivata.
+    spenta = await api_client.patch(
+        f"/api/v1/receivers/{receiver['id']}",
+        json={"duration_threshold_seconds": None, "duration_severity": None},
+        headers=headers,
+    )
+    assert spenta.status_code == 200
+    assert spenta.json()["duration_severity"] is None
+
+
+@pytest.mark.e2e
+async def test_prova_severity_simula_la_durata(api_client, two_tenants, owner_token):
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, tenant_id, owner_token)
+    receiver = await _make_slow_receiver(api_client, headers, tenant_id)
+
+    resp = await api_client.post(
+        f"/api/v1/receivers/{receiver['id']}/test-severity",
+        json={"content": "tutto liscio", "duration_ms": 1_200_000},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["severity"] == "error"
+    assert resp.json()["source"] == "duration"
+    assert resp.json()["duration_exceeded"] is True
+
+
+@pytest.mark.e2e
+async def test_durata_ed_exit_code_persistiti_sulla_notifica(api_client, two_tenants, owner_token):
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, tenant_id, owner_token)
+    receiver = await _make_slow_receiver(api_client, headers, tenant_id)
+
+    ingested = await api_client.post(
+        f"/ingest/{receiver['slug']}",
+        content="backup lento",
+        headers={"Content-Type": "text/plain", "X-Exit-Code": "0", "X-Duration-Ms": "750123"},
+    )
+    notification_id = ingested.json()["id"]
+
+    detail = await api_client.get(f"/api/v1/notifications/{notification_id}", headers=headers)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["duration_ms"] == 750123
+    assert detail.json()["exit_code"] == 0
+
+    listed = await api_client.get(
+        f"/api/v1/notifications?receiver_id={receiver['id']}", headers=headers
+    )
+    riga = next(n for n in listed.json()["notifications"] if n["id"] == notification_id)
+    assert riga["duration_ms"] == 750123
+
+
+@pytest.mark.e2e
+async def test_replay_rivaluta_anche_la_soglia(api_client, two_tenants, owner_token):
+    """Soglia configurata DOPO che la notifica e arrivata: il replay deve dire
+    che quella esecuzione, con le politiche di adesso, sarebbe stata un error."""
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, tenant_id, owner_token)
+    receiver = await _make_receiver(api_client, headers, tenant_id)
+
+    ingested = await api_client.post(
+        f"/ingest/{receiver['slug']}",
+        content="backup completato",
+        headers={"Content-Type": "text/plain", "X-Exit-Code": "0", "X-Duration-Ms": "1200000"},
+    )
+    assert ingested.json()["severity"] == "info"
+
+    await api_client.patch(
+        f"/api/v1/receivers/{receiver['id']}",
+        json={"duration_threshold_seconds": 600, "duration_severity": "error"},
+        headers=headers,
+    )
+
+    replay = await api_client.get(
+        f"/api/v1/receivers/{receiver['id']}/severity-rules/replay", headers=headers
+    )
+    item = replay.json()["items"][0]
+    assert item["stored_severity"] == "info"
+    assert item["replayed_severity"] == "error"
+    assert item["replayed_source"] == "duration"
+    assert item["changed"] is True
+
+
+@pytest.mark.e2e
+async def test_replay_non_segnala_falsi_cambi_sull_exit_code(api_client, two_tenants, owner_token):
+    """Prima che l'exit code venisse persistito, una notifica decisa da lui
+    risultava sempre "cambiata": il replay non sapeva del fallimento."""
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, tenant_id, owner_token)
+    receiver = await _make_receiver(api_client, headers, tenant_id)
+
+    ingested = await api_client.post(
+        f"/ingest/{receiver['slug']}",
+        content="comando fallito",
+        headers={"Content-Type": "text/plain", "X-Exit-Code": "3"},
+    )
+    assert ingested.json()["severity_source"] == "exit_code"
+
+    replay = await api_client.get(
+        f"/api/v1/receivers/{receiver['id']}/severity-rules/replay", headers=headers
+    )
+    item = replay.json()["items"][0]
+    assert item["replayed_source"] == "exit_code"
+    assert item["changed"] is False
+
+
 # --- priorita --------------------------------------------------------------
 
 

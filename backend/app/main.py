@@ -6,7 +6,13 @@ from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException
 
 from app.core.config import get_settings
-from app.core.errors import PROBLEM_TYPES, Problem, problem_response, problem_type_for_status
+from app.core.errors import (
+    PROBLEM_TYPES,
+    Problem,
+    jsonable_validation_errors,
+    problem_response,
+    problem_type_for_status,
+)
 from app.core.logging import RequestIdMiddleware, configure_logging, get_logger
 
 
@@ -23,6 +29,10 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Il nome del file dello script wrapper viaggia qui: senza esporlo, una
+        # SPA servita da un'origine diversa dall'API scaricherebbe uno script
+        # senza nome.
+        expose_headers=["Content-Disposition"],
     )
     app.add_middleware(RequestIdMiddleware)
 
@@ -39,7 +49,7 @@ def create_app() -> FastAPI:
             type=PROBLEM_TYPES["validation_error"],
             title="Validation Error",
             detail="Request validation failed.",
-            extra={"errors": exc.errors()},
+            extra={"errors": jsonable_validation_errors(exc.errors())},
         )
         return problem_response(p)
 

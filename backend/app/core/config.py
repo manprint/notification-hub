@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     notifyhub_hard_max_body_bytes: int = 20971520
     allow_public_registration: bool = False
     notifyhub_public_base_url: str
+    # Percorso di scripts/notifyhub-run.sh, il template servito dal pulsante
+    # "Scarica lo script". Vuoto = si cerca accanto al codice (vedi
+    # app/services/wrapper_script.py): serve solo a deploy fuori standard.
+    notifyhub_wrapper_script_path: str | None = None
     notifyhub_webhook_host_allowlist: str = "hooks.slack.com,chat.googleapis.com"
     access_token_ttl_minutes: int = 15
     refresh_token_ttl_days: int = 30

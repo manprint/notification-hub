@@ -18,16 +18,16 @@ test in [`plan_NotifyHub/resume.md`](plan_NotifyHub/resume.md).
 
 | Area | Stato |
 |---|---|
-| Schema dati, migrazioni 0001-0009, RLS su tutte le tabelle | verificato: `alembic upgrade head` verde nel servizio `migrate` |
+| Schema dati, migrazioni 0001-0013, RLS su tutte le tabelle | verificato: `alembic upgrade head` verde nel servizio `migrate` |
 | Autenticazione JWT, refresh rotante, inviti, vincolo ultimo owner | presente |
 | Gestione gruppi/receiver/canali/severity-rules | presente, path conformi alla spec sezione 9 |
 | Preset di regole di severity (catalogo estensibile, editabili in dashboard) | presente: `bash-generic`, `postgres`, `mongodb`, `tar`, `rclone` |
 | Ingestion `POST /ingest/{slug}` | presente: normalizzazione UTF-8, idempotenza, rate limit IP+slug, catena di severity con RE2, offload MinIO |
 | Inoltro Slack/Google Chat, outbox, worker Celery | presente: verificato con consegna reale al webhook mock |
-| Job di manutenzione (7), quote, metriche, `/readyz` | presenti |
+| Job di manutenzione (8), quote, metriche, `/readyz` | presenti |
 | Dashboard React | presente, `frontend/`, build di produzione servita da nginx |
 
-`backend/`: 248 test (0 skippati), `ruff format`/`ruff check`/`mypy` puliti. `frontend/`: 52 test,
+`backend/`: 506 test (0 skippati), `ruff format`/`ruff check`/`mypy` puliti. `frontend/`: 67 test,
 lint e build puliti. `scripts/smoke.sh` eseguito per intero contro lo stack di produzione
 containerizzato: 22/22 assert, exit 0.
 
@@ -99,14 +99,36 @@ wget --post-data="messaggio" https://.../ingest/{slug}
 ```
 
 Per i job periodici c'e `scripts/notifyhub-run.sh`, che esegue un comando, ne invia l'output insieme
-all'header `X-Exit-Code` e restituisce comunque l'exit code originale al chiamante. Che severity
-dare a un'esecuzione fallita lo decide il receiver (default `critical`), non lo script:
+agli header `X-Exit-Code` e `X-Duration-Ms` (durata dell'esecuzione) e restituisce comunque l'exit
+code originale al chiamante. Che severity dare a un'esecuzione fallita, o a una durata oltre la
+soglia configurata sul receiver, lo decide il receiver (default: `critical` sul fallimento, nessuna
+soglia di durata), non lo script:
 
 ```bash
 scripts/notifyhub-run.sh -s {slug} -- /usr/local/bin/backup.sh /dati
 ```
 
-Come viene decisa la severity di una notifica e come si configurano le regole:
+Lo script non va compilato a mano: nella pagina di ogni receiver il pulsante **Scarica lo script**
+restituisce `notifyhub-run.sh` con URL dell'istanza e slug gia dentro, in due variabili in cima al
+file che restano modificabili (e che `NOTIFYHUB_URL`/`NOTIFYHUB_SLUG` e le opzioni `-u`/`-s`
+scavalcano comunque). L'URL e quella pubblica risolta dal server: con l'istanza dietro reverse proxy
+in https si valorizza `NOTIFYHUB_PUBLIC_BASE_URL`, e in mancanza di quella vale l'indirizzo da cui
+la dashboard sta rispondendo, `X-Forwarded-Proto` compreso. Lo stesso indirizzo compare come "URL di
+invio" nella pagina del receiver, cosi script e dashboard non possono divergere.
+
+Sul receiver si dichiara anche **ogni quanto ci si aspetta un invio** (intervallo
+fisso o la stessa espressione cron del crontab, col suo fuso). Se l'invio non
+arriva entro la scadenza piu la tolleranza, NotifyHub scrive da se una notifica di
+assenza con la severity configurata e la manda sui canali: e il caso che nessuna
+regola sul contenuto puo vedere, perche non c'e nessun contenuto. Una sola
+notifica per assenza, piu una di ripresa quando il job torna a inviare.
+
+Con `--ping-start` il wrapper annuncia anche l'avvio (`X-Phase: start`): serve a
+distinguere "il cron non e partito" da "il job e partito e si e interrotto a
+meta", che altrimenti arrivano come lo stesso silenzio.
+
+Come viene decisa la severity di una notifica, come si configurano le regole e
+come funziona la sorveglianza dell'attesa:
 [`docs/SEVERITY.md`](docs/SEVERITY.md).
 
 I receiver non devono partire da zero: esistono **preset di regole** già pronti
@@ -214,7 +236,9 @@ scripts/                   wrapper di invio, smoke test e webhook finto
 
 ## Sicurezza
 
-- Slug di 22 caratteri, 128 bit di entropia, unica credenziale dell'endpoint di ingestion.
+- Slug `gruppo-receiver-token`: il prefisso e leggibile, la credenziale e il token di 22 caratteri
+  in coda, 128 bit di entropia. Rinominare non riscrive lo slug (gli script in produzione
+  continuerebbero a inviare a un indirizzo morto): lo riallinea `rotate-slug`, ad admin+.
 - Risposta `404` uniforme per slug inesistente, receiver disabilitato e tenant sospeso: nessun
   oracolo di enumerazione.
 - Password con Argon2id, access token di 15 minuti, refresh token rotanti con rilevamento del

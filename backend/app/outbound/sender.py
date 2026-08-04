@@ -47,6 +47,8 @@ def _build_payload(
     content_preview: str,
     content_size: int,
     notification_url: str,
+    duration_ms: int | None = None,
+    duration_threshold_seconds: int | None = None,
 ) -> dict:
     if channel_type == ChannelType.SLACK:
         return build_slack_payload(
@@ -55,6 +57,8 @@ def _build_payload(
             content_preview=content_preview,
             content_size=content_size,
             notification_url=notification_url,
+            duration_ms=duration_ms,
+            duration_threshold_seconds=duration_threshold_seconds,
         )
     return build_google_chat_payload(
         receiver_name=receiver_name,
@@ -62,6 +66,8 @@ def _build_payload(
         content_preview=content_preview,
         content_size=content_size,
         notification_url=notification_url,
+        duration_ms=duration_ms,
+        duration_threshold_seconds=duration_threshold_seconds,
     )
 
 
@@ -74,6 +80,8 @@ def send_webhook_sync(
     content_preview: str,
     content_size: int,
     notification_url: str,
+    duration_ms: int | None = None,
+    duration_threshold_seconds: int | None = None,
 ) -> WebhookResult:
     """Versione sincrona, usata dal worker Celery (spec 8.4: engine sincrono
     dedicato, niente event loop per task)."""
@@ -84,6 +92,8 @@ def send_webhook_sync(
         content_preview=content_preview,
         content_size=content_size,
         notification_url=notification_url,
+        duration_ms=duration_ms,
+        duration_threshold_seconds=duration_threshold_seconds,
     )
     try:
         with httpx.Client(timeout=10.0) as client:

@@ -1,12 +1,21 @@
 import { type InfiniteData, useInfiniteQuery } from "@tanstack/react-query";
 import { apiGet } from "../api/client";
-import type { ApiError, NotificationListOut, NotificationStatus, Severity } from "../api/types";
+import type {
+  ApiError,
+  NotificationListOut,
+  NotificationStatus,
+  Severity,
+  SeveritySource,
+} from "../api/types";
 
 export interface NotificationFilters {
   group_id?: string;
   receiver_id?: string;
   status?: NotificationStatus;
   severity_min?: Severity;
+  // Chi ha deciso la severity: serve a isolare gli allarmi scritti dalla
+  // sorveglianza (missing/recovered) dai messaggi inviati davvero.
+  source?: SeveritySource;
   q?: string;
   from?: string;
   to?: string;

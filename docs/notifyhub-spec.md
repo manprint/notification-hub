@@ -67,7 +67,7 @@ Notification (1) ── (N) Delivery          [outbox di inoltro]
 | User | Account che accede al management, appartiene a un Tenant con un ruolo |
 | Group | Contenitore logico di Receiver correlati (es. "Server Produzione") |
 | Receiver | Endpoint univoco identificato da uno slug, verso cui si inviano notifiche |
-| Slug | Token urlsafe di 22 caratteri, generato random, identifica il Receiver nell'URL |
+| Slug | Identifica il Receiver nell'URL: `gruppo-receiver-token`, dove il token e' urlsafe di 22 caratteri generato random (l'unica parte che vale come credenziale) |
 | Notification | Singolo messaggio ricevuto da un Receiver |
 | Severity | Livello di gravità: `debug` < `info` < `warning` < `error` < `critical` |
 | SeverityRule | Regola regex (sintassi RE2) sul contenuto che assegna una severity |
@@ -172,13 +172,22 @@ Il rotate-slug resta ad admin+ anche se il `member` può creare receiver: rigene
 | id | UUID PK | |
 | tenant_id | FK | |
 | group_id | FK → groups.id | NOT NULL, `ON DELETE CASCADE` |
-| slug | text(22) unique **globale**, indexed | `secrets.token_urlsafe(16)` ⇒ 128 bit di entropia |
+| slug | text(120) unique **globale**, indexed | `{gruppo}-{receiver}-{token}`, dove il token è `secrets.token_urlsafe(16)` ⇒ 128 bit di entropia |
 | name | text | etichetta leggibile |
 | status | enum(active, disabled) | `disabled` ⇒ ingestion rifiutata con **404**, vedi §9.1 |
 | ingestion_module | text | default `http_raw` |
 | default_severity | enum(debug…critical) | default `info`. Ultimo anello della catena di severity |
 | max_body_bytes | int | **configurabile per receiver**. Validato a ≤ `tenants.max_body_bytes` |
 | rate_limit_per_min | int | default 60. **0 = nessun limite per-slug**; il limite per IP resta comunque attivo |
+| expected_every_seconds | int NULL | sorveglianza dell'attesa: intervallo fra un invio e il successivo |
+| expected_cron | text(100) NULL | alternativa all'intervallo: espressione cron a 5 campi, come in crontab |
+| expected_timezone | text(64) NULL | fuso dell'espressione cron (default `UTC`); solo con `expected_cron` |
+| expected_grace_seconds | int NULL | tolleranza sul ritardo |
+| missing_severity | enum NULL | severity della notifica di assenza. NULL su tutti = sorveglianza spenta (CHECK `ck_receivers_expected_policy`) |
+| last_start_at | timestamptz NULL | ultimo ping di avvio (`X-Phase: start`). Separato dalla conclusione: distingue "non e partito" da "partito e mai finito" |
+| expected_since | timestamptz NULL | da quando la politica e in vigore: riferimento per un receiver che non ha mai ricevuto |
+| last_notification_at | timestamptz NULL | ultimo invio **vero**, denormalizzato dall'ingestion (le notifiche sintetiche non lo toccano) |
+| missing_alerted_at | timestamptz NULL | assenza gia segnalata: una notifica per assenza, riarmata al primo invio vero |
 | created_at, updated_at | timestamptz | |
 
 ```sql
@@ -186,6 +195,25 @@ CREATE INDEX ON receivers (tenant_id, group_id);   -- filtro group_id delle noti
 ```
 
 > Lo slug è unique globalmente e non per tenant: l'URL `/ingest/{slug}` deve risolvere senza contesto di tenant.
+
+**Forma dello slug** — `maritime-elog-test-cw2k2WWnmLalhpeyvfnCCQ`: nome del gruppo, nome del receiver (ridotti a `[a-z0-9-]`, max 32 caratteri ciascuno, omessi se non traducibili) e in coda il token casuale di 22 caratteri, che è l'unica parte che vale come credenziale. Il prefisso rende leggibile una riga di crontab o un log di nginx, e non tocca l'entropia.
+
+Il prefisso è una fotografia dei nomi al momento della creazione, non un riferimento vivo: **rinominare gruppo o receiver non riscrive lo slug**, perché cambiarlo spegnerebbe di nascosto ogni script già in produzione. Per riallinearlo c'è `rotate-slug`, che è esplicito e resta ad admin+. Gli slug creati prima della migrazione `0011` (solo token) restano validi e prendono la forma nuova al primo rotate.
+
+> **Sorveglianza dell'attesa (dead man's switch).** Le nove colonne `expected_*`,
+> `missing_*` e `last_notification_at` servono a un caso che la catena di severity
+> non può coprire: la notifica che **non arriva**. Si dichiara ogni quanto ci si
+> aspetta un invio (intervallo fisso oppure espressione cron col suo fuso, mai
+> entrambi) e con quale tolleranza; il job `check_expected_schedules` (§11) gira
+> ogni 60 secondi e per chi ha sforato scrive una notifica sintetica con
+> `severity_source = 'missing'` e la severity configurata, che passa
+> dall'instradamento per severity come qualunque altra. Una sola notifica per
+> assenza: `missing_alerted_at` la registra e si riarma al primo invio vero, che
+> produce anche una notifica `recovered` con severity `info`.
+>
+> Le notifiche sintetiche non aggiornano `last_notification_at`: se lo facessero,
+> l'assenza si riarmerebbe da sola. Receiver `disabled` e tenant `suspended` non
+> vengono sorvegliati, perché sarebbero in assenza per definizione.
 
 #### `severity_rules`
 | Campo | Tipo | Note |
@@ -393,6 +421,7 @@ I moduli si registrano in un registry (`INGESTION_MODULES: dict[str, IngestionMo
 ### 6.2 Modulo v1 — `http_raw`
 
 - `POST /ingest/{slug}` con corpo testo semplice (`text/plain` o `Content-Type` assente)
+- Header opzionale `X-Phase: start|end`: dichiara la fase dell'esecuzione. `start` e' il ping di avvio del wrapper e aggiorna `receivers.last_start_at` **invece** della conclusione; assente o non valido = non dichiarata (invariante I-7)
 - Nessun parsing: il body diventa `content`
 - Severity esplicita accettata da header `X-Severity` o query param `?severity=`
 - Compatibile con:
@@ -626,7 +655,8 @@ Il token di invito viaggia nel corpo della richiesta e non nel path: un URL con 
 | DELETE | `/api/v1/groups/{id}` | Elimina in cascata. Richiede `?confirm={nome esatto del gruppo}` |
 | GET/POST | `/api/v1/groups/{id}/receivers` | Lista / crea receiver (genera lo slug) |
 | GET/PATCH/DELETE | `/api/v1/receivers/{id}` | Dettaglio, rinomina/abilita/limiti, elimina |
-| POST | `/api/v1/receivers/{id}/rotate-slug` | Rigenera lo slug (admin+, invalida gli script esistenti) |
+| POST | `/api/v1/receivers/{id}/rotate-slug` | Rigenera lo slug (admin+, invalida gli script esistenti). Nuovo token, prefisso ricostruito sui nomi attuali |
+| GET | `/api/v1/receivers/{id}/wrapper-script` | `scripts/notifyhub-run.sh` precompilato con URL pubblica e slug, `text/x-shellscript` + `Content-Disposition: attachment` |
 | GET/POST | `/api/v1/receivers/{id}/severity-rules` | Lista / crea regola |
 | PATCH/DELETE | `/api/v1/severity-rules/{id}` | Modifica / elimina regola |
 | POST | `/api/v1/receivers/{id}/test-severity` | Dato un testo di prova, restituisce la severity risolta e quale regola ha vinto |
@@ -730,6 +760,7 @@ Job Celery Beat. Tutti girano con il ruolo `notifyhub_app`, senza alcun privileg
 | `drain_object_deletions` | ogni 10 min | Svuota `pending_object_deletions` cancellando gli oggetti da MinIO. Dopo 10 tentativi falliti la riga resta e alimenta una metrica di allarme |
 | `purge_orphan_objects` | ogni notte 04:00 | Elimina gli oggetti del bucket più vecchi di 24h senza riga corrispondente in `notifications.storage_key`. Recupera i PUT riusciti con commit fallito |
 | `recompute_tenant_usage` | ogni notte 04:30 | Ricalcola lo spazio occupato per tenant (F7, alimenta `max_storage_bytes`) |
+| `check_expected_schedules` | ogni 60 s | **Sorveglianza dell'attesa** (§4.2, `receivers.expected_*`): per ogni tenant attivo confronta `last_notification_at` con la scadenza dichiarata (intervallo o cron + tolleranza) e scrive una notifica sintetica `severity_source = 'missing'` per chi ha sforato, una `recovered` (`info`) per chi e' tornato a inviare. Una sola notifica per assenza, riarmata al primo invio vero |
 
 ⚠️ *Partitioning mensile di `notifications` su `received_at`: rimandato a fase 2. Attenzione, quando si farà: il trigger `AFTER DELETE` per gli oggetti non scatta su `DROP PARTITION` — serve una passata esplicita che accodi le `storage_key` della partizione prima del drop.*
 

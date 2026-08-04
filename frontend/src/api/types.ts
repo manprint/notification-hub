@@ -90,23 +90,60 @@ export interface ReceiverChannelOverrideOut {
 export type SeveritySource =
   | "explicit"
   | "exit_code"
+  | "duration"
+  // Notifiche scritte dal server, non inviate da nessuno: la sorveglianza
+  // dell'attesa segnala l'invio che non e' arrivato (`missing`) e la ripresa
+  // degli invii dopo un'assenza (`recovered`).
+  | "missing"
+  | "recovered"
   | "rule"
   | "preset_rule"
   | "receiver_default";
 
+/** Fase dichiarata dal mittente nell'header X-Phase. `null` = non dichiarata:
+ *  tutto lo storico e qualunque invio fatto a mano. */
+export type NotificationPhase = "start" | "end";
+
 export interface ReceiverOut {
   id: string;
   group_id: string;
+  // `gruppo-receiver-token`: il prefisso e' leggibile, gli ultimi 22 caratteri
+  // sono la credenziale casuale.
   slug: string;
+  // URL completa di invio, decisa dal backend sulla richiesta in corso (reverse
+  // proxy e https compresi) e identica a quella scritta nello script scaricabile.
+  ingest_url: string;
   name: string;
   status: ReceiverStatus;
   ingestion_module: string;
   default_severity: Severity;
   // null = l'header X-Exit-Code non influenza la severity.
   exit_code_severity: Severity | null;
+  // Le due viaggiano in coppia: null su entrambe = la durata dell'esecuzione
+  // (header X-Duration-Ms) non influenza la severity. Il backend rifiuta con
+  // 422 una coppia con una sola delle due valorizzata.
+  duration_threshold_seconds: number | null;
+  duration_severity: Severity | null;
   max_body_bytes: number;
   rate_limit_per_min: number;
   rejected_last_24h?: number;
+  // Sorveglianza dell'attesa (dead man's switch): ogni quanto ci si aspetta un
+  // invio. Uno solo fra intervallo ed espressione cron; null su tutto =
+  // sorveglianza spenta.
+  expected_every_seconds: number | null;
+  expected_cron: string | null;
+  expected_timezone: string | null;
+  expected_grace_seconds: number | null;
+  missing_severity: Severity | null;
+  // Stato, calcolato dal server: la scadenza col cron e il suo fuso non si
+  // calcola nel browser.
+  last_notification_at: string | null;
+  // Ultimo ping di avvio: distingue "non e partito" da "partito e mai finito".
+  last_start_at: string | null;
+  missing_alerted_at: string | null;
+  expected_since: string | null;
+  expected_deadline_at: string | null;
+  expected_late: boolean;
 }
 
 export interface SeverityReplayItemOut {
@@ -146,6 +183,9 @@ export interface TestSeverityOut {
   matched_pattern: string | null;
   matched_preset_id?: string | null;
   matched_preset_name?: string | null;
+  // Vero anche quando la severity l'ha decisa un altro passo: dice che la durata
+  // simulata avrebbe comunque sforato la soglia.
+  duration_exceeded?: boolean;
 }
 
 export interface SeverityPresetRuleOut {
@@ -254,6 +294,13 @@ export interface NotificationListItemOut {
   storage_backend: "inline" | "object";
   severity: Severity;
   severity_source: string;
+  // "start" = ping di avvio, "end" = notifica che chiude l'esecuzione. In elenco
+  // serve a non confondere un avvio con un esito.
+  phase: NotificationPhase | null;
+  // Dati dell'esecuzione dichiarati dal mittente: null quando la notifica non
+  // arriva dal wrapper notifyhub-run.sh.
+  duration_ms: number | null;
+  exit_code: number | null;
   status: NotificationStatus;
   received_at: string;
 }
@@ -274,7 +321,10 @@ export interface NotificationDetailOut {
   content_normalized: boolean;
   severity: Severity;
   severity_source: string;
+  phase: NotificationPhase | null;
   matched_pattern: string | null;
+  duration_ms: number | null;
+  exit_code: number | null;
   status: NotificationStatus;
   received_at: string;
   source_ip: string | null;

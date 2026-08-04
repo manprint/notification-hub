@@ -5,16 +5,16 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
 from app.api.deps import current_claims, db, require_member
-from app.core.config import get_settings
 from app.core.errors import PROBLEM_TYPES, Problem
 from app.core.security import AccessClaims
-from app.db.types import NotificationStatus, Severity
+from app.core.urls import public_base_url
+from app.db.types import NotificationStatus, Severity, SeveritySource
 from app.models.notification import Notification
 from app.models.receiver import Receiver
 from app.schemas.notification import (
@@ -58,6 +58,7 @@ async def _apply_filters(
     group_id: uuid.UUID | None,
     receiver_id: uuid.UUID | None,
     severity_min: Severity | None,
+    source: SeveritySource | None,
     q: str | None,
     from_: datetime | None,
     to: datetime | None,
@@ -72,6 +73,11 @@ async def _apply_filters(
         conditions.append(Notification.receiver_id == receiver_id)
     if severity_min is not None:
         conditions.append(Notification.severity >= severity_min)
+    if source is not None:
+        # Chi ha deciso la severity, che per 'missing' e 'recovered' vuol dire
+        # anche "chi ha scritto la notifica": e il filtro con cui si isolano gli
+        # allarmi della sorveglianza dai messaggi inviati davvero.
+        conditions.append(Notification.severity_source == source)
     if q is not None:
         conditions.append(
             func.to_tsvector("simple", Notification.content_preview).op("@@")(
@@ -107,6 +113,7 @@ async def list_notifications(
     receiver_id: uuid.UUID | None = Query(default=None),  # noqa: B008
     status_filter: NotificationStatus | None = Query(default=None, alias="status"),  # noqa: B008
     severity_min: Severity | None = Query(default=None),  # noqa: B008
+    source: SeveritySource | None = Query(default=None),  # noqa: B008
     q: str | None = Query(default=None),  # noqa: B008
     from_: datetime | None = Query(default=None, alias="from"),  # noqa: B008
     to: datetime | None = Query(default=None),  # noqa: B008
@@ -127,6 +134,7 @@ async def list_notifications(
         group_id=group_id,
         receiver_id=receiver_id,
         severity_min=severity_min,
+        source=source,
         q=q,
         from_=from_,
         to=to,
@@ -184,6 +192,9 @@ async def list_notifications(
                 storage_backend=n.storage_backend.value,
                 severity=n.severity,
                 severity_source=n.severity_source,
+                phase=n.phase,
+                duration_ms=n.duration_ms,
+                exit_code=n.exit_code,
                 status=n.status,
                 received_at=n.received_at,
             )
@@ -219,16 +230,16 @@ async def _get_notification_or_404(
 @router.get("/{notification_id}", response_model=NotificationDetailOut)
 async def get_notification(
     notification_id: uuid.UUID,
+    request: Request,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> NotificationDetailOut:
     notification = await _get_notification_or_404(session, claims, notification_id)
-    settings = get_settings()
     content_url = None
     if notification.storage_backend == "object":
-        content_url = (
-            f"{settings.notifyhub_public_base_url}/api/v1/notifications/{notification_id}/content"
-        )
+        # Origine risolta sulla richiesta: dietro reverse proxy il link deve
+        # portare al nome pubblico, non a quello interno dell'API (core/urls.py).
+        content_url = f"{public_base_url(request)}/api/v1/notifications/{notification_id}/content"
 
     return NotificationDetailOut(
         id=str(notification.id),
@@ -240,7 +251,10 @@ async def get_notification(
         content_normalized=notification.content_normalized,
         severity=notification.severity,
         severity_source=notification.severity_source,
+        phase=notification.phase,
         matched_pattern=notification.matched_pattern,
+        duration_ms=notification.duration_ms,
+        exit_code=notification.exit_code,
         status=notification.status,
         received_at=notification.received_at,
         source_ip=notification.source_ip,
@@ -281,6 +295,7 @@ async def get_notification_content(
 async def mark_notification_status(
     notification_id: uuid.UUID,
     body: MarkStatusIn,
+    request: Request,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> NotificationDetailOut:
@@ -288,12 +303,9 @@ async def mark_notification_status(
     notification.status = body.status
     await session.flush()
 
-    settings = get_settings()
     content_url = None
     if notification.storage_backend == "object":
-        content_url = (
-            f"{settings.notifyhub_public_base_url}/api/v1/notifications/{notification_id}/content"
-        )
+        content_url = f"{public_base_url(request)}/api/v1/notifications/{notification_id}/content"
 
     return NotificationDetailOut(
         id=str(notification.id),
@@ -305,7 +317,10 @@ async def mark_notification_status(
         content_normalized=notification.content_normalized,
         severity=notification.severity,
         severity_source=notification.severity_source,
+        phase=notification.phase,
         matched_pattern=notification.matched_pattern,
+        duration_ms=notification.duration_ms,
+        exit_code=notification.exit_code,
         status=notification.status,
         received_at=notification.received_at,
         source_ip=notification.source_ip,
@@ -326,6 +341,7 @@ async def bulk_mark_read(
         group_id=body.group_id,
         receiver_id=body.receiver_id,
         severity_min=body.severity_min,
+        source=body.source,
         q=body.q,
         from_=body.from_,
         to=body.to,

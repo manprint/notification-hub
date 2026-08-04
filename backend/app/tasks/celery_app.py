@@ -47,6 +47,14 @@ celery_app.conf.update(
             "task": "app.tasks.maintenance.purge_orphan_objects",
             "schedule": crontab(hour=4, minute=0),
         },
+        # Sorveglianza dell'attesa: ogni minuto, perche' la tolleranza piu'
+        # piccola che si possa configurare e' dell'ordine dei minuti e un job che
+        # gira ogni ora renderebbe l'allarme inutilmente tardivo. Costa una query
+        # indicizzata per tenant sui soli receiver sorvegliati.
+        "check-expected-schedules": {
+            "task": "app.tasks.maintenance.check_expected_schedules",
+            "schedule": 60,
+        },
         "recompute-tenant-usage": {
             "task": "app.tasks.maintenance.recompute_tenant_usage",
             "schedule": crontab(hour=4, minute=30),

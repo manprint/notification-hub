@@ -13,21 +13,15 @@ import type {
 import ErrorBanner from "./ErrorBanner";
 import SeverityBadge from "./SeverityBadge";
 import { useSession } from "../hooks/useSession";
+import { formatDurationSeconds } from "../lib/duration";
 import { MEMBER_ROLES, hasRole } from "../lib/roles";
+import { severitySourceLabel } from "../lib/severitySource";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
 
-const SOURCE_LABELS: Record<string, string> = {
-  explicit: "severity esplicita",
-  exit_code: "exit code",
-  rule: "regola del receiver",
-  preset_rule: "regola di un preset",
-  receiver_default: "default del receiver",
-};
-
-function sourceLabel(source: string): string {
-  return SOURCE_LABELS[source] ?? source;
-}
+// Etichette condivise con l'elenco e il dettaglio delle notifiche: la stessa
+// origine non puo' chiamarsi in due modi diversi in due schermate.
+const sourceLabel = severitySourceLabel;
 
 /** Riassunto della catena con la configurazione reale di questo receiver: è la
  *  risposta alla domanda "chi decide la severity, e in che ordine". */
@@ -52,6 +46,18 @@ function SeverityChainSummary({
           </>
         ) : (
           <em>nessun effetto (disattivato su questo receiver)</em>
+        )}
+      </li>
+      <li>
+        <strong>Durata oltre la soglia</strong> — con l'header <code>X-Duration-Ms</code>:{" "}
+        {receiver.duration_threshold_seconds !== null && receiver.duration_severity !== null ? (
+          <>
+            oltre {formatDurationSeconds(receiver.duration_threshold_seconds)} diventa{" "}
+            <SeverityBadge severity={receiver.duration_severity} />. Se scatta insieme all'exit code
+            vince la severity più grave delle due.
+          </>
+        ) : (
+          <em>nessun effetto (nessuna soglia su questo receiver)</em>
         )}
       </li>
       <li>
@@ -304,6 +310,7 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
   const [editingId, setEditingId] = useState<string | null>(null);
   const [testContent, setTestContent] = useState("");
   const [testExitCode, setTestExitCode] = useState("");
+  const [testDurationSeconds, setTestDurationSeconds] = useState("");
   const [testResult, setTestResult] = useState<TestSeverityOut | null>(null);
   const [testError, setTestError] = useState<ApiError | null>(null);
 
@@ -343,6 +350,10 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
         await apiPost<TestSeverityOut>(`/api/v1/receivers/${receiverId}/test-severity`, {
           content: testContent,
           exit_code: testExitCode === "" ? undefined : Number(testExitCode),
+          // Il campo si compila in secondi, come la soglia; l'API ragiona in
+          // millisecondi come l'header.
+          duration_ms:
+            testDurationSeconds === "" ? undefined : Math.round(Number(testDurationSeconds) * 1000),
         }),
       );
     } catch (err) {
@@ -517,6 +528,17 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
               onChange={(event) => setTestExitCode(event.target.value)}
             />
           </div>
+          <div className="form-row">
+            <label htmlFor="test-duration">Durata simulata in secondi (vuoto = nessuna)</label>
+            <input
+              id="test-duration"
+              type="number"
+              min={0}
+              style={{ maxWidth: "10rem" }}
+              value={testDurationSeconds}
+              onChange={(event) => setTestDurationSeconds(event.target.value)}
+            />
+          </div>
           <button type="submit">Esegui prova</button>
         </form>
         {testResult && (
@@ -529,6 +551,9 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
                 {" "}
                 (<code>{testResult.matched_pattern}</code>)
               </>
+            )}
+            {testResult.duration_exceeded && testResult.source !== "duration" && (
+              <> — la soglia di durata è comunque superata</>
             )}
           </p>
         )}

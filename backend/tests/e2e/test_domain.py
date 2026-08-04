@@ -12,9 +12,8 @@ async def test_receiver_lifecycle_e_rotate_slug(api_client, two_tenants, owner_t
     token = await owner_token(api_client, tenant_id)
     headers = {"Authorization": f"Bearer {token}"}
 
-    group_resp = await api_client.post(
-        "/api/v1/groups", json={"name": f"Group {uuid.uuid4().hex[:8]}"}, headers=headers
-    )
+    group_name = f"Maritime {uuid.uuid4().hex[:8]}"
+    group_resp = await api_client.post("/api/v1/groups", json={"name": group_name}, headers=headers)
     assert group_resp.status_code == 201
     group_id = group_resp.json()["id"]
 
@@ -25,7 +24,12 @@ async def test_receiver_lifecycle_e_rotate_slug(api_client, two_tenants, owner_t
     )
     assert receiver_resp.status_code == 201
     receiver = receiver_resp.json()
-    assert len(receiver["slug"]) == 22
+    # Slug parlante (migrazione 0011): gruppo, receiver e in coda i 22 caratteri
+    # casuali di sempre, che sono l'unica parte che vale come credenziale.
+    slug_prefix = f"{group_name.lower().replace(' ', '-')}-backup-notturno-"
+    assert receiver["slug"].startswith(slug_prefix)
+    assert len(receiver["slug"]) == len(slug_prefix) + 22
+    assert receiver["ingest_url"].endswith(f"/ingest/{receiver['slug']}")
     receiver_id = receiver["id"]
     old_slug = receiver["slug"]
 
@@ -33,7 +37,10 @@ async def test_receiver_lifecycle_e_rotate_slug(api_client, two_tenants, owner_t
         f"/api/v1/receivers/{receiver_id}/rotate-slug", headers=headers
     )
     assert rotate_resp.status_code == 200
-    assert rotate_resp.json()["slug"] != old_slug
+    rotated = rotate_resp.json()["slug"]
+    assert rotated != old_slug
+    # Il token cambia, il prefisso resta quello dei nomi attuali.
+    assert rotated.startswith(slug_prefix)
 
     disable_resp = await api_client.patch(
         f"/api/v1/receivers/{receiver_id}", json={"status": "disabled"}, headers=headers

@@ -72,8 +72,9 @@ def migrated_db():
     di coerenza storage_backend/content, vanificando esattamente le garanzie
     che questa suite deve dimostrare (vedi docs/REVIEW.md, sezione 6).
     """
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     backend_path = os.path.join(os.path.dirname(__file__), "..")
     config = Config(os.path.join(backend_path, "alembic.ini"))
@@ -227,7 +228,7 @@ async def auth_token(api_client, two_tenants):
 
     # Un login rotto qui deve far fallire ogni test che dipende da questa fixture,
     # non farli passare in silenzio con un token None (vedi docs/REVIEW.md, sez. 6).
-    assert (
-        response.status_code == 200
-    ), f"auth_token fixture: login failed with {response.status_code}: {response.text}"
+    assert response.status_code == 200, (
+        f"auth_token fixture: login failed with {response.status_code}: {response.text}"
+    )
     return response.json()["access_token"]

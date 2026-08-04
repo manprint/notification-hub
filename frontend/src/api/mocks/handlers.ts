@@ -45,6 +45,7 @@ export const fixtureNotificationsPage1 = {
       storage_backend: "inline",
       severity: "error",
       severity_source: "rule",
+      phase: "end",
       status: "unread",
       received_at: "2026-08-01T03:00:00Z",
     },
@@ -57,6 +58,7 @@ export const fixtureNotificationsPage1 = {
       storage_backend: "inline",
       severity: "info",
       severity_source: "receiver_default",
+      phase: null,
       status: "read",
       received_at: "2026-08-01T02:00:00Z",
     },
@@ -76,6 +78,7 @@ export const fixtureNotificationsPage2 = {
       storage_backend: "inline",
       severity: "warning",
       severity_source: "receiver_default",
+      phase: null,
       status: "unread",
       received_at: "2026-08-01T01:00:00Z",
     },
@@ -94,7 +97,10 @@ export const fixtureNotificationDetailInline = {
   content_normalized: false,
   severity: "error",
   severity_source: "rule",
+  phase: "end",
   matched_pattern: "FALL(ITO|IMENT)|ERROR|CRITICAL",
+  duration_ms: 750_123,
+  exit_code: 1,
   status: "unread",
   received_at: "2026-08-01T03:00:00Z",
   source_ip: "203.0.113.5",
@@ -110,7 +116,10 @@ export const fixtureNotificationDetailObject = {
   content_normalized: false,
   severity: "critical",
   severity_source: "header",
+  phase: null,
   matched_pattern: null,
+  duration_ms: null,
+  exit_code: null,
   status: "unread",
   received_at: "2026-08-01T04:00:00Z",
   source_ip: "203.0.113.5",
@@ -119,16 +128,38 @@ export const fixtureNotificationDetailObject = {
 export const fixtureReceiver = {
   id: "r1",
   group_id: "g1",
-  slug: "Kj8mQ2xN7vB4pR9wLs3tYc",
+  slug: "maritime-backup-notturno-Kj8mQ2xN7vB4pR9wLs3tYc",
+  ingest_url: "https://notifyhub.example.com/ingest/maritime-backup-notturno-Kj8mQ2xN7vB4pR9wLs3tYc",
   name: "Backup notturno",
   status: "active",
   ingestion_module: "http_raw",
   default_severity: "info",
   exit_code_severity: "critical",
+  duration_threshold_seconds: 600,
+  duration_severity: "error",
   max_body_bytes: 1_048_576,
   rate_limit_per_min: 60,
   rejected_last_24h: 0,
+  // Sorveglianza dell'attesa attiva: un invio al giorno, mezz'ora di tolleranza.
+  expected_every_seconds: 86_400,
+  expected_cron: null,
+  expected_timezone: null,
+  expected_grace_seconds: 1_800,
+  missing_severity: "critical",
+  last_notification_at: "2026-08-04T03:00:12Z",
+  last_start_at: "2026-08-04T03:00:01Z",
+  missing_alerted_at: null,
+  expected_since: "2026-07-01T00:00:00Z",
+  expected_deadline_at: "2026-08-05T03:30:12Z",
+  expected_late: false,
 };
+
+/** Lo script come lo serve il backend: le due righe compilate del blocco
+ * "configurazione" bastano a verificare cosa arriva all'utente. */
+export const fixtureWrapperScript = `#!/bin/bash
+URL="\${NOTIFYHUB_URL:-${fixtureReceiver.ingest_url.replace("/ingest/" + fixtureReceiver.slug, "")}}"
+SLUG="\${NOTIFYHUB_SLUG:-${fixtureReceiver.slug}}"
+`;
 
 export const fixtureSeverityReplay = {
   items: [
@@ -408,5 +439,13 @@ export const handlers = [
   ),
   http.get("/api/v1/receivers/:receiverId/severity-chain", () =>
     HttpResponse.json(fixtureSeverityChain),
+  ),
+  http.get("/api/v1/receivers/:receiverId/wrapper-script", () =>
+    HttpResponse.text(fixtureWrapperScript, {
+      headers: {
+        "Content-Type": "text/x-shellscript; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="notifyhub-run-backup-notturno.sh"',
+      },
+    }),
   ),
 ];
