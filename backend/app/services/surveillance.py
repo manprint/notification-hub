@@ -120,13 +120,26 @@ def _cron_fire_times(schedule: ExpectedSchedule, now: datetime) -> tuple[datetim
 
     Il conto si fa nel fuso dichiarato e non in UTC: "0 3 * * *" a Roma vuol dire
     le 3 di notte anche il giorno in cui l'ora legale sposta l'orologio.
+
+    Gli errori di croniter e di zoneinfo diventano `InvalidScheduleError`: l'API
+    valida in scrittura, ma quello che si legge da una colonna puo' essere
+    arrivato per altre strade (scrittura diretta, ripristino di un backup scritto
+    da un'altra versione, un fuso che l'immagine non conosce piu' dopo un
+    aggiornamento di tzdata). Chi legge deve poter reagire a un caso singolo senza
+    spegnere l'elenco dei receiver o il job di sorveglianza per tutti.
     """
     assert schedule.cron is not None  # garantito da is_cron
-    zone = _zone(schedule)
-    base = now.astimezone(zone)
-    iterator = croniter(schedule.cron, base)
-    previous = iterator.get_prev(datetime)
-    following = iterator.get_next(datetime)
+    try:
+        zone = _zone(schedule)
+        base = now.astimezone(zone)
+        iterator = croniter(schedule.cron, base)
+        previous = iterator.get_prev(datetime)
+        following = iterator.get_next(datetime)
+    except (ZoneInfoNotFoundError, ValueError, KeyError, TypeError) as exc:
+        raise InvalidScheduleError(
+            f"attesa non calcolabile (cron={schedule.cron!r}, "
+            f"fuso={schedule.timezone or DEFAULT_TIMEZONE!r}): {exc}"
+        ) from exc
     return previous.astimezone(UTC), following.astimezone(UTC)
 
 

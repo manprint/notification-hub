@@ -332,3 +332,67 @@ verificati end-to-end contro lo stack containerizzato, non contro `httpx.ASGITra
 ### Stato per fase
 
 Vedi `plan_NotifyHub/resume.md`: tutte le fasi 0-10 sono `DONE`. Nessun blocco aperto.
+
+---
+
+## Verifica 3 — 2026-08-04 (funzioni aggiunte in sessione)
+
+Rilettura di quanto costruito dopo la Verifica 2: soglia di durata (migrazione
+`0010`), slug parlante e URL pubblica (`0011`), sorveglianza dell'attesa (`0012`),
+fase dell'esecuzione (`0013`), allineamento della validazione delle email.
+
+Metodo: per ogni ipotesi di difetto, un esperimento prima della correzione. Solo
+quelle confermate sono elencate qui, ognuna con il test che le tiene chiuse.
+
+### Difetti trovati e corretti
+
+| # | Dove | Difetto | Effetto reale | Correzione e test |
+|---|---|---|---|---|
+| R1 | `app/services/surveillance.py`, `api/v1/receivers.py` | Un'espressione cron o un fuso non calcolabili letti da colonna facevano uscire l'eccezione di `croniter`/`zoneinfo` da `alert_deadline` | `GET /api/v1/receivers` rispondeva **500**: un solo receiver malformato rendeva inutilizzabile ogni elenco della dashboard, selettori dei canali compresi | Errori incapsulati in `InvalidScheduleError`, chiamante che lascia la scadenza vuota e registra `expected_schedule_invalid`. `tests/e2e/test_review_regressioni.py` (3 test) |
+| R2 | `app/tasks/maintenance.py` | Stessa eccezione dentro il ciclo del job | Il job `check_expected_schedules` **moriva a ogni giro**: sorveglianza spenta per *tutti* i tenant, in silenzio, per colpa di una riga | Try/except per receiver, il rotto viene saltato e registrato. Test: il receiver sano riceve l'assenza, il rotto no |
+| R3 | `api/v1/receivers.py` (replay) | Il replay rivalutava anche le notifiche scritte dal server (`missing`, `recovered`) e i ping di avvio | Su un receiver sorvegliato di una macchina spenta erano la maggioranza delle ultime notifiche: la risposta "cosa cambierebbe" non mostrava piu' i messaggi veri | Filtro `severity_source NOT IN (missing, recovered)` + `phase IS DISTINCT FROM 'start'`. Due test: le sintetiche escluse, le `phase` NULL conservate |
+| R4 | `api/v1/receivers.py` (replay) | Prima stesura del filtro con `IS NOT 'start'` | `sqlalchemy`/Postgres rifiutavano la query: replay rotto per tutti | `is_distinct_from`, che tratta NULL come valore distinto. Colto dai test e2e esistenti sul replay |
+| R5 | `scripts/notifyhub-run.sh` | `NOTIFYHUB_PING_START=true` non riconosciuto (solo `1`) | Chi esportava una variabile booleana non aveva ping di avvio, **senza nessun errore** | Accettati `1|true|yes|on`. `tests/unit/test_wrapper_behaviour.py`, parametrizzato |
+| R6 | `scripts/notifyhub-run.sh` | `--ping-start` insieme a `--only-on-failure` non avvisava | Avvii sempre inviati, conclusioni solo sui fallimenti: il server vedeva **ogni esecuzione riuscita come interrotta a meta'** | Avviso su stderr (non un errore: non si spegne il cron di nessuno) con l'alternativa `--severity-ok debug` |
+| R7 | `app/schemas/receiver.py` | Cron e fuso validati sulla forma ripulita ma salvati grezzi | `"  0   3 * * 1-5 "` restava in colonna e la dashboard lo mostrava con la spaziatura sbagliata | `AfterValidator` di normalizzazione su entrambi i campi, in creazione e in PATCH |
+
+### Verificato e trovato corretto
+
+- **Gemello sincrono dell'instradamento** (`create_deliveries_for_notification_sync`,
+  il pezzo piu' a rischio: due percorsi per la stessa regola). Mute per receiver,
+  override della soglia e canale disabilitato valgono per l'allarme di assenza
+  esattamente come per un messaggio inviato, e l'allarme arriva davvero al webhook.
+  `tests/integration/test_surveillance_outbound.py` (5 test, consegna reale con
+  `respx`).
+- **Battito e idempotenza**: un reinvio con lo stesso `X-Request-Id` risponde 200
+  senza scrivere e **non** sposta l'ultima conclusione, quindi un cron che ritenta
+  non tiene viva la sorveglianza di un job morto.
+- **Ping di avvio**: aggiorna `last_start_at` e non `last_notification_at`, quindi
+  non maschera un job che muore a meta'.
+- **Durate**: la stessa esecuzione si legge uguale nel log di cron, su Slack e in
+  dashboard (`frontend/src/lib/__tests__/duration.test.ts` replica le tabelle dei
+  test Python).
+- **Wrapper**: exit code del comando restituito al chiamante, severity non valida
+  rifiutata prima di eseguire, slug mancante rifiutato, slash finale dell'URL non
+  raddoppiato (21 test che eseguono lo script per davvero, in `--dry-run`).
+
+### Scelte consapevoli fissate da un test
+
+- **La quota giornaliera del tenant non sopprime gli allarmi della sorveglianza.**
+  L'ingestion oltre quota riceve `429`, ma la notifica "il job non gira piu'"
+  viene scritta comunque: un allarme silenziato da una quota sarebbe silenzio
+  proprio nel momento in cui serve parlare.
+- **Un receiver gia' in ritardo allarma subito** quando si accende la
+  sorveglianza, mentre un receiver che non ha mai ricevuto niente ha una finestra
+  intera di tolleranza (`expected_since`). L'asimmetria e' voluta: del primo si
+  conosce il ritmo, del secondo no.
+- **Lo slug resta leggibile a chiunque veda il receiver, `viewer` compreso** (era
+  cosi' anche prima di questa sessione, e lo script scaricabile non aggiunge
+  esposizione). Chi ha accesso in lettura a un gruppo puo' quindi inviare a quel
+  receiver: se un giorno servisse distinguere, la sede e' la matrice dei ruoli
+  della spec §4.1, non l'endpoint di download.
+
+### Copertura dopo la verifica
+
+`backend/`: 541 test (0 skippati), `ruff format`/`ruff check`/`mypy` puliti.
+`frontend/`: 96 test, `tsc --noEmit` ed eslint puliti.

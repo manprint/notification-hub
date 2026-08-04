@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime
-from typing import Self
+from typing import Annotated, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from app.db.types import ReceiverStatus, Severity
 
@@ -64,6 +64,14 @@ def _validate_expected_fields(
         raise ValueError(str(exc)) from exc
 
 
+# Forma canonica di cio' che si scrive in colonna: l'espressione cron come in
+# crontab (campi separati da un solo spazio, senza spazi ai bordi) e il fuso senza
+# spazi. Senza, " 0  3 * * * " resterebbe salvato cosi' e il riassunto in dashboard
+# lo mostrerebbe con la spaziatura sbagliata.
+CronExpression = Annotated[str, AfterValidator(lambda value: " ".join(value.split()))]
+TimezoneName = Annotated[str, AfterValidator(lambda value: value.strip())]
+
+
 class ReceiverCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     max_body_bytes: int | None = Field(default=None, ge=1)
@@ -82,8 +90,8 @@ class ReceiverCreate(BaseModel):
     # solo fra intervallo ed espressione cron. Default spenta: quanto spesso
     # debba parlare un job lo sa solo chi l'ha messo in crontab.
     expected_every_seconds: int | None = Field(default=None, ge=1)
-    expected_cron: str | None = Field(default=None, max_length=100)
-    expected_timezone: str | None = Field(default=None, max_length=64)
+    expected_cron: CronExpression | None = Field(default=None, max_length=100)
+    expected_timezone: TimezoneName | None = Field(default=None, max_length=64)
     expected_grace_seconds: int | None = Field(default=None, ge=0)
     missing_severity: Severity | None = None
 
@@ -122,8 +130,8 @@ class ReceiverUpdate(BaseModel):
     # Come sopra: None disattiva, e la coerenza si verifica sullo stato finale
     # nell'endpoint, perche una PATCH puo toccare un solo campo dei cinque.
     expected_every_seconds: int | None = Field(default=None, ge=1)
-    expected_cron: str | None = Field(default=None, max_length=100)
-    expected_timezone: str | None = Field(default=None, max_length=64)
+    expected_cron: CronExpression | None = Field(default=None, max_length=100)
+    expected_timezone: TimezoneName | None = Field(default=None, max_length=64)
     expected_grace_seconds: int | None = Field(default=None, ge=0)
     missing_severity: Severity | None = None
 

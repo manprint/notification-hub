@@ -9,8 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_claims, db, require_admin, require_member
 from app.core.errors import PROBLEM_TYPES, Problem
+from app.core.logging import get_logger
 from app.core.security import AccessClaims
 from app.core.urls import ingest_url, public_base_url
+from app.db.types import NotificationPhase, SeveritySource
 from app.models.group import Group
 from app.models.receiver import Receiver
 from app.models.severity_preset import (
@@ -45,13 +47,19 @@ from app.services.authz import accessible_group_ids, assert_group_access
 from app.services.rule_chain import load_evaluation_chain
 from app.services.severity import InvalidPatternError, compile_pattern, resolve_severity_async
 from app.services.slug import build_receiver_slug
-from app.services.surveillance import alert_deadline, schedule_from_receiver
+from app.services.surveillance import (
+    InvalidScheduleError,
+    alert_deadline,
+    schedule_from_receiver,
+)
 from app.services.wrapper_script import (
     WrapperTemplateError,
     load_template,
     render_wrapper_script,
     script_filename,
 )
+
+logger = get_logger(__name__)
 
 router = APIRouter(tags=["receivers"])
 
@@ -70,9 +78,21 @@ def _receiver_out(receiver: Receiver, request: Request) -> ReceiverOut:
         reference = receiver.last_notification_at or receiver.expected_since
         if reference is not None:
             now = datetime.now(UTC)
-            deadline = alert_deadline(schedule, reference=reference, now=now)
-            out.expected_deadline_at = deadline
-            out.expected_late = now > deadline
+            try:
+                deadline = alert_deadline(schedule, reference=reference, now=now)
+            except InvalidScheduleError:
+                # Un'attesa non calcolabile (cron o fuso arrivati in colonna per
+                # altre strade) resta senza scadenza: un solo receiver malformato
+                # non deve far fallire l'elenco di tutti gli altri.
+                logger.warning(
+                    "expected_schedule_invalid",
+                    receiver_id=str(receiver.id),
+                    cron=receiver.expected_cron,
+                    timezone=receiver.expected_timezone,
+                )
+            else:
+                out.expected_deadline_at = deadline
+                out.expected_late = now > deadline
     return out
 
 
@@ -721,6 +741,17 @@ async def replay_severity_rules(
     Serve a rispondere alla domanda che la casella "Prova severity" non copre:
     non "cosa succederebbe a questo testo che mi invento", ma "cosa cambierebbe
     sui messaggi che arrivano davvero".
+
+    Restano fuori le notifiche che non sono l'esito di un'esecuzione, perche' su
+    quelle la risposta sarebbe sempre "cambia" e non vorrebbe dire niente:
+
+      * quelle scritte dal server (`missing`, `recovered`): non le ha inviate
+        nessuno e le regole non le hanno mai decise. Con la sorveglianza attiva su
+        una macchina spenta sarebbero anche la maggioranza delle ultime notifiche,
+        e il replay non mostrerebbe piu' i messaggi veri;
+      * i ping di avvio (`phase = 'start'`): dichiarano che il job e' partito, non
+        com'e' andato, e portano una severity esplicita che le regole non
+        toccano.
     """
     from app.models.notification import Notification
 
@@ -732,7 +763,15 @@ async def replay_severity_rules(
 
     notifications_result = await session.execute(
         select(Notification)
-        .where(Notification.receiver_id == receiver_id, Notification.tenant_id == tenant_id)
+        .where(
+            Notification.receiver_id == receiver_id,
+            Notification.tenant_id == tenant_id,
+            Notification.severity_source.notin_([SeveritySource.MISSING, SeveritySource.RECOVERED]),
+            # IS DISTINCT FROM e non `!=`: `phase` e' NULL su tutto lo storico
+            # e su ogni invio che non dichiara la fase, e un confronto normale
+            # con NULL non e' vero, quindi le escluderebbe tutte.
+            Notification.phase.is_distinct_from(NotificationPhase.START),
+        )
         .order_by(Notification.received_at.desc(), Notification.id.desc())
         .limit(limit)
     )

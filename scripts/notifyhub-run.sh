@@ -239,6 +239,20 @@ if [ -n "$TIMEOUT" ]; then
     command -v timeout >/dev/null 2>&1 || die "--timeout richiede il comando 'timeout' (coreutils)"
 fi
 
+# "1", "true", "yes", "on": chi esporta NOTIFYHUB_PING_START=true si aspetta che
+# funzioni, e un valore non riconosciuto disattivava il ping in silenzio.
+case "$(printf '%s' "$PING_START" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) PING_START=1 ;;
+    *) PING_START=0 ;;
+esac
+
+# I ping di avvio senza le conclusioni sono peggio di nessun ping: il server
+# vedrebbe partire ogni esecuzione e concludere solo quelle fallite, cioe'
+# esattamente il quadro di un job che muore a meta' ogni volta che va bene.
+if [ "$PING_START" -eq 1 ] && [ "$ONLY_ON_FAILURE" -eq 1 ]; then
+    echo "notifyhub-run: --ping-start con --only-on-failure segnala ogni esecuzione riuscita come interrotta a meta'; usa --severity-ok debug al posto di --only-on-failure" >&2
+fi
+
 # --- esecuzione del comando ------------------------------------------------
 # stdout e stderr uniti: chi legge la notifica vuole il log completo nell'ordine
 # in cui e' stato prodotto, non due flussi separati.

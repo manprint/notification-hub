@@ -31,6 +31,7 @@ from app.models.tenant import Tenant
 from app.services.outbound_resolver import create_deliveries_for_notification_sync
 from app.services.surveillance import (
     ExpectedSchedule,
+    InvalidScheduleError,
     alert_deadline,
     missing_content,
     recovered_content,
@@ -456,7 +457,20 @@ def check_expected_schedules() -> None:
                 if reference is None:
                     continue
 
-                deadline = alert_deadline(schedule, reference=reference, now=now)
+                try:
+                    deadline = alert_deadline(schedule, reference=reference, now=now)
+                except InvalidScheduleError as exc:
+                    # Senza questa protezione un solo receiver con cron o fuso non
+                    # calcolabile faceva morire il job a ogni giro, spegnendo la
+                    # sorveglianza di TUTTI i tenant in silenzio.
+                    logger.warning(
+                        "expected_schedule_invalid",
+                        tenant_id=str(tenant_id),
+                        receiver_id=str(receiver.id),
+                        slug=receiver.slug,
+                        error=str(exc),
+                    )
+                    continue
                 if now <= deadline:
                     continue
 
