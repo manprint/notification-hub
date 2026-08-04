@@ -47,6 +47,9 @@ const EXPECTED_MODE_LABELS: Record<ExpectedMode, string> = {
 };
 
 const DEFAULT_GRACE_SECONDS = 300;
+// Stesso default del backend (app/services/surveillance.py): un'espressione cron
+// senza fuso dichiarato viene valutata in UTC.
+const DEFAULT_TIMEZONE = "UTC";
 
 function initialExpectedMode(receiver: ReceiverOut): ExpectedMode {
   if (receiver.expected_cron !== null) return "cron";
@@ -54,8 +57,9 @@ function initialExpectedMode(receiver: ReceiverOut): ExpectedMode {
   return "off";
 }
 
-/** Elenco dei fusi del browser per la datalist: `Intl.supportedValuesOf` non
- *  esiste in ogni runtime (jsdom compreso), quindi resta un suggerimento. */
+/** Tutti i fusi noti a questo browser. `Intl.supportedValuesOf` non esiste in
+ *  ogni runtime, quindi l'assenza va gestita: senza elenco restano comunque
+ *  selezionabili i "Consigliati" (UTC, fuso del browser, valore salvato). */
 function knownTimezones(): string[] {
   const intl = Intl as typeof Intl & {
     supportedValuesOf?: (key: string) => string[];
@@ -67,13 +71,60 @@ function knownTimezones(): string[] {
   }
 }
 
+/** Fuso di questa macchina: nella pratica e' la scelta giusta quasi sempre,
+ *  perche' il crontab da sorvegliare sta su un server configurato come chi lo
+ *  legge. */
+function browserTimezone(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
+}
+
+/** I fusi da mettere nel menu, raggruppati per area.
+ *
+ *  Un `<select>` e non un campo con `datalist`: con la datalist il browser
+ *  filtra i suggerimenti per sottostringa del valore gia' scritto, quindi con
+ *  "UTC" nel campo si vedeva solo "UTC" e la lista sembrava vuota.
+ *
+ *  Il valore corrente viene sempre incluso, anche se questo browser non lo
+ *  conosce: un fuso salvato non deve sparire dal menu e diventare un altro al
+ *  primo salvataggio. */
+function timezoneGroups(current: string): { label: string; zones: string[] }[] {
+  const consigliati = [
+    ...new Set([DEFAULT_TIMEZONE, browserTimezone(), current].filter(Boolean) as string[]),
+  ];
+
+  const conosciuti = knownTimezones();
+  const perArea = new Map<string, string[]>();
+  for (const zone of conosciuti) {
+    const separatore = zone.indexOf("/");
+    const area = separatore === -1 ? "Altri" : zone.slice(0, separatore);
+    const elenco = perArea.get(area);
+    if (elenco) elenco.push(zone);
+    else perArea.set(area, [zone]);
+  }
+
+  if (!conosciuti.includes(current)) {
+    perArea.set("Altri", [...(perArea.get("Altri") ?? []), current]);
+  }
+
+  return [
+    { label: "Consigliati", zones: consigliati },
+    ...[...perArea.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([label, zones]) => ({ label, zones: [...zones].sort() })),
+  ];
+}
+
 /** Riassunto leggibile dell'attesa configurata, per la vista di sola lettura. */
 function describeExpectation(receiver: ReceiverOut): string {
   if (receiver.missing_severity === null) return "nessun effetto";
   const grace = formatIntervalSeconds(receiver.expected_grace_seconds ?? 0);
   const quando =
     receiver.expected_cron !== null
-      ? `cron ${receiver.expected_cron} (${receiver.expected_timezone ?? "UTC"})`
+      ? `cron ${receiver.expected_cron} (${receiver.expected_timezone ?? DEFAULT_TIMEZONE})`
       : `ogni ${formatIntervalSeconds(receiver.expected_every_seconds ?? 0)}`;
   return `${quando}, tolleranza ${grace} → ${receiver.missing_severity}`;
 }
@@ -120,7 +171,9 @@ function EditReceiverForm({
     receiver.expected_every_seconds === null ? "g" : initialInterval.unit,
   );
   const [cron, setCron] = useState(receiver.expected_cron ?? "");
-  const [timezone, setTimezone] = useState(receiver.expected_timezone ?? "UTC");
+  const [timezone, setTimezone] = useState(
+    receiver.expected_timezone ?? browserTimezone() ?? DEFAULT_TIMEZONE,
+  );
   const initialGrace = splitDuration(
     receiver.expected_grace_seconds ?? DEFAULT_GRACE_SECONDS,
   );
@@ -328,7 +381,9 @@ function EditReceiverForm({
           Notifica quando un invio <strong>non</strong> arriva: macchina spenta,
           cron rimosso, rete verso NotifyHub assente. Se il job usa{" "}
           <code>--only-on-failure</code> non va sorvegliato cosi': un'esecuzione
-          riuscita non manda niente e verrebbe segnalata come assenza.
+          riuscita non manda niente e verrebbe segnalata come assenza. Con{" "}
+          <code>--ping-start</code> l'allarme dice anche se il job non e' partito
+          o se e' partito e non ha concluso.
         </p>
         <div className="form-row">
           <label htmlFor="receiver-edit-expected-mode">Attesa</label>
@@ -394,22 +449,26 @@ function EditReceiverForm({
               <label htmlFor="receiver-edit-expected-timezone">
                 Fuso dell'espressione
               </label>
-              <input
+              <select
                 id="receiver-edit-expected-timezone"
-                list="receiver-timezones"
-                placeholder="UTC"
                 value={timezone}
                 onChange={(event) => setTimezone(event.target.value)}
-              />
-              <datalist id="receiver-timezones">
-                {knownTimezones().map((zone) => (
-                  <option key={zone} value={zone} />
+              >
+                {timezoneGroups(timezone).map((gruppo) => (
+                  <optgroup key={gruppo.label} label={gruppo.label}>
+                    {gruppo.zones.map((zone) => (
+                      <option key={`${gruppo.label}:${zone}`} value={zone}>
+                        {zone}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
-              </datalist>
+              </select>
             </div>
             <p className="card-hint">
               La stessa riga che sta nel crontab della macchina, con il fuso in
-              cui quella macchina la interpreta.
+              cui quella macchina la interpreta. In cima trovi UTC e il fuso di
+              questo browser, poi tutti gli altri raggruppati per area.
             </p>
           </>
         )}
@@ -668,9 +727,12 @@ export default function ReceiverDetailPage() {
             <p>Sorveglianza dell'attesa: {describeExpectation(receiver)}</p>
             {receiver.missing_severity !== null && (
               <p className="card-hint">
-                Ultimo invio: {formatInstant(receiver.last_notification_at)} ·
-                Allarme se non arriva entro{" "}
-                {formatInstant(receiver.expected_deadline_at)}
+                Ultima conclusione:{" "}
+                {formatInstant(receiver.last_notification_at)} · Allarme se non
+                arriva entro {formatInstant(receiver.expected_deadline_at)}
+                {receiver.last_start_at !== null && (
+                  <> · Ultimo avvio: {formatInstant(receiver.last_start_at)}</>
+                )}
               </p>
             )}
             {receiver.expected_late && (

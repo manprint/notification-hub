@@ -27,7 +27,7 @@ test in [`plan_NotifyHub/resume.md`](plan_NotifyHub/resume.md).
 | Job di manutenzione (8), quote, metriche, `/readyz` | presenti |
 | Dashboard React | presente, `frontend/`, build di produzione servita da nginx |
 
-`backend/`: 506 test (0 skippati), `ruff format`/`ruff check`/`mypy` puliti. `frontend/`: 67 test,
+`backend/`: 506 test (0 skippati), `ruff format`/`ruff check`/`mypy` puliti. `frontend/`: 68 test,
 lint e build puliti. `scripts/smoke.sh` eseguito per intero contro lo stack di produzione
 containerizzato: 22/22 assert, exit 0.
 

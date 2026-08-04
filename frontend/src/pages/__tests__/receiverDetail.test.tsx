@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { Route, Routes } from "react-router-dom";
@@ -200,8 +200,10 @@ describe("ReceiverDetailPage", () => {
         "ogni 1g, tolleranza 30m00s → critical",
       );
     });
-    // Le due date che rispondono a "sono in ritardo?".
-    expect(screen.getByText(/Ultimo invio:/).textContent).toContain("Allarme se non arriva entro");
+    // Le tre date che rispondono a "sono in ritardo?" e "e' anche partito?".
+    const stato = screen.getByText(/Ultima conclusione:/).textContent ?? "";
+    expect(stato).toContain("Allarme se non arriva entro");
+    expect(stato).toContain("Ultimo avvio:");
   });
 
   it("segnala in evidenza un receiver in ritardo", async () => {
@@ -242,8 +244,10 @@ describe("ReceiverDetailPage", () => {
 
     await user.selectOptions(screen.getByLabelText("Attesa"), "cron");
     await user.type(screen.getByLabelText("Espressione cron"), "0 3 * * 1-5");
-    await user.clear(screen.getByLabelText("Fuso dell'espressione"));
-    await user.type(screen.getByLabelText("Fuso dell'espressione"), "Europe/Rome");
+    await user.selectOptions(
+      screen.getByLabelText("Fuso dell'espressione"),
+      "Europe/Rome",
+    );
     await user.click(screen.getByRole("button", { name: "Salva" }));
 
     await waitFor(() => expect(inviato).not.toBeNull());
@@ -255,6 +259,29 @@ describe("ReceiverDetailPage", () => {
       expected_grace_seconds: 1800,
       missing_severity: "critical",
     });
+  });
+
+  it("il menu dei fusi non si limita a UTC", async () => {
+    const user = userEvent.setup();
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+    await user.selectOptions(screen.getByLabelText("Attesa"), "cron");
+
+    // Con un campo + datalist il browser filtrava i suggerimenti per
+    // sottostringa del valore scritto: con "UTC" dentro si vedeva solo UTC.
+    const fusi = screen.getByLabelText("Fuso dell'espressione");
+    const opzioni = within(fusi).getAllByRole("option");
+    expect(opzioni.length).toBeGreaterThan(100);
+
+    const valori = opzioni.map((o) => (o as HTMLOptionElement).value);
+    expect(valori).toContain("Europe/Rome");
+    expect(valori).toContain("America/New_York");
+    expect(valori).toContain("UTC");
+    // Raggruppati per area, con i consigliati in cima.
+    expect(within(fusi).getByRole("group", { name: "Consigliati" })).toBeInTheDocument();
+    expect(within(fusi).getByRole("group", { name: "Europe" })).toBeInTheDocument();
   });
 
   it("rifiuta un'espressione cron malformata senza chiamare l'API", async () => {
