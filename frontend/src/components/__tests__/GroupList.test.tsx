@@ -5,8 +5,13 @@ import GroupList from "../GroupList";
 import type { GroupOut } from "../../api/types";
 
 const groups: GroupOut[] = [
-  { id: "g1", name: "Server Produzione", description: "Ambiente di produzione" },
-  { id: "g2", name: "Backup", description: null },
+  {
+    id: "g1",
+    name: "Server Produzione",
+    description: "Ambiente di produzione",
+    receiver_count: 1,
+  },
+  { id: "g2", name: "Backup", description: null, receiver_count: 0 },
 ];
 
 describe("GroupList", () => {
@@ -28,7 +33,7 @@ describe("GroupList", () => {
   });
 
   it("group_list_hides_empty_description: non rende la descrizione se vuota", () => {
-    const noDesc: GroupOut[] = [{ id: "g2", name: "Backup", description: null }];
+    const noDesc: GroupOut[] = [{ id: "g2", name: "Backup", description: null, receiver_count: 0 }];
     const { container } = render(<GroupList groups={noDesc} onSelect={() => {}} />);
     expect(container.querySelector(".group-card-desc")).toBeNull();
   });

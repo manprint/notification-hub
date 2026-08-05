@@ -56,6 +56,21 @@ describe("routing", () => {
     expect(screen.queryByRole("link", { name: "Canali" })).not.toBeInTheDocument();
   });
 
+  it("T-GRP5 test_gruppi_route_precedenza: /groups/:id e /groups restano raggiungibili", async () => {
+    setRefreshToken("refresh-token-fixture");
+
+    const detail = renderApp("/groups/g1");
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Server Produzione" })).toBeInTheDocument();
+    });
+
+    detail.unmount();
+    renderApp("/groups");
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Gruppi" })).toBeInTheDocument();
+    });
+  });
+
   it("T-UI3 test_token_invito_letto_dal_frammento: il token va nel corpo, non nella query", async () => {
     let capturedBody: unknown = null;
     let capturedUrl = "";

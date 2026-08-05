@@ -2,6 +2,7 @@ import uuid
 
 import pytest
 
+from app.api.v1.groups import _receiver_counts
 from app.schemas.group import (
     GroupChannelBindingCreate,
     GroupCreate,
@@ -35,10 +36,29 @@ def test_group_out_schema():
         id=str(uuid.uuid4()),
         name="Output Group",
         description="Test output",
+        receiver_count=0,
     )
 
     assert group_out.name == "Output Group"
     assert group_out.description == "Test output"
+    assert group_out.receiver_count == 0
+
+
+@pytest.mark.unit
+def test_group_out_schema_receiver_count():
+    group_out = GroupOut(
+        id=str(uuid.uuid4()),
+        name="Output Group",
+        description=None,
+        receiver_count=3,
+    )
+
+    assert group_out.receiver_count == 3
+
+
+@pytest.mark.unit
+async def test_receiver_counts_returns_empty_for_no_ids():
+    assert await _receiver_counts(None, uuid.UUID(int=1), []) == {}
 
 
 @pytest.mark.unit

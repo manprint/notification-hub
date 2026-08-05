@@ -27,6 +27,7 @@ class GroupOut(BaseModel):
     id: uuid.UUID
     name: str
     description: str | None
+    receiver_count: int
 
 
 class GroupChannelBindingCreate(BaseModel):

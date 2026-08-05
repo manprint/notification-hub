@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import GroupsPage from "../GroupsPage";
@@ -30,5 +30,24 @@ describe("GroupsPage", () => {
 
     await user.type(screen.getByLabelText(/digita/i), "Server Produzione");
     expect(confirmButton).toBeEnabled();
+  });
+
+  it("T-GRP2 test_groups_tabella_ricerca_e_apri: la tabella mostra conteggio e la ricerca filtra", async () => {
+    setRefreshToken("refresh-token-fixture");
+    const user = userEvent.setup();
+    renderWithProviders(<GroupsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Server Produzione")).toBeInTheDocument();
+    });
+
+    expect(screen.getAllByRole("button", { name: "Apri" })).toHaveLength(2);
+
+    const g1Row = screen.getByRole("row", { name: /server produzione/i });
+    expect(within(g1Row).getByText("1")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Cerca gruppi"), "backup");
+    expect(screen.queryByText("Server Produzione")).toBeNull();
+    expect(screen.getByRole("row", { name: /backup/i })).toBeInTheDocument();
   });
 });

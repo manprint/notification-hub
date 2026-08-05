@@ -6,6 +6,7 @@ import { SessionProvider, useSession } from "./hooks/useSession";
 import AcceptInvitePage from "./pages/AcceptInvitePage";
 import ChannelsPage from "./pages/ChannelsPage";
 import DeliveriesPage from "./pages/DeliveriesPage";
+import GroupDetailPage from "./pages/GroupDetailPage";
 import GroupsPage from "./pages/GroupsPage";
 import HomePage from "./pages/HomePage";
 import LoginPage from "./pages/LoginPage";
@@ -46,6 +47,14 @@ export default function App() {
             element={
               <RequireRole allowed={["owner", "admin", "member"]}>
                 <GroupsPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/groups/:id"
+            element={
+              <RequireRole allowed={["owner", "admin", "member"]}>
+                <GroupDetailPage />
               </RequireRole>
             }
           />

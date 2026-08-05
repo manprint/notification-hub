@@ -30,9 +30,16 @@ export const fixtureStatsSummary = {
 };
 
 export const fixtureGroups = [
-  { id: "g1", name: "Server Produzione", description: "Ambiente di produzione" },
-  { id: "g2", name: "Backup", description: null },
+  {
+    id: "g1",
+    name: "Server Produzione",
+    description: "Ambiente di produzione",
+    receiver_count: 1,
+  },
+  { id: "g2", name: "Backup", description: null, receiver_count: 0 },
 ];
+
+export const fixtureGroupDetail = { ...fixtureGroups[0], receiver_count: 1 };
 
 export const fixtureNotificationsPage1 = {
   notifications: [
@@ -413,6 +420,7 @@ export const handlers = [
   http.post("/api/v1/auth/refresh", () => HttpResponse.json(fixtureTokenPair)),
   http.get("/api/v1/stats/summary", () => HttpResponse.json(fixtureStatsSummary)),
   http.get("/api/v1/groups", () => HttpResponse.json(fixtureGroups)),
+  http.get("/api/v1/groups/:groupId", () => HttpResponse.json(fixtureGroupDetail)),
   http.get("/api/v1/groups/:groupId/receivers", () => HttpResponse.json([fixtureReceiver])),
   http.get("/api/v1/groups/:groupId/delete-impact", () => HttpResponse.json(fixtureDeleteImpact)),
   http.get("/api/v1/groups/:groupId/channels", () => HttpResponse.json([])),

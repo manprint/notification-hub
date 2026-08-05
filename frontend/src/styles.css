@@ -479,3 +479,24 @@ details[open] > .group-summary::before {
 .group-summary-editor {
   margin-top: var(--space-2);
 }
+
+.slug-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.slug-cell code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.slug-cell button {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.group-receivers-table .table-wrap tbody td {
+  vertical-align: middle;
+}
