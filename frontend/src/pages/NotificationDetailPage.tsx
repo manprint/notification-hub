@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { apiDelete, apiGet, apiPatch } from "../api/client";
-import type { ApiError, NotificationDetailOut } from "../api/types";
+import type { ApiError, NotificationDetailOut, NotificationStatus } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import ErrorBanner from "../components/ErrorBanner";
 import SeverityBadge from "../components/SeverityBadge";
@@ -28,8 +28,13 @@ export default function NotificationDetailPage() {
   if (error) return <ErrorBanner error={error} />;
   if (!data) return null;
 
-  async function markRead() {
-    await apiPatch(`/api/v1/notifications/${id}`, { status: "read" });
+  async function setStatus(status: NotificationStatus) {
+    await apiPatch(`/api/v1/notifications/${id}`, { status });
+    await queryClient.invalidateQueries({ queryKey: ["notification", id] });
+  }
+
+  async function setVerified(verified: boolean) {
+    await apiPatch(`/api/v1/notifications/${id}`, { verified });
     await queryClient.invalidateQueries({ queryKey: ["notification", id] });
   }
 
@@ -56,7 +61,10 @@ export default function NotificationDetailPage() {
       <h1>Dettaglio notifica</h1>
 
       <div className="card">
-        <SeverityBadge severity={data.severity} /> <StatusPill status={data.status} />
+        <SeverityBadge severity={data.severity} /> <StatusPill status={data.status} />{" "}
+        <span className={`status-pill${data.verified ? " verified" : ""}`}>
+          {data.verified ? "Verificata" : "Non verificata"}
+        </span>
         <p>
           Origine severity: <strong>{severitySourceLabel(data.severity_source)}</strong>
           {data.severity_source === "rule" && data.matched_pattern && (
@@ -104,7 +112,12 @@ export default function NotificationDetailPage() {
       </div>
 
       <div className="toolbar">
-        {data.status === "unread" && <button onClick={() => void markRead()}>Segna come letta</button>}
+        <button onClick={() => void setStatus(data.status === "unread" ? "read" : "unread")}>
+          {data.status === "unread" ? "Segna come letta" : "Segna come non letta"}
+        </button>
+        <button onClick={() => void setVerified(!data.verified)}>
+          {data.verified ? "Segna come non verificata" : "Segna come verificata"}
+        </button>
         {role !== null && DELETE_ALLOWED_ROLES.includes(role) && (
           <button onClick={() => void remove()}>Elimina</button>
         )}

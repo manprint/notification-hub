@@ -47,6 +47,7 @@ export const fixtureNotificationsPage1 = {
       severity_source: "rule",
       phase: "end",
       status: "unread",
+      verified: true,
       received_at: "2026-08-01T03:00:00Z",
     },
     {
@@ -60,6 +61,7 @@ export const fixtureNotificationsPage1 = {
       severity_source: "receiver_default",
       phase: null,
       status: "read",
+      verified: false,
       received_at: "2026-08-01T02:00:00Z",
     },
   ],
@@ -80,6 +82,7 @@ export const fixtureNotificationsPage2 = {
       severity_source: "receiver_default",
       phase: null,
       status: "unread",
+      verified: false,
       received_at: "2026-08-01T01:00:00Z",
     },
   ],
@@ -102,6 +105,7 @@ export const fixtureNotificationDetailInline = {
   duration_ms: 750_123,
   exit_code: 1,
   status: "unread",
+  verified: true,
   received_at: "2026-08-01T03:00:00Z",
   source_ip: "203.0.113.5",
 };
@@ -121,6 +125,7 @@ export const fixtureNotificationDetailObject = {
   duration_ms: null,
   exit_code: null,
   status: "unread",
+  verified: false,
   received_at: "2026-08-01T04:00:00Z",
   source_ip: "203.0.113.5",
 };
@@ -418,6 +423,14 @@ export const handlers = [
   }),
   http.get("/api/v1/notifications/n1", () => HttpResponse.json(fixtureNotificationDetailInline)),
   http.get("/api/v1/notifications/n4", () => HttpResponse.json(fixtureNotificationDetailObject)),
+  http.patch("/api/v1/notifications/:id", async ({ request, params }) => {
+    const body = (await request.json()) as { status?: string; verified?: boolean };
+    const base =
+      String(params.id) === "n4"
+        ? { ...fixtureNotificationDetailObject, ...body }
+        : { ...fixtureNotificationDetailInline, ...body };
+    return HttpResponse.json(base);
+  }),
   http.get("/api/v1/receivers", () => HttpResponse.json([fixtureReceiver])),
   http.get("/api/v1/receivers/r1", () => HttpResponse.json(fixtureReceiver)),
   http.get("/api/v1/receivers/r1/severity-rules", () => HttpResponse.json(fixtureSeverityRules)),

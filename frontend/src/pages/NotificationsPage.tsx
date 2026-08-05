@@ -63,8 +63,13 @@ export default function NotificationsPage() {
 
   const rows = data?.pages.flatMap((page: NotificationListOut) => page.notifications) ?? [];
 
-  async function markRead(id: string) {
-    await apiPatch(`/api/v1/notifications/${id}`, { status: "read" });
+  async function setStatus(id: string, status: NotificationStatus) {
+    await apiPatch(`/api/v1/notifications/${id}`, { status });
+    await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+  }
+
+  async function setVerified(id: string, verified: boolean) {
+    await apiPatch(`/api/v1/notifications/${id}`, { verified });
     await queryClient.invalidateQueries({ queryKey: ["notifications"] });
   }
 
@@ -122,15 +127,32 @@ export default function NotificationsPage() {
         </>
       ),
     },
-    { key: "status", header: "Stato", render: (n) => <StatusPill status={n.status} /> },
+    {
+      key: "status",
+      header: "Stato",
+      render: (n) => (
+        <>
+          <StatusPill status={n.status} />
+          <span className={`status-pill${n.verified ? " verified" : ""}`} style={{ marginLeft: 6 }}>
+            {n.verified ? "Verificata" : "Non verificata"}
+          </span>
+        </>
+      ),
+    },
     { key: "received_at", header: "Ricevuta", render: (n) => new Date(n.received_at).toLocaleString("it-IT") },
     {
       key: "actions",
       header: "",
-      render: (n) =>
-        n.status === "unread" ? (
-          <button onClick={() => void markRead(n.id)}>Segna come letta</button>
-        ) : null,
+      render: (n) => (
+        <div className="row-actions">
+          <button onClick={() => void setStatus(n.id, n.status === "unread" ? "read" : "unread")}>
+            {n.status === "unread" ? "Segna come letta" : "Segna come non letta"}
+          </button>
+          <button onClick={() => void setVerified(n.id, !n.verified)}>
+            {n.verified ? "Segna come non verificata" : "Segna come verificata"}
+          </button>
+        </div>
+      ),
     },
   ];
 

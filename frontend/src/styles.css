@@ -72,6 +72,19 @@ button.primary {
   color: #fff;
 }
 
+.row-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.status-pill.verified {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+
 input,
 select,
 textarea {
@@ -171,6 +184,20 @@ code {
   margin: 0 0 var(--space-3);
   font-size: 13px;
   color: var(--color-text-muted);
+}
+
+/* Prossime esecuzioni dell'espressione cron: compatte e in monospazio, cosi'
+   le date stanno allineate sotto il campo. */
+.cron-preview {
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+.cron-preview li + li {
+  margin-top: var(--space-1);
 }
 
 /* Gruppo di pulsanti dentro una cella: vanno a capo invece di allargare

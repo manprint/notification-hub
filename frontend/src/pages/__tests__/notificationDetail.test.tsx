@@ -111,7 +111,7 @@ describe("NotificationDetailPage", () => {
     expect(screen.getByText(/dice che il job e' partito/)).toBeInTheDocument();
   });
 
-  it("segna come letta e il pulsante sparisce", async () => {
+  it("T-DET3 segna come letta commuta in segna come non letta", async () => {
     const user = userEvent.setup();
     let inviato: Record<string, unknown> | null = null;
     let stato = "unread";
@@ -133,6 +133,46 @@ describe("NotificationDetailPage", () => {
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: "Segna come letta" })).not.toBeInTheDocument();
     });
+    expect(screen.getByRole("button", { name: "Segna come non letta" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Segna come non letta" }));
+    await waitFor(() => expect(inviato).toEqual({ status: "unread" }));
+  });
+
+  it("T-DET1 il dettaglio mostra entrambi i toggle e la pill di verifica", async () => {
+    renderDetail("n1");
+
+    await waitFor(() => {
+      expect(screen.getByText(/Origine severity:/)).toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: "Segna come letta" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Segna come non verificata" })).toBeInTheDocument();
+    expect(screen.getByText("Verificata")).toBeInTheDocument();
+  });
+
+  it("T-DET2 toggle verifica manda verified true", async () => {
+    const user = userEvent.setup();
+    let inviato: Record<string, unknown> | null = null;
+    let verificata = false;
+    server.use(
+      http.get("/api/v1/notifications/n1", () =>
+        HttpResponse.json({ ...fixtureNotificationDetailInline, verified: verificata }),
+      ),
+      http.patch("/api/v1/notifications/n1", async ({ request }) => {
+        inviato = (await request.json()) as Record<string, unknown>;
+        if (inviato.verified === true) verificata = true;
+        return HttpResponse.json({ ...fixtureNotificationDetailInline, verified: true });
+      }),
+    );
+    renderDetail("n1");
+
+    await user.click(await screen.findByRole("button", { name: "Segna come verificata" }));
+
+    await waitFor(() => expect(inviato).toEqual({ verified: true }));
+    await waitFor(() => {
+      expect(screen.getByText("Verificata")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: "Segna come non verificata" })).toBeInTheDocument();
   });
 
   it("il contenuto su object storage si scarica col Bearer, non con un link diretto", async () => {
@@ -227,6 +267,8 @@ describe("NotificationDetailPage", () => {
     expect(screen.queryByRole("button", { name: "Elimina" })).not.toBeInTheDocument();
     // Segnare come letta resta permesso: non tocca il contenuto.
     expect(screen.getByRole("button", { name: "Segna come letta" })).toBeInTheDocument();
+    // Anche il toggle di verifica non e' un'azione distruttiva: il viewer lo vede.
+    expect(screen.getByRole("button", { name: "Segna come non verificata" })).toBeInTheDocument();
   });
 
   it("una notifica che non esiste mostra l'errore, non una pagina vuota", async () => {

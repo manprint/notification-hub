@@ -196,6 +196,7 @@ async def list_notifications(
                 duration_ms=n.duration_ms,
                 exit_code=n.exit_code,
                 status=n.status,
+                verified=n.verified,
                 received_at=n.received_at,
             )
             for n in rows
@@ -256,6 +257,7 @@ async def get_notification(
         duration_ms=notification.duration_ms,
         exit_code=notification.exit_code,
         status=notification.status,
+        verified=notification.verified,
         received_at=notification.received_at,
         source_ip=notification.source_ip,
     )
@@ -300,7 +302,10 @@ async def mark_notification_status(
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> NotificationDetailOut:
     notification = await _get_notification_or_404(session, claims, notification_id)
-    notification.status = body.status
+    if body.status is not None:
+        notification.status = body.status
+    if body.verified is not None:
+        notification.verified = body.verified
     await session.flush()
 
     content_url = None
@@ -322,6 +327,7 @@ async def mark_notification_status(
         duration_ms=notification.duration_ms,
         exit_code=notification.exit_code,
         status=notification.status,
+        verified=notification.verified,
         received_at=notification.received_at,
         source_ip=notification.source_ip,
     )

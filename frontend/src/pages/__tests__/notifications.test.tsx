@@ -4,6 +4,7 @@ import { HttpResponse, http } from "msw";
 import { describe, expect, it } from "vitest";
 import NotificationsPage from "../NotificationsPage";
 import { server } from "../../api/mocks/server";
+import { fixtureNotificationDetailObject } from "../../api/mocks/handlers";
 import { renderWithProviders } from "./testUtils";
 
 describe("NotificationsPage", () => {
@@ -76,6 +77,7 @@ describe("NotificationsPage", () => {
               severity: "critical",
               severity_source: "missing",
               status: "unread",
+              verified: false,
               received_at: "2026-08-05T03:31:00Z",
             },
             {
@@ -88,6 +90,7 @@ describe("NotificationsPage", () => {
               severity: "info",
               severity_source: "recovered",
               status: "unread",
+              verified: false,
               received_at: "2026-08-05T09:00:00Z",
             },
           ],
@@ -128,6 +131,7 @@ describe("NotificationsPage", () => {
               duration_ms: null,
               exit_code: null,
               status: "unread",
+              verified: false,
               received_at: "2026-08-05T03:00:01Z",
             },
             {
@@ -143,6 +147,7 @@ describe("NotificationsPage", () => {
               duration_ms: 750_123,
               exit_code: 0,
               status: "unread",
+              verified: false,
               received_at: "2026-08-05T03:12:00Z",
             },
           ],
@@ -191,5 +196,95 @@ describe("NotificationsPage", () => {
     await user.click(screen.getByRole("button", { name: "Segna tutte come lette" }));
     await waitFor(() => expect(bulkBody).not.toBeNull());
     expect(bulkBody).toMatchObject({ source: "missing" });
+  });
+
+  it("T-LIST1 le etichette commutano in base a status: unread mostra letta, read mostra non letta", async () => {
+    renderWithProviders(<NotificationsPage />);
+    const tabella = within(await screen.findByRole("table"));
+    const rigaN1 = tabella.getByText(/Backup FALLITO/).closest("tr") as HTMLElement;
+    const rigaN2 = tabella.getByText(/Tutto ok/).closest("tr") as HTMLElement;
+    expect(within(rigaN1).getByRole("button", { name: "Segna come letta" })).toBeInTheDocument();
+    expect(within(rigaN2).getByRole("button", { name: "Segna come non letta" })).toBeInTheDocument();
+  });
+
+  it("T-LIST2 segna come non letta manda status unread", async () => {
+    let patchBody: Record<string, unknown> | null = null;
+    server.use(
+      http.patch("/api/v1/notifications/:id", async ({ request }) => {
+        patchBody = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({
+          ...fixtureNotificationDetailObject,
+          ...patchBody,
+        });
+      }),
+    );
+    renderWithProviders(<NotificationsPage />);
+    const tabella = within(await screen.findByRole("table"));
+    const rigaN2 = tabella.getByText(/Tutto ok/).closest("tr") as HTMLElement;
+    await userEvent.setup().click(within(rigaN2).getByRole("button", { name: "Segna come non letta" }));
+    await waitFor(() => expect(patchBody).toEqual({ status: "unread" }));
+  });
+
+  it("T-LIST3 toggle verifica manda verified true e mostra la pill", async () => {
+    let patchBody: Record<string, unknown> | null = null;
+    let n2Verified = false;
+    server.use(
+      http.get("/api/v1/notifications", () =>
+        HttpResponse.json({
+          notifications: [
+            {
+              id: "n1",
+              receiver_id: "r1",
+              content_preview: "Backup FALLITO: disco pieno su /var",
+              content_size: 40,
+              content_normalized: false,
+              storage_backend: "inline",
+              severity: "error",
+              severity_source: "rule",
+              phase: "end",
+              status: "unread",
+              verified: true,
+              received_at: "2026-08-01T03:00:00Z",
+            },
+            {
+              id: "n2",
+              receiver_id: "r1",
+              content_preview: "Tutto ok",
+              content_size: 8,
+              content_normalized: true,
+              storage_backend: "inline",
+              severity: "info",
+              severity_source: "receiver_default",
+              phase: null,
+              status: "read",
+              verified: n2Verified,
+              received_at: "2026-08-01T02:00:00Z",
+            },
+          ],
+          next_cursor: null,
+          unread_count: 0,
+        }),
+      ),
+      http.patch("/api/v1/notifications/:id", async ({ request }) => {
+        patchBody = (await request.json()) as Record<string, unknown>;
+        if (patchBody.verified === true) n2Verified = true;
+        return HttpResponse.json({ ...fixtureNotificationDetailObject, ...patchBody });
+      }),
+    );
+    renderWithProviders(<NotificationsPage />);
+    const tabella = within(await screen.findByRole("table"));
+    const rigaN2 = tabella.getByText(/Tutto ok/).closest("tr") as HTMLElement;
+    await userEvent.setup().click(within(rigaN2).getByRole("button", { name: "Segna come verificata" }));
+    await waitFor(() => expect(patchBody).toEqual({ verified: true }));
+    await waitFor(() => {
+      expect(within(rigaN2).getByText("Verificata")).toBeInTheDocument();
+    });
+  });
+
+  it("T-LIST4 le pill Verificata/Non verificata sono presenti", async () => {
+    renderWithProviders(<NotificationsPage />);
+    const tabella = within(await screen.findByRole("table"));
+    expect(tabella.getByText("Verificata")).toBeInTheDocument();
+    expect(tabella.getByText("Non verificata")).toBeInTheDocument();
   });
 });
