@@ -431,6 +431,7 @@ export const handlers = [
         : { ...fixtureNotificationDetailInline, ...body };
     return HttpResponse.json(base);
   }),
+  http.post("/api/v1/notifications/bulk-read", () => HttpResponse.json({ marked_read: 0 })),
   http.get("/api/v1/receivers", () => HttpResponse.json([fixtureReceiver])),
   http.get("/api/v1/receivers/r1", () => HttpResponse.json(fixtureReceiver)),
   http.get("/api/v1/receivers/r1/severity-rules", () => HttpResponse.json(fixtureSeverityRules)),

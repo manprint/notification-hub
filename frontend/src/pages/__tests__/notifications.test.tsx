@@ -4,12 +4,71 @@ import { HttpResponse, http } from "msw";
 import { describe, expect, it } from "vitest";
 import NotificationsPage from "../NotificationsPage";
 import { server } from "../../api/mocks/server";
-import { fixtureNotificationDetailObject } from "../../api/mocks/handlers";
+import { fixtureNotificationDetailObject, fixtureNotificationsPage1 } from "../../api/mocks/handlers";
 import { renderWithProviders } from "./testUtils";
 
 describe("NotificationsPage", () => {
-  it("T-UI7 test_carica_altri_usa_il_cursore: il secondo caricamento usa next_cursor e accoda senza duplicati", async () => {
+  it("T-GRP1 landing mostra la griglia dei gruppi e non chiama le notifiche", async () => {
+    let notificationsCalled = false;
+    server.use(
+      http.get("/api/v1/notifications", () => {
+        notificationsCalled = true;
+        return HttpResponse.json({ notifications: [], next_cursor: null, unread_count: 0 });
+      }),
+    );
+
     renderWithProviders(<NotificationsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /server produzione/i })).toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: /backup/i })).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(notificationsCalled).toBe(false);
+    expect(screen.getByText(/Seleziona un gruppo/)).toBeInTheDocument();
+  });  it("T-GRP2 clic su un gruppo naviga alla tabella scoped a quel gruppo", async () => {
+    const urls: string[] = [];
+    server.use(
+      http.get("/api/v1/notifications", ({ request }) => {
+        urls.push(request.url);
+        return HttpResponse.json(fixtureNotificationsPage1);
+      }),
+    );
+
+    renderWithProviders(<NotificationsPage />);
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /server produzione/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /server produzione/i }));
+
+    await waitFor(() => {
+      expect(urls.some((u) => new URL(u).searchParams.get("group_id") === "g1")).toBe(true);
+    });
+    const tabella = within(await screen.findByRole("table"));
+    expect(tabella.getByText(/Backup FALLITO/)).toBeInTheDocument();
+  });
+
+  it("T-GRP3 'Torna ai gruppi' torna alla griglia senza combobox gruppo", async () => {
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+
+    await waitFor(() => {
+      expect(screen.getByRole("table")).toBeInTheDocument();
+    });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("link", { name: /torna ai gruppi/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /server produzione/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("Tutti i gruppi")).not.toBeInTheDocument();
+  });
+
+  it("T-UI7 test_carica_altri_usa_il_cursore: il secondo caricamento usa next_cursor e accoda senza duplicati", async () => {
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
 
     await waitFor(() => {
       expect(screen.getByText(/Backup FALLITO/)).toBeInTheDocument();
@@ -26,7 +85,7 @@ describe("NotificationsPage", () => {
   });
 
   it("T-UI8 test_nota_sulla_ricerca_presente: mostra la nota sui 4096 caratteri", async () => {
-    renderWithProviders(<NotificationsPage />);
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
 
     await waitFor(() => {
       expect(screen.getByText(/Backup FALLITO/)).toBeInTheDocument();
@@ -37,7 +96,7 @@ describe("NotificationsPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("T-UI9 test_filtri_nella_query: gruppo e severity minima selezionati compaiono nella richiesta", async () => {
+  it("T-GRP4 test_filtri_group_scoped: filtri severity restano scoped al gruppo", async () => {
     let capturedUrl: URL | null = null;
     server.use(
       http.get("/api/v1/notifications", ({ request }) => {
@@ -46,14 +105,13 @@ describe("NotificationsPage", () => {
       }),
     );
 
-    renderWithProviders(<NotificationsPage />);
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
 
-    const user = userEvent.setup();
     await waitFor(() => {
-      expect(screen.getByRole("option", { name: "Server Produzione" })).toBeInTheDocument();
+      expect(capturedUrl?.searchParams.get("group_id")).toBe("g1");
     });
 
-    await user.selectOptions(screen.getByDisplayValue("Tutti i gruppi"), "g1");
+    const user = userEvent.setup();
     await user.selectOptions(screen.getByDisplayValue("Qualsiasi severity"), "error");
 
     await waitFor(() => {
@@ -100,7 +158,7 @@ describe("NotificationsPage", () => {
       ),
     );
 
-    renderWithProviders(<NotificationsPage />);
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
 
     await waitFor(() => {
       expect(screen.getByText(/nessun invio da/)).toBeInTheDocument();
@@ -157,7 +215,7 @@ describe("NotificationsPage", () => {
       ),
     );
 
-    renderWithProviders(<NotificationsPage />);
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
 
     await waitFor(() => {
       expect(screen.getByText(/job=backup avvio/)).toBeInTheDocument();
@@ -183,7 +241,7 @@ describe("NotificationsPage", () => {
       }),
     );
 
-    renderWithProviders(<NotificationsPage />);
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
     const user = userEvent.setup();
 
     await user.selectOptions(screen.getByLabelText("Origine della notifica"), "missing");
@@ -199,7 +257,7 @@ describe("NotificationsPage", () => {
   });
 
   it("T-LIST1 le etichette commutano in base a status: unread mostra letta, read mostra non letta", async () => {
-    renderWithProviders(<NotificationsPage />);
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
     const tabella = within(await screen.findByRole("table"));
     const rigaN1 = tabella.getByText(/Backup FALLITO/).closest("tr") as HTMLElement;
     const rigaN2 = tabella.getByText(/Tutto ok/).closest("tr") as HTMLElement;
@@ -218,7 +276,7 @@ describe("NotificationsPage", () => {
         });
       }),
     );
-    renderWithProviders(<NotificationsPage />);
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
     const tabella = within(await screen.findByRole("table"));
     const rigaN2 = tabella.getByText(/Tutto ok/).closest("tr") as HTMLElement;
     await userEvent.setup().click(within(rigaN2).getByRole("button", { name: "Segna come non letta" }));
@@ -271,7 +329,7 @@ describe("NotificationsPage", () => {
         return HttpResponse.json({ ...fixtureNotificationDetailObject, ...patchBody });
       }),
     );
-    renderWithProviders(<NotificationsPage />);
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
     const tabella = within(await screen.findByRole("table"));
     const rigaN2 = tabella.getByText(/Tutto ok/).closest("tr") as HTMLElement;
     await userEvent.setup().click(within(rigaN2).getByRole("button", { name: "Segna come verificata" }));
@@ -281,10 +339,111 @@ describe("NotificationsPage", () => {
     });
   });
 
-  it("T-LIST4 le pill Verificata/Non verificata sono presenti", async () => {
-    renderWithProviders(<NotificationsPage />);
+  it("T-LIST4 le pill Verificata/Non verificata sono presenti dentro .status-cell", async () => {
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
     const tabella = within(await screen.findByRole("table"));
     expect(tabella.getByText("Verificata")).toBeInTheDocument();
     expect(tabella.getByText("Non verificata")).toBeInTheDocument();
+    expect(screen.getByText("Verificata").closest(".status-cell")).not.toBeNull();
+  });
+
+  it("status_cell_wraps_pills_aligned: le pill di stato stanno nello stesso contenitore .status-cell", async () => {
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+    const tabella = within(await screen.findByRole("table"));
+
+    const rigaN1 = tabella.getByText(/Backup FALLITO/).closest("tr") as HTMLElement;
+    const cellN1 = within(rigaN1).getByText("Verificata").closest(".status-cell") as HTMLElement;
+    expect(cellN1).not.toBeNull();
+    expect(cellN1).toHaveClass("status-cell");
+    expect(within(rigaN1).getByText("Non letta").closest(".status-cell")).toBe(cellN1);
+
+    const rigaN2 = tabella.getByText(/Tutto ok/).closest("tr") as HTMLElement;
+    const cellN2 = within(rigaN2).getByText("Non verificata").closest(".status-cell") as HTMLElement;
+    expect(cellN2).not.toBeNull();
+    expect(within(rigaN2).getByText("Letta").closest(".status-cell")).toBe(cellN2);
+  });
+
+  it("action_buttons_stay_on_same_row: i due pulsanti stanno nello stesso 'row-actions'", async () => {
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+    const tabella = within(await screen.findByRole("table"));
+    const rigaN2 = tabella.getByText(/Tutto ok/).closest("tr") as HTMLElement;
+    const btnNonLetta = within(rigaN2).getByRole("button", { name: "Segna come non letta" });
+    const btnVerificata = within(rigaN2).getByRole("button", { name: "Segna come verificata" });
+
+    expect(btnNonLetta.parentElement).toBe(btnVerificata.parentElement);
+    expect(btnNonLetta.parentElement as HTMLElement).toHaveClass("row-actions");
+  });
+
+  it("table_wrap_scrolls_horizontally: la tabella e' dentro un contenitore scrollabile", async () => {
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+    await screen.findByRole("table");
+    expect(document.querySelector(".table-wrap")).not.toBeNull();
+  });
+
+  it("T-EMPTY2 un gruppo senza notifiche mostra il messaggio vuoto", async () => {
+    server.use(
+      http.get("/api/v1/notifications", () =>
+        HttpResponse.json({ notifications: [], next_cursor: null, unread_count: 0 }),
+      ),
+    );
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+    await waitFor(() => {
+      expect(screen.getByText("Nessuna notifica trovata.")).toBeInTheDocument();
+    });
+  });
+
+  it("T-ERR1 un errore sui gruppi mostra il banner e non crasha", async () => {
+    server.use(
+      http.get("/api/v1/groups", () =>
+        HttpResponse.json(
+          {
+            type: "/problems/internal-error",
+            title: "Internal Server Error",
+            status: 500,
+            detail: "Errore interno nel caricamento dei gruppi",
+          },
+          { status: 500 },
+        ),
+      ),
+    );
+
+    renderWithProviders(<NotificationsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Errore interno/)).toBeInTheDocument();
+    });
+  });
+
+  it("T-ACCEPT1 flusso completo: griglia -> gruppo -> visual fixes -> torna ai gruppi", async () => {
+    server.use(
+      http.get("/api/v1/notifications", () => HttpResponse.json(fixtureNotificationsPage1)),
+    );
+
+    renderWithProviders(<NotificationsPage />);
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /server produzione/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /server produzione/i }));
+
+    const tabella = within(await screen.findByRole("table"));
+
+    expect(screen.getByText("Errore").closest(".severity-badge")).not.toBeNull();
+
+    const rigaN1 = tabella.getByText(/Backup FALLITO/).closest("tr") as HTMLElement;
+    expect(within(rigaN1).getByText("Verificata").closest(".status-cell")).not.toBeNull();
+
+    const btnLetta = within(rigaN1).getByRole("button", { name: "Segna come letta" });
+    const btnVerificata = within(rigaN1).getByRole("button", { name: "Segna come non verificata" });
+    expect(btnLetta.parentElement).toBe(btnVerificata.parentElement);
+    expect(btnLetta.parentElement as HTMLElement).toHaveClass("row-actions");
+
+    await user.click(screen.getByRole("link", { name: /torna ai gruppi/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /server produzione/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 });

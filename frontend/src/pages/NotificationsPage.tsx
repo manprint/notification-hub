@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { apiGet, apiPatch, apiPost } from "../api/client";
 import type {
+  ApiError,
   GroupOut,
   NotificationListItemOut,
   NotificationListOut,
@@ -12,6 +13,7 @@ import type {
 } from "../api/types";
 import DataTable, { type DataTableColumn } from "../components/DataTable";
 import ErrorBanner from "../components/ErrorBanner";
+import GroupList from "../components/GroupList";
 import SeverityBadge from "../components/SeverityBadge";
 import StatusPill from "../components/StatusPill";
 import { useNotifications } from "../hooks/useNotifications";
@@ -47,19 +49,26 @@ export default function NotificationsPage() {
   const status = (searchParams.get("status") as NotificationStatus | null) ?? undefined;
   const source = (searchParams.get("source") as SeveritySource | null) ?? undefined;
 
-  const { data: groups } = useQuery({
+  const {
+    data: groups,
+    isLoading: groupsLoading,
+    error: groupsError,
+  } = useQuery<GroupOut[], ApiError>({
     queryKey: ["groups"],
     queryFn: () => apiGet<GroupOut[]>("/api/v1/groups"),
   });
 
   const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } =
-    useNotifications({
-      group_id: groupId,
-      severity_min: severityMin,
-      status,
-      source,
-      q: q || undefined,
-    });
+    useNotifications(
+      {
+        group_id: groupId,
+        severity_min: severityMin,
+        status,
+        source,
+        q: q || undefined,
+      },
+      { enabled: !!groupId },
+    );
 
   const rows = data?.pages.flatMap((page: NotificationListOut) => page.notifications) ?? [];
 
@@ -83,6 +92,12 @@ export default function NotificationsPage() {
       q: q || undefined,
     });
     await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+  }
+
+  function selectGroup(groupId: string) {
+    const next = new URLSearchParams(searchParams);
+    next.set("group_id", groupId);
+    setSearchParams(next);
   }
 
   const columns: DataTableColumn<NotificationListItemOut>[] = [
@@ -131,15 +146,27 @@ export default function NotificationsPage() {
       key: "status",
       header: "Stato",
       render: (n) => (
-        <>
+        <div className="status-cell">
           <StatusPill status={n.status} />
-          <span className={`status-pill${n.verified ? " verified" : ""}`} style={{ marginLeft: 6 }}>
+          <span className={`status-pill${n.verified ? " verified" : ""}`}>
             {n.verified ? "Verificata" : "Non verificata"}
           </span>
-        </>
+        </div>
       ),
     },
-    { key: "received_at", header: "Ricevuta", render: (n) => new Date(n.received_at).toLocaleString("it-IT") },
+    {
+      key: "received_at",
+      header: "Ricevuta",
+      render: (n) => {
+        const d = new Date(n.received_at);
+        return (
+          <span className="received-at">
+            <span>{d.toLocaleDateString("it-IT")}</span>
+            <span>{d.toLocaleTimeString("it-IT")}</span>
+          </span>
+        );
+      },
+    },
     {
       key: "actions",
       header: "",
@@ -156,32 +183,28 @@ export default function NotificationsPage() {
     },
   ];
 
+  if (!groupId) {
+    return (
+      <div>
+        <h1>Notifiche</h1>
+        <p className="page-subtitle">
+          Seleziona un gruppo per vedere le notifiche ricevute dal gruppo.
+        </p>
+        {groupsError && <ErrorBanner error={groupsError} />}
+        <GroupList groups={groups ?? []} loading={groupsLoading} onSelect={selectGroup} />
+      </div>
+    );
+  }
+
   return (
     <div>
+      <Link to="/notifications" style={{ marginRight: 8, fontSize: 13 }}>
+        ← Torna ai gruppi
+      </Link>
       <h1>Notifiche</h1>
       {error && <ErrorBanner error={error} />}
 
       <div className="toolbar">
-        <select
-          value={groupId ?? ""}
-          onChange={(event) => {
-            const value = event.target.value;
-            setSearchParams((prev) => {
-              const next = new URLSearchParams(prev);
-              if (value) next.set("group_id", value);
-              else next.delete("group_id");
-              return next;
-            });
-          }}
-        >
-          <option value="">Tutti i gruppi</option>
-          {groups?.map((g) => (
-            <option key={g.id} value={g.id}>
-              {g.name}
-            </option>
-          ))}
-        </select>
-
         <select
           value={severityMin ?? ""}
           onChange={(event) => {

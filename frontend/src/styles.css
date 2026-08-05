@@ -76,7 +76,12 @@ button.primary {
   display: flex;
   gap: var(--space-2);
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.row-actions button {
+  white-space: nowrap;
 }
 
 .status-pill.verified {
@@ -109,6 +114,20 @@ td {
   /* Webhook mascherati, URL di errore e pattern RE2 sono stringhe lunghe
      senza spazi: senza questo spezzano la cella e sfondano la card. */
   overflow-wrap: anywhere;
+}
+
+th {
+  /* Gli header sono etichette brevi: mai spezzati a metà parola. */
+  white-space: nowrap;
+}
+
+/* Data e ora su due righe pulite, senza la virgola che faceva iniziare la
+   riga di continuazione con la punteggiatura. */
+.received-at {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  white-space: nowrap;
 }
 
 /* Contenitore obbligatorio per ogni tabella dentro una card: se le colonne
@@ -200,13 +219,14 @@ code {
   margin-top: var(--space-1);
 }
 
-/* Gruppo di pulsanti dentro una cella: vanno a capo invece di allargare
-   la colonna oltre il bordo della card. */
+/* Gruppo di pulsanti dentro una cella: restano su una riga; se la colonna
+   non basta, la tabella scorre in orizzontale dentro .table-wrap. */
 .row-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: var(--space-2);
   align-items: flex-start;
+  white-space: nowrap;
 }
 
 .cell-diagnostics {
@@ -286,6 +306,7 @@ code {
   font-weight: 600;
   text-transform: uppercase;
   color: #fff;
+  white-space: nowrap;
 }
 
 .severity-critical,
@@ -310,6 +331,14 @@ code {
   border-radius: 999px;
   font-size: 12px;
   border: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.status-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
 }
 
 .error-banner {
@@ -345,6 +374,43 @@ code {
   align-items: center;
   flex-wrap: wrap;
   margin-bottom: var(--space-3);
+}
+
+.group-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-3);
+}
+
+.page-subtitle {
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-3);
+}
+
+.group-search {
+  margin-bottom: var(--space-3);
+}
+
+.group-search input {
+  width: 100%;
+  max-width: 360px;
+}
+
+.group-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  text-align: left;
+  padding: var(--space-3);
+}
+
+.group-card-name {
+  font-weight: 600;
+}
+
+.group-card-desc {
+  color: var(--color-text-muted);
+  font-size: 13px;
 }
 
 .access-denied {

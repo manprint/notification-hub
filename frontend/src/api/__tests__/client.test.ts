@@ -2,6 +2,7 @@ import { HttpResponse, http } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   apiGet,
+  apiPost,
   getRefreshToken,
   onLogout,
   setAccessToken,
@@ -87,5 +88,23 @@ describe("client", () => {
       status: 422,
       detail: "Request validation failed.",
     } satisfies Partial<ApiError>);
+  });
+
+  it("bulk_read_posts_body_and_succeeds: POST bulk-read invia il body ed e' risolto", async () => {
+    let capturedBody: unknown;
+    server.use(
+      http.post("/api/v1/notifications/bulk-read", async ({ request }) => {
+        capturedBody = await request.json();
+        return HttpResponse.json({ marked_read: 0 });
+      }),
+    );
+
+    const result = await apiPost<{ marked_read: number }>(
+      "/api/v1/notifications/bulk-read",
+      { group_id: "g1" },
+    );
+
+    expect(capturedBody).toEqual({ group_id: "g1" });
+    expect(result).toEqual({ marked_read: 0 });
   });
 });
