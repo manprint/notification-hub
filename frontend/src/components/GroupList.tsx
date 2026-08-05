@@ -45,8 +45,22 @@ export default function GroupList({ groups, onSelect, loading }: GroupListProps)
         <div className="group-grid">
           {filtered.map((g) => (
             <button key={g.id} className="group-card" onClick={() => onSelect(g.id)}>
+              <div className="group-card-head">
+                <span className="group-card-eyebrow">Gruppo</span>
+                <span className="group-card-meta">{g.receiver_count} receiver</span>
+              </div>
               <span className="group-card-name">{g.name}</span>
               {g.description && <span className="group-card-desc">{g.description}</span>}
+              {typeof g.notification_count === "number" && (
+                <div className="group-card-stats">
+                  <span className="group-card-stat group-card-stat-unread">
+                    {g.unread_count} non lette
+                  </span>
+                  <span className="group-card-stat">
+                    {g.notification_count - (g.unread_count ?? 0)} lette
+                  </span>
+                </div>
+              )}
             </button>
           ))}
         </div>

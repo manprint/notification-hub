@@ -28,6 +28,8 @@ class GroupOut(BaseModel):
     name: str
     description: str | None
     receiver_count: int
+    notification_count: int
+    unread_count: int
 
 
 class GroupChannelBindingCreate(BaseModel):

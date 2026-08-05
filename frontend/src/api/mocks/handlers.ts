@@ -35,8 +35,17 @@ export const fixtureGroups = [
     name: "Server Produzione",
     description: "Ambiente di produzione",
     receiver_count: 1,
+    notification_count: 5,
+    unread_count: 2,
   },
-  { id: "g2", name: "Backup", description: null, receiver_count: 0 },
+  {
+    id: "g2",
+    name: "Backup",
+    description: null,
+    receiver_count: 0,
+    notification_count: 0,
+    unread_count: 0,
+  },
 ];
 
 export const fixtureGroupDetail = { ...fixtureGroups[0], receiver_count: 1 };

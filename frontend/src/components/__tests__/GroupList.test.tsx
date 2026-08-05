@@ -38,6 +38,27 @@ describe("GroupList", () => {
     expect(container.querySelector(".group-card-desc")).toBeNull();
   });
 
+  it("group_list_shows_read_unread_counts: mostra non lette e lette sul gruppo", () => {
+    const withCounts: GroupOut[] = [
+      {
+        id: "g3",
+        name: "Monitoraggio",
+        description: null,
+        receiver_count: 2,
+        notification_count: 5,
+        unread_count: 2,
+      },
+    ];
+    render(<GroupList groups={withCounts} onSelect={() => {}} />);
+    expect(screen.getByText("2 non lette")).not.toBeNull();
+    expect(screen.getByText("3 lette")).not.toBeNull();
+  });
+
+  it("group_list_omits_counts_without_fields: senza notification_count non mostra i contatori", () => {
+    const { container } = render(<GroupList groups={groups} onSelect={() => {}} />);
+    expect(container.querySelector(".group-card-stats")).toBeNull();
+  });
+
   it("group_list_empty_message: mostra il messaggio quando non ci sono gruppi", () => {
     render(<GroupList groups={[]} onSelect={() => {}} />);
     expect(screen.getByText("Nessun gruppo configurato.")).not.toBeNull();

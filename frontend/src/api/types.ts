@@ -67,6 +67,8 @@ export interface GroupOut {
   name: string;
   description: string | null;
   receiver_count: number;
+  notification_count?: number;
+  unread_count?: number;
 }
 
 export interface GroupChannelBindingOut {
