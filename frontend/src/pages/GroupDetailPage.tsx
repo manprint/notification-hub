@@ -6,6 +6,7 @@ import CopyButton from "../components/CopyButton";
 import DataTable, { type DataTableColumn } from "../components/DataTable";
 import ErrorBanner from "../components/ErrorBanner";
 import NewReceiverForm from "../components/NewReceiverForm";
+import SeverityBadge from "../components/SeverityBadge";
 import { useSession } from "../hooks/useSession";
 import { MEMBER_ROLES, hasRole } from "../lib/roles";
 
@@ -51,6 +52,11 @@ export default function GroupDetailPage() {
           <CopyButton value={r.ingest_url} />
         </div>
       ),
+    },
+    {
+      key: "default_severity",
+      header: "Severity",
+      render: (r) => <SeverityBadge severity={r.default_severity} />,
     },
   ];
 

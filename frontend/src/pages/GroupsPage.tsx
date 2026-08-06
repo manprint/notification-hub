@@ -183,12 +183,6 @@ export default function GroupsPage() {
       <h1>Gruppi</h1>
       {error && <ErrorBanner error={error} />}
 
-      {editingGroup && (
-        <div className="card">
-          <EditGroupForm group={editingGroup} onDone={() => setEditingGroup(null)} />
-        </div>
-      )}
-
       {hasRole(role, ADMIN_ROLES) && (
         <div className="card">
           <h3>Nuovo gruppo</h3>
@@ -227,6 +221,12 @@ export default function GroupsPage() {
         loading={isLoading}
         emptyMessage={q ? "Nessun gruppo corrisponde alla ricerca." : "Nessun gruppo configurato."}
       />
+
+      {editingGroup && (
+        <div className="card">
+          <EditGroupForm group={editingGroup} onDone={() => setEditingGroup(null)} />
+        </div>
+      )}
     </div>
   );
 }
