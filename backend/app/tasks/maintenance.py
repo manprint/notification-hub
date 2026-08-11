@@ -19,7 +19,6 @@ from app.db.types import (
     SeveritySource,
     TenantStatus,
 )
-from app.models.channel import DeliveryChannel
 from app.models.delivery import Delivery
 from app.models.group import Group
 from app.models.invitation import Invitation
@@ -62,26 +61,27 @@ def purge_notifications() -> None:
     for tenant_id, retention_days in tenants:
         cutoff = datetime.now(UTC) - timedelta(days=retention_days)
         deleted_total = 0
-        with tenant_session_sync(tenant_id) as session:
-            while True:
+        while True:
+            with tenant_session_sync(tenant_id) as session:
                 ids = (
                     session.execute(
                         select(Notification.id)
                         .where(
                             Notification.tenant_id == tenant_id, Notification.received_at < cutoff
                         )
+                        .order_by(Notification.received_at.asc(), Notification.id.asc())
                         .limit(PURGE_BATCH_SIZE)
+                        .with_for_update(skip_locked=True)
                     )
                     .scalars()
                     .all()
                 )
-                if not ids:
-                    break
-                session.execute(delete(Notification).where(Notification.id.in_(ids)))
-                session.commit()
-                deleted_total += len(ids)
-                if len(ids) < PURGE_BATCH_SIZE:
-                    break
+                if ids:
+                    session.execute(delete(Notification).where(Notification.id.in_(ids)))
+                batch_size = len(ids)
+            deleted_total += batch_size
+            if batch_size < PURGE_BATCH_SIZE:
+                break
         logger.info("purge_notifications_done", tenant_id=str(tenant_id), deleted=deleted_total)
     maintenance_job_runs_total.labels(job="purge_notifications", outcome="success").inc()
 
@@ -136,20 +136,16 @@ def reconcile_deliveries() -> None:
 
     for tenant_id in _all_tenant_ids():
         with tenant_session_sync(tenant_id) as session:
-            # Solo le delivery verso canali attivi: dispatch_delivery esce
-            # subito su un canale disabilitato lasciando la riga `pending`, e
-            # senza questo filtro il job la riaccodava a ogni giro, per sempre.
-            enabled_channels = select(DeliveryChannel.id).where(
-                DeliveryChannel.tenant_id == tenant_id,
-                DeliveryChannel.enabled.is_(True),
-            )
+            # Si riaccodano anche quelle il cui canale e' stato disabilitato:
+            # dispatch_delivery le rende terminali (`dead`). Filtrarle qui
+            # lascerebbe `pending` per sempre una riga il cui messaggio broker
+            # sia andato perso prima della disabilitazione.
             due = (
                 session.execute(
                     select(Delivery.id).where(
                         Delivery.tenant_id == tenant_id,
                         Delivery.status.in_([DeliveryStatus.PENDING, DeliveryStatus.FAILED]),
                         Delivery.next_attempt_at <= now,
-                        Delivery.channel_id.in_(enabled_channels),
                     )
                 )
                 .scalars()
@@ -204,7 +200,10 @@ def drain_object_deletions() -> None:
     with sync_session_factory() as session:
         rows = (
             session.execute(
-                select(PendingObjectDeletion).where(PendingObjectDeletion.attempts < 10)
+                select(PendingObjectDeletion)
+                .where(PendingObjectDeletion.attempts < 10)
+                .limit(PURGE_BATCH_SIZE)
+                .with_for_update(skip_locked=True)
             )
             .scalars()
             .all()
@@ -386,11 +385,13 @@ def check_expected_schedules() -> None:
         with tenant_session_sync(tenant_id) as session:
             receivers = (
                 session.execute(
-                    select(Receiver).where(
+                    select(Receiver)
+                    .where(
                         Receiver.tenant_id == tenant_id,
                         Receiver.missing_severity.isnot(None),
                         Receiver.status == ReceiverStatus.ACTIVE,
                     )
+                    .with_for_update(skip_locked=True)
                 )
                 .scalars()
                 .all()

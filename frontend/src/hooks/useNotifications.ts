@@ -21,7 +21,10 @@ export interface NotificationFilters {
   to?: string;
 }
 
-export function useNotifications(filters: NotificationFilters) {
+export function useNotifications(
+  filters: NotificationFilters,
+  options?: { enabled?: boolean },
+) {
   return useInfiniteQuery<
     NotificationListOut,
     ApiError,
@@ -38,5 +41,6 @@ export function useNotifications(filters: NotificationFilters) {
       }),
     initialPageParam: undefined,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: options?.enabled ?? true,
   });
 }

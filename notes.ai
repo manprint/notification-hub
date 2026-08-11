@@ -68,3 +68,36 @@ Integrazione con ITOP.
 2. Bug preesistente incontrato durante la prova, fuori dal tuo sviluppo: NOTIFYHUB_BOOTSTRAP_EMAIL con dominio special-use (.local, .test, .example) viene accettato dal bootstrap CLI ma rifiutato al login con 422 da email-validator — l'owner creato non può entrare. Dimmi se lo sistemo (validazione in bootstrap o allineamento fra i due), non l'ho toccato.
 
 Idea per dopo, non ora: ping di inizio esecuzione dal wrapper (X-Phase: start), per distinguere "cron non è partito" da "job partito alle 3 e mai finito perché la macchina è caduta a metà backup". Con i soli ping di fine i due casi sono indistinguibili — ma entrambi fanno scattare l'allarme, quindi la v1 non ne ha bisogno.
+
+
+
+/plan-analize-v3 Nella pagina dei gruppi (/groups) voglio che facciamo un po di sistemazione grafica. 
+1. Qui voglio una barra di ricerca, che insiste sui gruppi creati. 
+  - I gruppi devono essere rappresentati in tabella per righe; su ogni riga voglio il nome del gruppo, il numero di receiver onfigurati, i pulsanti modifica ed elimina gruppo eil nuovo pulsante "apri", che apre il gruppo.
+2. Se faccio clic sul pulsante "apri" del gruppo, in una nuova pagina, voglio vedere una tabella con a. nome receiber, b. slug. Lo slug se è lungo può essere trncato con tre puntini ... e per lo slug deve mostrare il pulsante copia che lo copia nella clipboard.
+3. Cliccando sul nome del receiver si apre la schermata di dettaglio del receiver (come adesso). 
+- Le tabelle ben formattate, con una dimensione appropriata.
+- Presta massima attenzione ai riferimenti tra le pagine. 
+- Voglio uno sviluppo ben testato e senza regressioni
+**Chiedi dettagli se non sei sicuro, non fare assunzioni**
+
+Inserisci un recipe el makefile che
+
+1. invoca make all-in-one-build
+2. va in deploy/all-in-one/docker-compose.all-in-one.yml ed esegue:
+  - docker docker compose -f docker-compose.all-in-one.yml up -d
+
+
+Bug:
+
+1. la copia del receiver copia solo lo slug! Errato, deve copiare tutto l'url di invio (http://localhost/ingest/aaaaa-aaasssssss-6SscqndEhGnR57WO-Hxpbw)
+  - chiaramente il base path non deve essere piastrato localhost ma ricavato dinamicamente cosi come viene fatto nella pagina dei receivers.
+
+2. in gruppi, "apri" fai un pulsante come modifica gruppo / elimina gruppo, stesso stile.
+
+3. quando si va nel dettaglio di un gruppo, la tabella è bruttissima:
+  - il pulsante copia fa schifo (il testo di copia va capo nel pulsante co -> pia)
+  - c'è lo spazio per mostare tutto lo slug! mostralo!
+  - Il nome del receiver deve essere centrato al centro sull'altezza della riga
+
+No regressioni! Massima attenzione!

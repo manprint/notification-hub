@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.db.types import NotificationPhase, NotificationStatus, Severity, SeveritySource
 
@@ -27,6 +27,7 @@ class NotificationListItemOut(BaseModel):
     duration_ms: int | None = None
     exit_code: int | None = None
     status: NotificationStatus
+    verified: bool
     received_at: datetime
 
 
@@ -51,12 +52,23 @@ class NotificationDetailOut(BaseModel):
     duration_ms: int | None = None
     exit_code: int | None = None
     status: NotificationStatus
+    verified: bool
     received_at: datetime
     source_ip: str | None
 
 
 class MarkStatusIn(BaseModel):
-    status: NotificationStatus
+    """Toggle di stato: almeno uno tra status e verified. Retro-compatibile:
+    chi manda solo status (vecchi client) funziona identico."""
+
+    status: NotificationStatus | None = None
+    verified: bool | None = None
+
+    @model_validator(mode="after")
+    def _requires_at_least_one(self) -> "MarkStatusIn":
+        if self.status is None and self.verified is None:
+            raise ValueError("at least one of 'status' or 'verified' is required")
+        return self
 
 
 class BulkReadIn(BaseModel):

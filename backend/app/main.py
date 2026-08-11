@@ -45,7 +45,7 @@ def create_app() -> FastAPI:
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
         p = Problem(
-            status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status=status.HTTP_422_UNPROCESSABLE_CONTENT,
             type=PROBLEM_TYPES["validation_error"],
             title="Validation Error",
             detail="Request validation failed.",

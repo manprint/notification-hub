@@ -39,6 +39,25 @@ function emitLogout(): void {
   for (const listener of logoutListeners) listener();
 }
 
+function networkError(): ApiError {
+  return {
+    status: 0,
+    type: "/problems/network-unreachable",
+    title: "Server non raggiungibile",
+    detail:
+      "Impossibile contattare NotifyHub. Controlla la connessione e che l'istanza sia attiva.",
+    extra: {},
+  };
+}
+
+async function safeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch {
+    throw networkError();
+  }
+}
+
 async function toApiError(response: Response): Promise<ApiError> {
   let body: Record<string, unknown> = {};
   try {
@@ -61,7 +80,7 @@ async function refreshAccessToken(): Promise<boolean> {
   const refreshToken = getRefreshToken();
   if (!refreshToken) return false;
 
-  const response = await fetch("/api/v1/auth/refresh", {
+  const response = await safeFetch("/api/v1/auth/refresh", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refresh_token: refreshToken }),
@@ -92,6 +111,13 @@ interface RequestOptions {
   query?: Record<string, string | number | boolean | undefined | null>;
 }
 
+const AUTH_WITHOUT_SESSION = new Set([
+  "/api/v1/auth/login",
+  "/api/v1/auth/register",
+  "/api/v1/auth/refresh",
+  "/api/v1/auth/invitations/accept",
+]);
+
 function buildUrl(path: string, query?: RequestOptions["query"]): string {
   if (!query) return path;
   const params = new URLSearchParams();
@@ -108,33 +134,29 @@ async function rawRequest(
   options: RequestOptions = {},
   isRetry = false,
 ): Promise<Response> {
+  // L'access token vive solo in memoria. Dopo un reload, se esiste una
+  // sessione persistente, ruotala prima della prima API protetta: evita una
+  // richiesta /me 401 usata soltanto come segnale per avviare il refresh.
+  if (
+    !accessToken &&
+    getRefreshToken() &&
+    !isRetry &&
+    !AUTH_WITHOUT_SESSION.has(path)
+  ) {
+    const refreshed = await refreshOnce();
+    if (refreshed) return rawRequest(method, path, options, true);
+  }
+
   const url = buildUrl(path, options.query);
   const headers: Record<string, string> = {};
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
 
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method,
-      headers,
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-    });
-  } catch {
-    // Server irraggiungibile, DNS, TLS, offline: `fetch` rigetta con un
-    // TypeError, che non ha la forma di ApiError. Senza questa conversione ogni
-    // pagina riceveva un errore con `detail`/`extra` assenti: nel migliore dei
-    // casi un banner vuoto, nel peggiore una schermata bianca (accadeva in
-    // LoginPage, che leggeva error.extra.retry_after).
-    throw {
-      status: 0,
-      type: "/problems/network-unreachable",
-      title: "Server non raggiungibile",
-      detail:
-        "Impossibile contattare NotifyHub. Controlla la connessione e che l'istanza sia attiva.",
-      extra: {},
-    } satisfies ApiError;
-  }
+  const response = await safeFetch(url, {
+    method,
+    headers,
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+  });
 
   if (response.status === 401 && !isRetry && path !== "/api/v1/auth/refresh") {
     const refreshed = await refreshOnce();

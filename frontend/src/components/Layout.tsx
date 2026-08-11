@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { useEffect, useRef } from "react";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useSession } from "../hooks/useSession";
 import type { UserRole } from "../api/types";
 
@@ -21,6 +22,21 @@ const MENU_ITEMS: MenuItem[] = [
 
 export default function Layout() {
   const { user, role, logout } = useSession();
+  const location = useLocation();
+  const navigationRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    if (!window.matchMedia("(max-width: 760px)").matches) return;
+    const navigation = navigationRef.current;
+    const activeLink = navigation?.querySelector<HTMLElement>('a[aria-current="page"]');
+    if (!navigation || !activeLink) return;
+
+    // Allinea la voce attiva al margine del menu senza lasciare a sinistra
+    // frammenti della voce precedente (un glitch evidente sui telefoni stretti).
+    const offset = activeLink.getBoundingClientRect().left - navigation.getBoundingClientRect().left;
+    navigation.scrollLeft += offset - 8;
+  }, [location.pathname]);
 
   return (
     <div className="app-shell">
@@ -33,7 +49,7 @@ export default function Layout() {
             </div>
           )}
         </div>
-        <nav>
+        <nav ref={navigationRef} aria-label="Navigazione principale">
           <ul>
             {MENU_ITEMS.filter((item) => role !== null && item.allowed.includes(role)).map(
               (item) => (

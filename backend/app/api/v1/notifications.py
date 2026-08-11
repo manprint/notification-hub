@@ -1,12 +1,15 @@
 """Consultazione delle notifiche (spec 9.5)."""
 
 import base64
+import binascii
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import StreamingResponse
 
@@ -41,7 +44,7 @@ def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
         raw = base64.urlsafe_b64decode(cursor.encode()).decode()
         received_at_str, id_str = raw.split("|", 1)
         return datetime.fromisoformat(received_at_str), uuid.UUID(id_str)
-    except (ValueError, UnicodeDecodeError) as exc:
+    except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
         raise Problem(
             status=422,
             type=PROBLEM_TYPES["validation_error"],
@@ -196,6 +199,7 @@ async def list_notifications(
                 duration_ms=n.duration_ms,
                 exit_code=n.exit_code,
                 status=n.status,
+                verified=n.verified,
                 received_at=n.received_at,
             )
             for n in rows
@@ -256,6 +260,7 @@ async def get_notification(
         duration_ms=notification.duration_ms,
         exit_code=notification.exit_code,
         status=notification.status,
+        verified=notification.verified,
         received_at=notification.received_at,
         source_ip=notification.source_ip,
     )
@@ -300,7 +305,10 @@ async def mark_notification_status(
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> NotificationDetailOut:
     notification = await _get_notification_or_404(session, claims, notification_id)
-    notification.status = body.status
+    if body.status is not None:
+        notification.status = body.status
+    if body.verified is not None:
+        notification.verified = body.verified
     await session.flush()
 
     content_url = None
@@ -322,6 +330,7 @@ async def mark_notification_status(
         duration_ms=notification.duration_ms,
         exit_code=notification.exit_code,
         status=notification.status,
+        verified=notification.verified,
         received_at=notification.received_at,
         source_ip=notification.source_ip,
     )
@@ -350,13 +359,13 @@ async def bulk_mark_read(
         return BulkReadOut(marked_read=0)
     conditions.append(Notification.status == NotificationStatus.UNREAD)
 
-    result = await session.execute(select(Notification).where(*conditions))
-    notifications = result.scalars().all()
-    for notification in notifications:
-        notification.status = NotificationStatus.READ
-    await session.flush()
-
-    return BulkReadOut(marked_read=len(notifications))
+    result = cast(
+        CursorResult[Any],
+        await session.execute(
+            update(Notification).where(*conditions).values(status=NotificationStatus.READ)
+        ),
+    )
+    return BulkReadOut(marked_read=result.rowcount or 0)
 
 
 @router.delete("/{notification_id}", status_code=204)

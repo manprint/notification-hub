@@ -1,6 +1,7 @@
 """E2E per POST /ingest/{slug} (spec 6, 9.1). Ogni test qui fallisce se la
 relativa garanzia di comportamento viene rimossa dal codice."""
 
+import asyncio
 import uuid
 
 import pytest
@@ -138,6 +139,26 @@ async def test_idempotenza_su_x_request_id(api_client, two_tenants):
     assert second.status_code == 200
     assert second.headers.get("Idempotent-Replay") == "true"
     assert second.json()["id"] == first.json()["id"]
+
+
+@pytest.mark.e2e
+async def test_idempotenza_concorrente_non_crea_due_notifiche(api_client, two_tenants):
+    tenant_id, _ = two_tenants
+    slug = uuid.uuid4().hex[:22]
+    await create_receiver(tenant_id, slug)
+    request_id = f"req-concurrent-{uuid.uuid4().hex}"
+
+    first, second = await asyncio.gather(
+        api_client.post(
+            f"/ingest/{slug}", content="stesso messaggio", headers={"X-Request-Id": request_id}
+        ),
+        api_client.post(
+            f"/ingest/{slug}", content="stesso messaggio", headers={"X-Request-Id": request_id}
+        ),
+    )
+
+    assert sorted((first.status_code, second.status_code)) == [200, 201]
+    assert first.json()["id"] == second.json()["id"]
 
 
 @pytest.mark.e2e

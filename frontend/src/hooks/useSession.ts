@@ -24,12 +24,13 @@ export function SessionProvider({ children }: { children: ReactNode }): ReturnTy
   const [user, setUser] = useState<MeOut | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const loadProfile = useCallback(async () => {
+  const loadProfile = useCallback(async (suppressError = true) => {
     try {
       const me = await apiGet<MeOut>("/api/v1/auth/me");
       setUser(me);
-    } catch {
+    } catch (error) {
       setUser(null);
+      if (!suppressError) throw error;
     } finally {
       setLoading(false);
     }
@@ -52,7 +53,10 @@ export function SessionProvider({ children }: { children: ReactNode }): ReturnTy
     }>("/api/v1/auth/login", { email, password });
     setAccessToken(tokens.access_token);
     setRefreshToken(tokens.refresh_token);
-    await loadProfile();
+    // Durante il bootstrap un errore viene gestito come sessione assente; dopo
+    // un login esplicito deve invece tornare al form, altrimenti la UI naviga
+    // alla home e viene subito rimandata indietro senza alcun messaggio.
+    await loadProfile(false);
   }, [loadProfile]);
 
   const logout = useCallback(async () => {

@@ -124,7 +124,7 @@ Tutte le tabelle (tranne `tenants` e `pending_object_deletions`) hanno `tenant_i
 | Vedere l'elenco dei DeliveryChannel (URL mascherato) | ✅ | ✅ | ✅ | ❌ |
 | Consultare `/deliveries` (diagnostica inoltri) | ✅ | ✅ | ✅ | ✅ |
 | Ri-accodare una delivery `dead` | ✅ | ✅ | ✅ | ❌ |
-| Leggere notifiche, segnare come lette | ✅ | ✅ | ✅ | ✅ |
+| Leggere notifiche, segnare come lette / non lette e come verificate / non verificate | ✅ | ✅ | ✅ | ✅ |
 | Eliminare notifiche | ✅ | ✅ | ✅ | ❌ |
 
 Il rotate-slug resta ad admin+ anche se il `member` può creare receiver: rigenerare uno slug rompe gli script già in produzione sui server dei clienti.
@@ -253,6 +253,7 @@ CREATE INDEX ON severity_rules (tenant_id, receiver_id, priority) WHERE enabled;
 | severity | enum(debug…critical) | risolta all'ingestion |
 | severity_source | enum(explicit, rule, receiver_default) | tracciabilità: come è stata decisa |
 | status | enum(unread, read) | default `unread` |
+| verified | bool | default false. flag di verifica manuale dell'operatore; indipendente da status |
 | received_at | timestamptz | indexed |
 | source_ip | inet NULL | audit / anti-abuso |
 | metadata | jsonb | riempito dai moduli di ingestion futuri (mittente email, chat_id Telegram, …). Vuoto per `http_raw` |
@@ -689,7 +690,7 @@ Le sotto-risorse sono identificate da `channel_id`: `PUT`/`DELETE` su una collez
 | GET | `/api/v1/notifications` | Filtri: `group_id`, `receiver_id`, `status`, `severity_min`, `q` (full-text), `from`, `to`. Paginazione **a cursore** su `(received_at, id)` |
 | GET | `/api/v1/notifications/{id}` | Dettaglio. `content` inline se ≤1MB, altrimenti `content_url` |
 | GET | `/api/v1/notifications/{id}/content` | Streaming del corpo completo (proxy MinIO se offloaded) |
-| PATCH | `/api/v1/notifications/{id}` | Segna letta / non letta |
+| PATCH | `/api/v1/notifications/{id}` | Segna letta / non letta e verificata / non verificata. Body: almeno uno fra `status` e `verified`; body vuoto → 422 |
 | POST | `/api/v1/notifications/bulk-read` | Segna in blocco (per filtro) |
 | DELETE | `/api/v1/notifications/{id}` | Elimina |
 | GET | `/api/v1/stats/summary` | Conteggi per gruppo / severity / non lette, per la home della dashboard |

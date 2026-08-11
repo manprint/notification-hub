@@ -23,16 +23,33 @@ def test_notification_list_item_schema():
         severity="info",
         severity_source="receiver_default",
         status="unread",
+        verified=False,
         received_at=now,
     )
     assert item.status == "unread"
     assert item.severity == "info"
+    assert item.verified is False
 
 
 @pytest.mark.unit
 def test_mark_status_schema():
     body = MarkStatusIn(status="read")
     assert body.status == "read"
+
+
+@pytest.mark.unit
+def test_mark_status_accepts_verified_only():
+    body = MarkStatusIn(verified=True)
+    assert body.verified is True
+    assert body.status is None
+
+
+@pytest.mark.unit
+def test_mark_status_rejects_empty_body():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        MarkStatusIn()
 
 
 @pytest.mark.unit

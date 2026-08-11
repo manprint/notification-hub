@@ -36,4 +36,23 @@ describe("ConfirmDialog", () => {
     await user.click(confirmButton);
     expect(onConfirm).toHaveBeenCalledTimes(1);
   });
+
+  it("e' modale, prende il focus e si chiude con Escape", async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn();
+    render(
+      <ConfirmDialog
+        title="Elimina"
+        expectedText="conferma"
+        onConfirm={vi.fn()}
+        onCancel={onCancel}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Elimina" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByLabelText(/digita/i)).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
 });

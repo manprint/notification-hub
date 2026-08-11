@@ -303,8 +303,134 @@ describe("ReceiverDetailPage", () => {
     await user.type(screen.getByLabelText("Espressione cron"), "0 3 *");
     await user.click(screen.getByRole("button", { name: "Salva" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/5 campi/);
+    expect(await screen.findAllByRole("alert")).not.toHaveLength(0);
+    expect(
+      screen.getAllByRole("alert").some((n) => /5 campi/.test(n.textContent ?? "")),
+    ).toBe(true);
     expect(chiamate).toBe(0);
+  });
+
+  it("T-VAL1 impedisce di salvare un cron con un campo fuori range", async () => {
+    const user = userEvent.setup();
+    let chiamate = 0;
+    server.use(
+      http.patch("/api/v1/receivers/r1", () => {
+        chiamate += 1;
+        return HttpResponse.json(fixtureReceiver);
+      }),
+    );
+
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+
+    await user.selectOptions(screen.getByLabelText("Attesa"), "cron");
+    await user.type(screen.getByLabelText("Espressione cron"), "99 3 * * *");
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+
+    expect(
+      (await screen.findAllByRole("alert")).some((n) =>
+        /non valida/.test(n.textContent ?? ""),
+      ),
+    ).toBe(true);
+    expect(chiamate).toBe(0);
+  });
+
+  it("T-VAL2 mostra subito l'errore del cron, prima di ogni salvataggio", async () => {
+    const user = userEvent.setup();
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+
+    await user.selectOptions(screen.getByLabelText("Attesa"), "cron");
+    await user.type(screen.getByLabelText("Espressione cron"), "0 3 *");
+
+    expect(
+      screen.getAllByRole("alert").some((n) => /5 campi/.test(n.textContent ?? "")),
+    ).toBe(true);
+  });
+
+  it("T-VAL3 rifiuta un fuso orario non valido senza chiamare l'API", async () => {
+    const user = userEvent.setup();
+    let chiamate = 0;
+    // Il fuso errato arriva gia' salvato nel receiver: torno in modalita' cron
+    // con quel valore e provo a salvare di nuovo.
+    server.use(
+      http.get("/api/v1/receivers/r1", () =>
+        HttpResponse.json({
+          ...fixtureReceiver,
+          expected_every_seconds: null,
+          expected_cron: "0 3 * * *",
+          expected_timezone: "Europa/Roma",
+        }),
+      ),
+      http.patch("/api/v1/receivers/r1", () => {
+        chiamate += 1;
+        return HttpResponse.json(fixtureReceiver);
+      }),
+    );
+
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+
+    expect(
+      (await screen.findAllByRole("alert")).some((n) =>
+        /non valido/.test(n.textContent ?? ""),
+      ),
+    ).toBe(true);
+    expect(chiamate).toBe(0);
+  });
+
+  it("T-PRE1 mostra le prossime tre esecuzioni del cron", async () => {
+    const user = userEvent.setup();
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+
+    await user.selectOptions(screen.getByLabelText("Attesa"), "cron");
+    await user.type(screen.getByLabelText("Espressione cron"), "0 3 * * 1-5");
+
+    const lista = screen.getByLabelText("Prossime esecuzioni");
+    const voci = within(lista).getAllByRole("listitem");
+    expect(voci).toHaveLength(3);
+    const testi = voci.map((v) => v.textContent ?? "");
+    expect(new Set(testi).size).toBe(3);
+    for (const testo of testi) {
+      expect(testo.trim()).not.toBe("");
+    }
+  });
+
+  it("T-PRE2 mantiene la preview corretta quando cambia il fuso", async () => {
+    const user = userEvent.setup();
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+
+    await user.selectOptions(screen.getByLabelText("Attesa"), "cron");
+    await user.type(screen.getByLabelText("Espressione cron"), "0 3 * * 1-5");
+    await user.selectOptions(
+      screen.getByLabelText("Fuso dell'espressione"),
+      "Europe/Rome",
+    );
+
+    // La preview ricalcola e resta una lista di tre voci, con l'ora del cron
+    // (03:00) espressa nel fuso selezionato. La sensibilita' al fuso dell'ora
+    // mostrata e' provata dai test della libreria (cron.test.ts).
+    const lista = screen.getByLabelText("Prossime esecuzioni");
+    const voci = within(lista).getAllByRole("listitem");
+    expect(voci).toHaveLength(3);
+    expect(new Set(voci.map((v) => v.textContent ?? "")).size).toBe(3);
+    for (const voce of voci) {
+      expect(voce.textContent).toContain("03:00");
+    }
   });
 
   it("spegne la sorveglianza mandando null su tutti i campi", async () => {

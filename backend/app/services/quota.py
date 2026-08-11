@@ -19,7 +19,12 @@ async def enforce_tenant_quotas(
     """Solleva 429 se il tenant ha superato max_notifications_per_day o
     max_storage_bytes (NULL = illimitato, spec 4.1). Va chiamato PRIMA di
     scrivere la nuova Notification."""
-    tenant_result = await session.execute(select(Tenant).where(Tenant.id == tenant_id))
+    # Il controllo e l'INSERT della notifica avvengono nella stessa transazione.
+    # Il lock sulla riga tenant serializza gli ingestion concorrenti: senza, due
+    # richieste potevano entrambe osservare quota disponibile e superarla.
+    tenant_result = await session.execute(
+        select(Tenant).where(Tenant.id == tenant_id).with_for_update()
+    )
     tenant = tenant_result.scalar_one()
 
     if tenant.max_notifications_per_day is not None:

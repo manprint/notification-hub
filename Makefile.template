@@ -1,0 +1,327 @@
+# ============================================================================
+# Makefile template — help dinamico per gruppi, senza script esterni
+#
+# Copiare questo file come `Makefile` nel proprio progetto, svuotare i gruppi
+# di esempio e aggiungere i propri target. L'help si costruisce da solo
+# leggendo i marcatori nei commenti: non c'è nessuna lista da tenere allineata
+# a mano e nessun file esterno da distribuire.
+#
+# ----------------------------------------------------------------------------
+# 1. MARCATORI
+# ----------------------------------------------------------------------------
+#   ##@ Gruppo|descrizione del gruppo
+#       Apre una sezione dell'help. Tutti i target che seguono finiscono in
+#       questa sezione finché non compare il marcatore successivo.
+#       La parte `|descrizione` è opzionale.
+#
+#   target: [dipendenze] ## descrizione del target
+#       Voce dell'help. Il testo dopo `##` è la descrizione mostrata.
+#       Un target SENZA `##` esiste e funziona, ma resta nascosto dall'help
+#       (utile per target interni/di supporto).
+#
+#   ##= descrizione della variabile
+#   VAR ?= valore
+#       Variabile configurabile: compare in fondo all'help con il suo default.
+#       Il marcatore va sulla riga PRECEDENTE alla dichiarazione, mai in coda:
+#       un commento in coda lascerebbe uno spazio finale dentro il valore
+#       (`VAR ?= dev ##= ...` vale `"dev "`, non `"dev"`).
+#       Usare `?=` (non `:=`) così resta sovrascrivibile:
+#           make target VAR=altro      oppure      VAR=altro make target
+#       Variabili interne, non pensate per l'utente, si dichiarano con `:=`
+#       e senza marcatore: restano fuori dall'help.
+#
+# ----------------------------------------------------------------------------
+# 2. REGOLE PRATICHE
+# ----------------------------------------------------------------------------
+#   - Nomi target: minuscole, parole separate da `-` (`fe-build`, `up-test`).
+#   - Ogni target che non produce un file con lo stesso nome va in `.PHONY`.
+#     Qui `.PHONY` è dichiarato per gruppo, così resta vicino ai target.
+#   - Descrizioni brevi e coerenti fra loro.
+#   - Larghezza colonna nome = 22 caratteri: per nomi più lunghi cambiare
+#     `%-22s` nella ricetta `help`.
+#   - Il target `help` è il default (`.DEFAULT_GOAL`): `make` senza argomenti
+#     stampa l'elenco.
+#   - Le ricette usano TAB reali per l'indentazione, non spazi.
+#   - Sostituire `PROGETTO` nella ricetta `help` con il nome del progetto.
+#
+# ----------------------------------------------------------------------------
+# 3. SCRIPT BASH ARBITRARI DENTRO UNA RICETTA
+# ----------------------------------------------------------------------------
+# Di base make esegue OGNI riga della ricetta in una shell separata: variabili,
+# `cd` e `if` non sopravvivono alla riga successiva. Tre modi per scrivere
+# script bash veri; sono tutti mostrati nel gruppo "Esempi" più sotto.
+#
+#   a) .ONESHELL — l'intera ricetta gira in UNA sola shell.
+#      Attivo in questo template (`.ONESHELL:` + `SHELL` + `.SHELLFLAGS`), è la
+#      via più comoda: si scrive bash normale, multi-riga, con variabili, if e
+#      cicli. Richiede GNU make >= 3.82.
+#
+#   b) Righe concatenate con `\` e separate da `;` — funziona anche senza
+#      .ONESHELL, utile se il Makefile deve restare portabile o venire incluso
+#      da altri Makefile che non l'hanno attivo.
+#
+#   c) `define ... endef` + `export` — lo script sta in una variabile di
+#      ambiente e viene eseguito con `bash -c`: comodo per script lunghi o
+#      condivisi fra più target.
+#
+# ATTENZIONE al dollaro: dentro una ricetta `$` è di make, va raddoppiato per
+# passarlo alla shell.
+#   $$VAR   -> variabile di shell           $(VAR) -> variabile di make
+#   $$(cmd) -> sostituzione di comando      $(shell cmd) -> comando in make
+#   $$1 $$@ $$* -> variabili di bash        $@ -> nome del target in make
+#   $$HOME  -> $HOME                        $HOME -> variabile make `H` + "OME"
+#
+# Con .ONESHELL e `.SHELLFLAGS := -eu -o pipefail -c` la ricetta si ferma al
+# primo comando fallito, sulle variabili non definite e sugli errori in mezzo a
+# una pipe. Per un comando che può fallire senza bloccare tutto:
+#   comando_che_puo_fallire || true
+#   valore="$$(comando 2>/dev/null || echo fallback)"
+#
+# Prefissi di riga:
+#   `@` non stampa il comando prima di eseguirlo (con .ONESHELL basta metterlo
+#       sulla prima riga: vale per tutta la ricetta);
+#   `-` ignora l'errore di quella riga.
+#
+# ----------------------------------------------------------------------------
+# 4. PARAMETRI E GUARDIE
+# ----------------------------------------------------------------------------
+#   Parametro obbligatorio:
+#       @test -n "$(NAME)" || { echo "Serve NAME=..."; exit 1; }
+#   Conferma per operazioni distruttive:
+#       @test "$(CONFIRM)" = "yes" || { echo "Ripetere con CONFIRM=yes"; exit 1; }
+#
+# ----------------------------------------------------------------------------
+# 5. PASSARE ARGOMENTI A UN TARGET
+# ----------------------------------------------------------------------------
+# Quattro modi, dal più robusto al più "comodo da digitare". Tutti hanno un
+# target di esempio funzionante nel gruppo "Argomenti" più sotto.
+#
+#   1) VARIABILI (consigliato) — `make test ENV=dev`
+#      Sintassi nativa di make: nessun trucco, ordine libero, funziona anche
+#      dopo il nome del target. Default con `?=`, obbligatorietà con una
+#      guardia `test -n`. Per passare flag arbitrari a un comando interno si
+#      usa una variabile contenitore:
+#          make test-args PYTEST_ARGS="-k login -x"
+#      (le opzioni scritte nude — `make test -k login` — verrebbero
+#      interpretate da make, non dal comando: vanno sempre dentro una
+#      variabile e fra virgolette).
+#
+#   2) TARGET A PATTERN — `make deploy-staging`
+#      La regola `deploy-%:` cattura la parte variabile in `$*`. Ottimo per un
+#      insieme chiuso di valori: si autodocumenta e va in tab-completion.
+#
+#   3) ARGOMENTI POSIZIONALI — `make test dev`
+#      Le parole dopo il target sono, per make, altri goal. Si recuperano da
+#      `MAKECMDGOALS` e si neutralizzano dichiarandole target vuoti:
+#          ARG_TARGETS := test deploy            # target che accettano posizionali
+#          ifneq ($(filter $(firstword $(MAKECMDGOALS)),$(ARG_TARGETS)),)
+#            ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+#            $(eval $(ARGS):;@:)                 # ogni argomento = target no-op
+#          endif
+#      Poi nella ricetta: `$(firstword $(ARGS))`, `$(word 2,$(ARGS))`, `$(ARGS)`.
+#      Limiti da conoscere:
+#        - vale solo se il target con argomenti è il PRIMO goal della riga;
+#        - un argomento che coincide col nome di un target reale (`make test
+#          clean`) sovrascrive quella regola: make emette "overriding recipe";
+#        - non funziona in parallelo con più goal reali (`make lint test dev`);
+#        - se un argomento inizia con `-` make lo tratta come opzione.
+#      Per questo il modo 1 resta preferibile negli script e in CI.
+#
+#   4) VARARGS — `make run a b c` oppure `make run ARGS="a b c"`
+#      Stesso meccanismo del modo 3, ma `$(ARGS)` si passa in blocco allo
+#      script: `bash -c '...' _ $(ARGS)` rende gli argomenti `$$1 $$2 ... $$@`
+#      dentro bash, con il numero in `$$#`.
+# ============================================================================
+
+.DEFAULT_GOAL := help
+SHELL := /bin/bash
+.SHELLFLAGS := -eu -o pipefail -c
+.ONESHELL:
+
+##@ Aiuto|elenco dei comandi disponibili
+
+.PHONY: help
+help: ## Mostra questo elenco (target di default)
+	@awk 'BEGIN { \
+		FS = ":.*##"; \
+		printf "\n\033[1mPROGETTO\033[0m — uso: \033[36mmake\033[0m \033[1m<target>\033[0m [VAR=valore]\n"; \
+	} \
+	/^##@ / { \
+		split(substr($$0, 5), g, "\\|"); \
+		printf "\n\033[1;33m%s\033[0m", g[1]; \
+		if (g[2] != "") printf " \033[2m— %s\033[0m", g[2]; \
+		printf "\n"; \
+		next; \
+	} \
+	/^[a-zA-Z0-9_%.-]+:.*##[^=]/ { \
+		printf "  \033[36m%-22s\033[0m %s\n", $$1, substr($$2, 2); \
+		next; \
+	} \
+	/^##=/ { \
+		vdesc = substr($$0, 4); sub(/^ */, "", vdesc); \
+		next; \
+	} \
+	/^[A-Z0-9_]+ *\?=/ { \
+		if (vdesc != "") { \
+			split($$0, v, "?="); \
+			name = v[1]; sub(/ *$$/, "", name); \
+			val = v[2]; gsub(/^ *| *$$/, "", val); \
+			vars[++nv] = sprintf("  \033[36m%-22s\033[0m %s \033[2m(default: %s)\033[0m", name, vdesc, val); \
+			vdesc = ""; \
+		} \
+		next; \
+	} \
+	END { \
+		if (nv > 0) { \
+			printf "\n\033[1;33mVariabili\033[0m \033[2m— sovrascrivibili da riga di comando o ambiente\033[0m\n"; \
+			for (i = 1; i <= nv; i++) print vars[i]; \
+		} \
+		printf "\n"; \
+	}' $(MAKEFILE_LIST)
+
+##@ Sviluppo|dipendenze, build e qualità del codice
+
+##= Ambiente di destinazione (dev|staging|prod)
+ENVIRONMENT ?= dev
+##= Tag dell'immagine container prodotta
+IMAGE_TAG ?= latest
+
+# Variabile interna: `:=` e nessun marcatore, quindi non compare nell'help.
+BUILD_DIR := build/$(ENVIRONMENT)
+
+.PHONY: install build lint test gates
+
+install: ## Installa le dipendenze del progetto
+	echo "TODO: installare le dipendenze"
+
+build: ## Compila il progetto in build/<ambiente>  (le descrizioni sono testo, non espanse da make)
+	echo "TODO: build per ambiente $(ENVIRONMENT), tag $(IMAGE_TAG)"
+
+lint: ## Esegue il linter
+	echo "TODO: lint"
+
+test: ## Esegue la suite di test
+	echo "TODO: test"
+
+gates: lint test ## Gate completo prima di considerare il lavoro finito
+
+##@ Esempi|come scrivere script bash dentro una ricetta
+
+.PHONY: esempio-oneshell esempio-continuazione esempio-define esempio-parametri esempio-heredoc
+
+esempio-oneshell: ## (a) Script bash multi-riga grazie a .ONESHELL
+	@# La `@` sulla prima riga silenzia l'eco dell'intera ricetta.
+	@# Tutto gira in una sola shell: variabili, cd, if e cicli sopravvivono.
+	mkdir -p "$(BUILD_DIR)"
+	rev="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+	if [[ -f "$(BUILD_DIR)/manifest.txt" ]]; then
+	  rm -f "$(BUILD_DIR)/manifest.txt"
+	fi
+	for modulo in api worker web; do
+	  echo "$$rev $$modulo" >> "$(BUILD_DIR)/manifest.txt"
+	done
+	echo "Scritto $(BUILD_DIR)/manifest.txt (revisione $$rev)"
+
+esempio-continuazione: ## (b) Script su più righe unite da backslash (senza .ONESHELL)
+	@set -euo pipefail; \
+	count=0; \
+	for f in *; do \
+	  count=$$((count + 1)); \
+	done; \
+	echo "Trovati $$count elementi nella directory corrente"
+
+# Script condiviso: definito una volta, eseguibile da più target.
+define VERIFICA_AMBIENTE
+set -euo pipefail
+echo "Verifica ambiente..."
+for bin in git awk sed; do
+  command -v "$$bin" >/dev/null || { echo "Manca il comando richiesto: $$bin"; exit 1; }
+done
+echo "Tutti i comandi richiesti sono presenti."
+endef
+export VERIFICA_AMBIENTE
+
+esempio-define: ## (c) Script lungo definito con define/endef e riutilizzabile
+	@bash -c "$$VERIFICA_AMBIENTE"
+
+esempio-parametri: ## Guardia su parametro obbligatorio (uso: make esempio-parametri NAME=x)
+	@test -n "$(NAME)" || { echo "Serve NAME=<valore>"; exit 1; }
+	echo "Ciao $(NAME) — ambiente $(ENVIRONMENT), tag $(IMAGE_TAG)"
+
+esempio-heredoc: ## Genera un file con un heredoc (delimitatore quotato = nessuna espansione)
+	@mkdir -p "$(BUILD_DIR)"
+	cat > "$(BUILD_DIR)/esempio.conf" <<-'EOF'
+		# Con 'EOF' fra apici il testo è letterale: $HOME resta $HOME.
+		chiave = valore
+	EOF
+	cat > "$(BUILD_DIR)/esempio-espanso.conf" <<-EOF
+		# Senza apici la shell espande: home dell'utente e ambiente make.
+		home = $$HOME
+		ambiente = $(ENVIRONMENT)
+	EOF
+	echo "Scritti $(BUILD_DIR)/esempio.conf e $(BUILD_DIR)/esempio-espanso.conf"
+
+##@ Argomenti|quattro modi per passare parametri a un target
+
+# --- Meccanismo per gli argomenti posizionali (modi 3 e 4) -------------------
+# Elencare qui i target che accettano parole libere dopo il proprio nome.
+ARG_TARGETS := arg-posizionale arg-multiplo arg-varargs
+
+# Se il primo goal è uno di quei target, tutte le parole successive diventano
+# $(ARGS) e vengono dichiarate target vuoti, così make non prova a costruirle.
+ifneq ($(filter $(firstword $(MAKECMDGOALS)),$(ARG_TARGETS)),)
+  ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+  ifneq ($(ARGS),)
+    $(eval $(ARGS):;@:)
+  endif
+endif
+# -----------------------------------------------------------------------------
+
+##= Argomenti extra inoltrati a pytest da `arg-flag`
+PYTEST_ARGS ?=
+
+.PHONY: arg-variabile arg-flag arg-posizionale arg-multiplo arg-varargs
+
+arg-variabile: ## (1) Variabili: make arg-variabile ENV=staging TAG=v2
+	@env="$(or $(ENV),$(ENVIRONMENT))"
+	tag="$(or $(TAG),$(IMAGE_TAG))"
+	test -n "$$env" || { echo "Serve ENV=<dev|staging|prod>"; exit 1; }
+	echo "deploy su $$env con tag $$tag"
+
+arg-flag: ## (1b) Flag arbitrari in una variabile: make arg-flag PYTEST_ARGS="-k login -x"
+	@echo "eseguirei: pytest -q $(PYTEST_ARGS)"
+
+deploy-%: ## (2) Target a pattern: make deploy-staging  (il valore finisce in $*)
+	@echo "deploy sull'ambiente $* con tag $(IMAGE_TAG)"
+
+arg-posizionale: ## (3) Un argomento posizionale: make arg-posizionale dev
+	@env="$(or $(firstword $(ARGS)),$(ENVIRONMENT))"
+	echo "ambiente = $$env"
+
+arg-multiplo: ## (3b) Più posizionali: make arg-multiplo prod eu-west-1 v2
+	@env="$(or $(word 1,$(ARGS)),dev)"
+	region="$(or $(word 2,$(ARGS)),eu-south-1)"
+	version="$(or $(word 3,$(ARGS)),latest)"
+	echo "ambiente=$$env regione=$$region versione=$$version"
+
+arg-varargs: ## (4) Numero arbitrario: make arg-varargs a b c  (oppure ARGS="a b c")
+	@bash -c '
+	  echo "ricevuti $$# argomenti"
+	  i=0
+	  for a in "$$@"; do
+	    i=$$((i + 1))
+	    echo "  $$i: $$a"
+	  done
+	  echo "tutti insieme: $$*"
+	' _ $(ARGS)
+
+##@ Manutenzione|pulizia e operazioni distruttive
+
+.PHONY: clean purge
+
+clean: ## Rimuove gli artefatti di build
+	rm -rf build/
+
+purge: ## Distruttivo: elimina build e dati locali (serve CONFIRM=yes)
+	@test "$(CONFIRM)" = "yes" || { echo "Elimina TUTTI i dati locali. Ripetere con CONFIRM=yes"; exit 1; }
+	rm -rf build/ data/

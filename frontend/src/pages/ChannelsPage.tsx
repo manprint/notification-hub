@@ -177,17 +177,37 @@ function DeleteChannelButton({ channel }: { channel: DeliveryChannelOut }) {
 
 function ChannelRow({ channel, canManage }: { channel: DeliveryChannelOut; canManage: boolean }) {
   const [testResult, setTestResult] = useState<DeliveryChannelTestOut | null>(null);
+  const [actionError, setActionError] = useState<ApiError | null>(null);
+  const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const queryClient = useQueryClient();
 
   async function runTest() {
-    const result = await apiPost<DeliveryChannelTestOut>(`/api/v1/channels/${channel.id}/test`);
-    setTestResult(result);
+    setActionError(null);
+    setBusy(true);
+    try {
+      const result = await apiPost<DeliveryChannelTestOut>(
+        `/api/v1/channels/${channel.id}/test`,
+      );
+      setTestResult(result);
+    } catch (err) {
+      setActionError(err as ApiError);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function toggleEnabled() {
-    await apiPatch(`/api/v1/channels/${channel.id}`, { enabled: !channel.enabled });
-    await queryClient.invalidateQueries({ queryKey: ["channels"] });
+    setActionError(null);
+    setBusy(true);
+    try {
+      await apiPatch(`/api/v1/channels/${channel.id}`, { enabled: !channel.enabled });
+      await queryClient.invalidateQueries({ queryKey: ["channels"] });
+    } catch (err) {
+      setActionError(err as ApiError);
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (editing) {
@@ -220,9 +240,13 @@ function ChannelRow({ channel, canManage }: { channel: DeliveryChannelOut; canMa
       <td>
         {canManage && (
           <div className="row-actions">
-            <button onClick={() => void runTest()}>Prova</button>
-            <button onClick={() => void toggleEnabled()}>{channel.enabled ? "Disattiva" : "Attiva"}</button>
-            <button onClick={() => setEditing(true)}>Modifica</button>
+            <button disabled={busy} onClick={() => void runTest()}>
+              {busy ? "Attendi…" : "Prova"}
+            </button>
+            <button disabled={busy} onClick={() => void toggleEnabled()}>
+              {channel.enabled ? "Disattiva" : "Attiva"}
+            </button>
+            <button disabled={busy} onClick={() => setEditing(true)}>Modifica</button>
             <DeleteChannelButton channel={channel} />
           </div>
         )}
@@ -231,6 +255,7 @@ function ChannelRow({ channel, canManage }: { channel: DeliveryChannelOut; canMa
             {testResult.sent ? `Inviato (${testResult.detail})` : `Fallito: ${testResult.detail}`}
           </div>
         )}
+        {actionError && <ErrorBanner error={actionError} />}
       </td>
     </tr>
   );
@@ -248,14 +273,24 @@ function ReceiverOverridesPanel({
   channels: DeliveryChannelOut[];
 }) {
   const queryClient = useQueryClient();
+  const [actionError, setActionError] = useState<ApiError | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
   const { data: overrides, error } = useQuery<ReceiverChannelOverrideOut[], ApiError>({
     queryKey: ["receiver-overrides", receiverId],
     queryFn: () => apiGet<ReceiverChannelOverrideOut[]>(`/api/v1/receivers/${receiverId}/channels`),
   });
 
   async function remove(channelId: string) {
-    await apiDelete(`/api/v1/receivers/${receiverId}/channels/${channelId}`);
-    await queryClient.invalidateQueries({ queryKey: ["receiver-overrides", receiverId] });
+    setActionError(null);
+    setRemovingId(channelId);
+    try {
+      await apiDelete(`/api/v1/receivers/${receiverId}/channels/${channelId}`);
+      await queryClient.invalidateQueries({ queryKey: ["receiver-overrides", receiverId] });
+    } catch (err) {
+      setActionError(err as ApiError);
+    } finally {
+      setRemovingId(null);
+    }
   }
 
   const channelName = (channelId: string) => channels.find((c) => c.id === channelId)?.name ?? channelId;
@@ -267,6 +302,7 @@ function ReceiverOverridesPanel({
 
   return (
     <div className="table-wrap">
+      {actionError && <ErrorBanner error={actionError} />}
       <table>
         <thead>
           <tr>
@@ -283,7 +319,12 @@ function ReceiverOverridesPanel({
               <td>{o.mode === "mute" ? "silenziato" : "soglia sostituita"}</td>
               <td>{o.min_severity ?? "—"}</td>
               <td>
-                <button onClick={() => void remove(o.channel_id)}>Rimuovi</button>
+                <button
+                  disabled={removingId !== null}
+                  onClick={() => void remove(o.channel_id)}
+                >
+                  {removingId === o.channel_id ? "Rimozione…" : "Rimuovi"}
+                </button>
               </td>
             </tr>
           ))}

@@ -130,6 +130,17 @@ async def test_415_su_content_type_non_supportato(api_client, two_tenants, owner
 
 
 @pytest.mark.e2e
+async def test_cursore_malformato_restituisce_422_non_500(api_client, two_tenants, owner_token):
+    tenant_id, _ = two_tenants
+    token = await owner_token(api_client, tenant_id)
+    resp = await api_client.get(
+        "/api/v1/notifications?cursor=non-base64%",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    _e_un_problem(resp, 422)
+
+
+@pytest.mark.e2e
 async def test_il_detail_non_espone_dettagli_interni(api_client, two_tenants, owner_token):
     """`detail` finisce sotto gli occhi dell'utente in dashboard: non deve
     contenere nomi di tabelle, percorsi di file o tracce dello stack."""

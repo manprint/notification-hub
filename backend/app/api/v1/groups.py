@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_claims, db, require_admin
@@ -10,6 +10,8 @@ from app.core.security import AccessClaims
 from app.models.binding import GroupChannelBinding
 from app.models.channel import DeliveryChannel
 from app.models.group import Group
+from app.models.notification import Notification
+from app.models.receiver import Receiver
 from app.schemas.group import (
     GroupChannelBindingCreate,
     GroupChannelBindingOut,
@@ -39,6 +41,75 @@ async def _get_group_or_404(
     return group
 
 
+def _group_out(
+    group: Group,
+    receiver_count: int,
+    notification_count: int = 0,
+    unread_count: int = 0,
+) -> GroupOut:
+    """Builds a GroupOut with an explicit receiver count.
+
+    GroupOut uses from_attributes + model_validate in other endpoints; here we
+    construct it explicitly because the ORM Group has no receiver_count column.
+    """
+    return GroupOut(
+        id=group.id,
+        name=group.name,
+        description=group.description,
+        receiver_count=receiver_count,
+        notification_count=notification_count,
+        unread_count=unread_count,
+    )
+
+
+async def _receiver_counts(
+    session: AsyncSession, tenant_id: uuid.UUID, group_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, int]:
+    if not group_ids:
+        return {}
+    result = await session.execute(
+        select(Receiver.group_id, func.count())
+        .where(
+            Receiver.tenant_id == tenant_id,
+            Receiver.group_id.in_(group_ids),
+        )
+        .group_by(Receiver.group_id)
+    )
+    return {group_id: count for group_id, count in result.all()}
+
+
+async def _notification_counts(
+    session: AsyncSession, tenant_id: uuid.UUID, group_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, dict[str, int]]:
+    """Notifiche totali e non lette per gruppo.
+
+    La notifica appartiene a un receiver, il receiver a un gruppo: si conta con
+    una join, raggruppando per gruppo e per stato (i soli stati sono read/unread).
+    """
+    if not group_ids:
+        return {}
+    result = await session.execute(
+        select(
+            Receiver.group_id,
+            Notification.status,
+            func.count(),
+        )
+        .join(Notification, Notification.receiver_id == Receiver.id)
+        .where(
+            Receiver.tenant_id == tenant_id,
+            Receiver.group_id.in_(group_ids),
+        )
+        .group_by(Receiver.group_id, Notification.status)
+    )
+    counts: dict[uuid.UUID, dict[str, int]] = {}
+    for group_id, status, count in result.all():
+        entry = counts.setdefault(group_id, {"notification_count": 0, "unread_count": 0})
+        entry["notification_count"] += count
+        if status == "unread":
+            entry["unread_count"] += count
+    return counts
+
+
 @router.get("", response_model=list[GroupOut])
 async def list_groups(
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
@@ -55,7 +126,10 @@ async def list_groups(
         conditions.append(Group.id.in_(allowed))
 
     result = await session.execute(select(Group).where(*conditions).order_by(Group.name.asc()))
-    return [GroupOut.model_validate(g) for g in result.scalars().all()]
+    groups = result.scalars().all()
+    counts = await _receiver_counts(session, uuid.UUID(claims.tid), [g.id for g in groups])
+    notif = await _notification_counts(session, uuid.UUID(claims.tid), [g.id for g in groups])
+    return [_group_out(g, counts.get(g.id, 0), **notif.get(g.id, {})) for g in groups]
 
 
 @router.post("", response_model=GroupOut, status_code=201)
@@ -74,7 +148,7 @@ async def create_group(
     )
     session.add(group)
     await session.flush()
-    return GroupOut.model_validate(group)
+    return _group_out(group, 0)
 
 
 @router.get("/{group_id}", response_model=GroupOut)
@@ -85,7 +159,8 @@ async def get_group(
 ) -> GroupOut:
     group = await _get_group_or_404(session, uuid.UUID(claims.tid), group_id)
     await assert_group_access(session, claims, group_id, write=False)
-    return GroupOut.model_validate(group)
+    count = await _receiver_counts(session, uuid.UUID(claims.tid), [group.id])
+    return _group_out(group, count.get(group.id, 0))
 
 
 @router.patch("/{group_id}", response_model=GroupOut)
@@ -103,7 +178,8 @@ async def update_group(
         group.description = body.description
 
     await session.flush()
-    return GroupOut.model_validate(group)
+    count = await _receiver_counts(session, uuid.UUID(claims.tid), [group.id])
+    return _group_out(group, count.get(group.id, 0))
 
 
 @router.delete("/{group_id}", status_code=204)

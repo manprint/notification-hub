@@ -2,6 +2,8 @@
 
 import random
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 
 import httpx
 
@@ -15,6 +17,24 @@ logger = get_logger(__name__)
 # spec 8.2: 30s, 2m, 10m, 1h, 6h per i tentativi 1..5, con jitter.
 _BACKOFF_SCHEDULE_SECONDS = [30, 120, 600, 3600, 21600]
 MAX_ATTEMPTS = len(_BACKOFF_SCHEDULE_SECONDS)
+
+
+def parse_retry_after(value: str | None, *, now: datetime | None = None) -> int:
+    """Retry-After accetta sia secondi sia una data HTTP; valori malformati
+    ricadono sul minuto usato dalla spec invece di far crashare il worker."""
+    if value is None:
+        return 60
+    try:
+        return max(1, int(value))
+    except ValueError:
+        try:
+            target = parsedate_to_datetime(value)
+            if target.tzinfo is None:
+                target = target.replace(tzinfo=UTC)
+            reference = now or datetime.now(UTC)
+            return max(1, int((target - reference).total_seconds()))
+        except (TypeError, ValueError, OverflowError):
+            return 60
 
 
 def calculate_retry_delay(attempt_number: int) -> int:
@@ -99,7 +119,7 @@ def send_webhook_sync(
         with httpx.Client(timeout=10.0) as client:
             response = client.post(webhook_url, json=payload)
         if response.status_code == 429:
-            retry_after = int(response.headers.get("Retry-After", "60"))
+            retry_after = parse_retry_after(response.headers.get("Retry-After"))
             return WebhookResult(
                 ok=False, status_code=429, retry_after=retry_after, error="rate limited"
             )

@@ -15,6 +15,12 @@ import ReceiverPresetsPanel from "../components/ReceiverPresetsPanel";
 import SeverityRulesPanel from "../components/SeverityRulesPanel";
 import { useSession } from "../hooks/useSession";
 import {
+  formatExecutionPreview,
+  nextCronExecutions,
+  validateCronExpression,
+  validateTimezone,
+} from "../lib/cron";
+import {
   DURATION_UNIT_LABELS,
   type DurationUnit,
   formatDurationSeconds,
@@ -185,6 +191,16 @@ function EditReceiverForm({
   const [error, setError] = useState<ApiError | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
+  // Validazione dell'espressione cron mentre si scrive: bloccante al salvataggio
+  // e mostrata sotto il campo. Vale solo nel modo cron.
+  const cronError =
+    expectedMode === "cron" ? validateCronExpression(cron) : null;
+  // Prossime tre occorrenze, solo per un cron valido nel fuso scelto.
+  const nextExecutions =
+    expectedMode === "cron" && cronError === null
+      ? nextCronExecutions(cron.trim(), timezone.trim() || "UTC")
+      : [];
+
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
@@ -229,11 +245,17 @@ function EditReceiverForm({
       );
       return;
     }
-    if (expectedMode === "cron" && cron.trim().split(/\s+/).length !== 5) {
-      setFormError(
-        "L'espressione cron deve avere 5 campi come in crontab: minuto ora giorno mese giorno-settimana.",
-      );
-      return;
+    if (expectedMode === "cron") {
+      const err = validateCronExpression(cron);
+      if (err !== null) {
+        setFormError(err);
+        return;
+      }
+      const tzErr = validateTimezone(timezone.trim() || "UTC");
+      if (tzErr !== null) {
+        setFormError(tzErr);
+        return;
+      }
     }
 
     const expected =
@@ -445,6 +467,11 @@ function EditReceiverForm({
                 onChange={(event) => setCron(event.target.value)}
               />
             </div>
+            {cronError && (
+              <p className="error-banner" role="alert">
+                {cronError}
+              </p>
+            )}
             <div className="form-row">
               <label htmlFor="receiver-edit-expected-timezone">
                 Fuso dell'espressione
@@ -465,6 +492,25 @@ function EditReceiverForm({
                 ))}
               </select>
             </div>
+            {nextExecutions.length > 0 ? (
+              <ul className="cron-preview" aria-label="Prossime esecuzioni">
+                {nextExecutions.map((data) => (
+                  <li key={data.toISOString()}>
+                    {formatExecutionPreview(
+                      data,
+                      timezone.trim() || "UTC",
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              expectedMode === "cron" &&
+              cronError === null && (
+                <p className="card-hint">
+                  Nessuna esecuzione trovata per questa espressione cron.
+                </p>
+              )
+            )}
             <p className="card-hint">
               La stessa riga che sta nel crontab della macchina, con il fuso in
               cui quella macchina la interpreta. In cima trovi UTC e il fuso di

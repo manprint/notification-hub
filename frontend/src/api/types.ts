@@ -66,6 +66,9 @@ export interface GroupOut {
   id: string;
   name: string;
   description: string | null;
+  receiver_count: number;
+  notification_count?: number;
+  unread_count?: number;
 }
 
 export interface GroupChannelBindingOut {
@@ -302,6 +305,7 @@ export interface NotificationListItemOut {
   duration_ms: number | null;
   exit_code: number | null;
   status: NotificationStatus;
+  verified: boolean;
   received_at: string;
 }
 
@@ -326,6 +330,7 @@ export interface NotificationDetailOut {
   duration_ms: number | null;
   exit_code: number | null;
   status: NotificationStatus;
+  verified: boolean;
   received_at: string;
   source_ip: string | null;
 }

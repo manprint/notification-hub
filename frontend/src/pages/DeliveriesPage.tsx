@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { apiGet, apiPost } from "../api/client";
 import type { ApiError, DeliveryChannelOut, DeliveryOut, DeliveryStatus } from "../api/types";
@@ -25,6 +26,8 @@ export default function DeliveriesPage() {
   const channelId = searchParams.get("channel_id") ?? undefined;
   const queryClient = useQueryClient();
   const { role } = useSession();
+  const [actionError, setActionError] = useState<ApiError | null>(null);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
 
   const { data, isLoading, error } = useQuery<DeliveryOut[], ApiError>({
     queryKey: ["deliveries", status, channelId],
@@ -46,8 +49,16 @@ export default function DeliveriesPage() {
   }
 
   async function retry(id: string) {
-    await apiPost(`/api/v1/deliveries/${id}/retry`);
-    await queryClient.invalidateQueries({ queryKey: ["deliveries"] });
+    setActionError(null);
+    setRetryingId(id);
+    try {
+      await apiPost(`/api/v1/deliveries/${id}/retry`);
+      await queryClient.invalidateQueries({ queryKey: ["deliveries"] });
+    } catch (err) {
+      setActionError(err as ApiError);
+    } finally {
+      setRetryingId(null);
+    }
   }
 
   const canRetry = hasRole(role, MEMBER_ROLES);
@@ -111,7 +122,9 @@ export default function DeliveriesPage() {
       header: "",
       render: (d) =>
         d.status === "dead" && canRetry ? (
-          <button onClick={() => void retry(d.id)}>Ri-accoda</button>
+          <button disabled={retryingId !== null} onClick={() => void retry(d.id)}>
+            {retryingId === d.id ? "Ri-accodamento…" : "Ri-accoda"}
+          </button>
         ) : null,
     },
   ];
@@ -125,6 +138,7 @@ export default function DeliveriesPage() {
         in stato «morta» hanno esaurito i 5 tentativi e si ri-accodano a mano.
       </p>
       {error && <ErrorBanner error={error} />}
+      {actionError && <ErrorBanner error={actionError} />}
 
       <div className="toolbar">
         <select value={status ?? ""} onChange={(event) => setParam("status", event.target.value)}>

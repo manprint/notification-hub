@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { apiGet, apiPatch, apiPost } from "../api/client";
 import type {
+  ApiError,
   GroupOut,
   NotificationListItemOut,
   NotificationListOut,
@@ -12,6 +13,7 @@ import type {
 } from "../api/types";
 import DataTable, { type DataTableColumn } from "../components/DataTable";
 import ErrorBanner from "../components/ErrorBanner";
+import GroupList from "../components/GroupList";
 import SeverityBadge from "../components/SeverityBadge";
 import StatusPill from "../components/StatusPill";
 import { useNotifications } from "../hooks/useNotifications";
@@ -40,6 +42,8 @@ const SOURCES: SeveritySource[] = [
 export default function NotificationsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [q, setQ] = useState(searchParams.get("q") ?? "");
+  const [actionError, setActionError] = useState<ApiError | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const groupId = searchParams.get("group_id") ?? undefined;
@@ -47,37 +51,73 @@ export default function NotificationsPage() {
   const status = (searchParams.get("status") as NotificationStatus | null) ?? undefined;
   const source = (searchParams.get("source") as SeveritySource | null) ?? undefined;
 
-  const { data: groups } = useQuery({
+  const {
+    data: groups,
+    isLoading: groupsLoading,
+    error: groupsError,
+  } = useQuery<GroupOut[], ApiError>({
     queryKey: ["groups"],
     queryFn: () => apiGet<GroupOut[]>("/api/v1/groups"),
   });
 
   const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } =
-    useNotifications({
-      group_id: groupId,
-      severity_min: severityMin,
-      status,
-      source,
-      q: q || undefined,
-    });
+    useNotifications(
+      {
+        group_id: groupId,
+        severity_min: severityMin,
+        status,
+        source,
+        q: q || undefined,
+      },
+      { enabled: !!groupId },
+    );
 
   const rows = data?.pages.flatMap((page: NotificationListOut) => page.notifications) ?? [];
 
-  async function markRead(id: string) {
-    await apiPatch(`/api/v1/notifications/${id}`, { status: "read" });
-    await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+  async function setStatus(id: string, status: NotificationStatus) {
+    await runAction(`status:${id}`, async () => {
+      await apiPatch(`/api/v1/notifications/${id}`, { status });
+      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    });
+  }
+
+  async function setVerified(id: string, verified: boolean) {
+    await runAction(`verified:${id}`, async () => {
+      await apiPatch(`/api/v1/notifications/${id}`, { verified });
+      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    });
   }
 
   async function bulkRead() {
-    await apiPost("/api/v1/notifications/bulk-read", {
-      group_id: groupId,
-      severity_min: severityMin,
-      // Lo stesso filtro della lista: "segna tutte come lette" non deve toccare
-      // cio' che il filtro sull'origine sta tenendo fuori dalla vista.
-      source,
-      q: q || undefined,
+    await runAction("bulk", async () => {
+      await apiPost("/api/v1/notifications/bulk-read", {
+        group_id: groupId,
+        severity_min: severityMin,
+        // Lo stesso filtro della lista: "segna tutte come lette" non deve toccare
+        // cio' che il filtro sull'origine sta tenendo fuori dalla vista.
+        source,
+        q: q || undefined,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
     });
-    await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+  }
+
+  async function runAction(name: string, action: () => Promise<void>) {
+    setActionError(null);
+    setBusyAction(name);
+    try {
+      await action();
+    } catch (err) {
+      setActionError(err as ApiError);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  function selectGroup(groupId: string) {
+    const next = new URLSearchParams(searchParams);
+    next.set("group_id", groupId);
+    setSearchParams(next);
   }
 
   const columns: DataTableColumn<NotificationListItemOut>[] = [
@@ -122,44 +162,73 @@ export default function NotificationsPage() {
         </>
       ),
     },
-    { key: "status", header: "Stato", render: (n) => <StatusPill status={n.status} /> },
-    { key: "received_at", header: "Ricevuta", render: (n) => new Date(n.received_at).toLocaleString("it-IT") },
+    {
+      key: "status",
+      header: "Stato",
+      render: (n) => (
+        <div className="status-cell">
+          <StatusPill status={n.status} />
+          <span className={`status-pill${n.verified ? " verified" : ""}`}>
+            {n.verified ? "Verificata" : "Non verificata"}
+          </span>
+        </div>
+      ),
+    },
+    {
+      key: "received_at",
+      header: "Ricevuta",
+      render: (n) => {
+        const d = new Date(n.received_at);
+        return (
+          <span className="received-at">
+            <span>{d.toLocaleDateString("it-IT")}</span>
+            <span>{d.toLocaleTimeString("it-IT")}</span>
+          </span>
+        );
+      },
+    },
     {
       key: "actions",
       header: "",
-      render: (n) =>
-        n.status === "unread" ? (
-          <button onClick={() => void markRead(n.id)}>Segna come letta</button>
-        ) : null,
+      render: (n) => (
+        <div className="row-actions">
+          <button
+            disabled={busyAction !== null}
+            onClick={() => void setStatus(n.id, n.status === "unread" ? "read" : "unread")}
+          >
+            {n.status === "unread" ? "Segna come letta" : "Segna come non letta"}
+          </button>
+          <button disabled={busyAction !== null} onClick={() => void setVerified(n.id, !n.verified)}>
+            {n.verified ? "Segna come non verificata" : "Segna come verificata"}
+          </button>
+        </div>
+      ),
     },
   ];
 
+  if (!groupId) {
+    return (
+      <div>
+        <h1>Notifiche</h1>
+        <p className="page-subtitle">
+          Seleziona un gruppo per vedere le notifiche ricevute dal gruppo.
+        </p>
+        {groupsError && <ErrorBanner error={groupsError} />}
+        <GroupList groups={groups ?? []} loading={groupsLoading} onSelect={selectGroup} />
+      </div>
+    );
+  }
+
   return (
     <div>
+      <Link to="/notifications" style={{ marginRight: 8, fontSize: 13 }}>
+        ← Torna ai gruppi
+      </Link>
       <h1>Notifiche</h1>
       {error && <ErrorBanner error={error} />}
+      {actionError && <ErrorBanner error={actionError} />}
 
       <div className="toolbar">
-        <select
-          value={groupId ?? ""}
-          onChange={(event) => {
-            const value = event.target.value;
-            setSearchParams((prev) => {
-              const next = new URLSearchParams(prev);
-              if (value) next.set("group_id", value);
-              else next.delete("group_id");
-              return next;
-            });
-          }}
-        >
-          <option value="">Tutti i gruppi</option>
-          {groups?.map((g) => (
-            <option key={g.id} value={g.id}>
-              {g.name}
-            </option>
-          ))}
-        </select>
-
         <select
           value={severityMin ?? ""}
           onChange={(event) => {
@@ -207,7 +276,9 @@ export default function NotificationsPage() {
           onChange={(event) => setQ(event.target.value)}
         />
 
-        <button onClick={() => void bulkRead()}>Segna tutte come lette</button>
+        <button disabled={busyAction !== null} onClick={() => void bulkRead()}>
+          {busyAction === "bulk" ? "Aggiornamento…" : "Segna tutte come lette"}
+        </button>
       </div>
 
       <p style={{ fontSize: 13, color: "var(--color-text-muted)" }}>

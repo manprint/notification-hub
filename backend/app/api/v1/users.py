@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import UTC, datetime
 
@@ -157,11 +158,12 @@ async def create_user(
     tenant_id = uuid.UUID(claims.tid)
     await _assert_groups_exist(session, tenant_id, body.group_ids)
 
+    password_hash = await asyncio.to_thread(hash_password, body.password)
     user = User(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
         email=body.email,
-        password_hash=hash_password(body.password),
+        password_hash=password_hash,
         role=UserRole(body.role),
         status=UserStatus.ACTIVE,
     )

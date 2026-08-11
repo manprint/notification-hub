@@ -1,91 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { apiDelete, apiGet, apiPatch, apiPost } from "../api/client";
-import type { ApiError, DeleteImpactOut, GroupOut, ReceiverOut, Severity } from "../api/types";
+import type { ApiError, DeleteImpactOut, GroupOut } from "../api/types";
 import ConfirmDialog from "../components/ConfirmDialog";
+import DataTable, { type DataTableColumn } from "../components/DataTable";
 import ErrorBanner from "../components/ErrorBanner";
 import { useSession } from "../hooks/useSession";
-import { ADMIN_ROLES, MEMBER_ROLES, hasRole } from "../lib/roles";
-
-const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
-
-function NewReceiverForm({ groupId }: { groupId: string }) {
-  const queryClient = useQueryClient();
-  const [name, setName] = useState("");
-  const [defaultSeverity, setDefaultSeverity] = useState<Severity>("info");
-  const [error, setError] = useState<ApiError | null>(null);
-
-  async function createReceiver(event: React.FormEvent) {
-    event.preventDefault();
-    setError(null);
-    try {
-      await apiPost(`/api/v1/groups/${groupId}/receivers`, {
-        name,
-        default_severity: defaultSeverity,
-      });
-      setName("");
-      setDefaultSeverity("info");
-      await queryClient.invalidateQueries({ queryKey: ["receivers", groupId] });
-    } catch (err) {
-      setError(err as ApiError);
-    }
-  }
-
-  return (
-    <form onSubmit={(event) => void createReceiver(event)} className="toolbar">
-      {error && <ErrorBanner error={error} />}
-      <input
-        placeholder="Nome receiver"
-        required
-        value={name}
-        onChange={(event) => setName(event.target.value)}
-      />
-      <select
-        value={defaultSeverity}
-        onChange={(event) => setDefaultSeverity(event.target.value as Severity)}
-      >
-        {SEVERITIES.map((s) => (
-          <option key={s} value={s}>
-            {s}
-          </option>
-        ))}
-      </select>
-      <button type="submit" className="primary">
-        Aggiungi receiver
-      </button>
-    </form>
-  );
-}
-
-function GroupReceivers({ groupId }: { groupId: string }) {
-  const { role } = useSession();
-  const { data: receivers, error } = useQuery<ReceiverOut[], ApiError>({
-    queryKey: ["receivers", groupId],
-    queryFn: () => apiGet<ReceiverOut[]>(`/api/v1/groups/${groupId}/receivers`),
-  });
-
-  // Un errore della lista (tipicamente 403) mostrava "Nessun receiver in questo
-  // gruppo": indistinguibile da un gruppo davvero vuoto.
-  if (error) return <ErrorBanner error={error} />;
-
-  return (
-    <div>
-      {!receivers || receivers.length === 0 ? (
-        <p className="card-hint">Nessun receiver in questo gruppo.</p>
-      ) : (
-        <ul>
-          {receivers.map((r) => (
-            <li key={r.id}>
-              <Link to={`/receivers/${r.id}`}>{r.name}</Link> — <code>{r.slug}</code>
-            </li>
-          ))}
-        </ul>
-      )}
-      {hasRole(role, MEMBER_ROLES) && <NewReceiverForm groupId={groupId} />}
-    </div>
-  );
-}
+import { ADMIN_ROLES, hasRole } from "../lib/roles";
 
 function EditGroupForm({ group, onDone }: { group: GroupOut; onDone: () => void }) {
   const queryClient = useQueryClient();
@@ -188,42 +110,19 @@ function DeleteGroupButton({ group }: { group: GroupOut }) {
   );
 }
 
-function GroupCard({ group }: { group: GroupOut }) {
-  const { role } = useSession();
-  const [editing, setEditing] = useState(false);
-  const canManage = hasRole(role, ADMIN_ROLES);
-
-  return (
-    <div className="card">
-      {editing ? (
-        <EditGroupForm group={group} onDone={() => setEditing(false)} />
-      ) : (
-        <>
-          <h3>{group.name}</h3>
-          {group.description && <p>{group.description}</p>}
-        </>
-      )}
-      <GroupReceivers groupId={group.id} />
-      {canManage && !editing && (
-        <div className="toolbar">
-          <button onClick={() => setEditing(true)}>Modifica gruppo</button>
-          <DeleteGroupButton group={group} />
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function GroupsPage() {
   const { role } = useSession();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: groups, isLoading, error } = useQuery<GroupOut[], ApiError>({
     queryKey: ["groups"],
     queryFn: () => apiGet<GroupOut[]>("/api/v1/groups"),
   });
 
+  const [query, setQuery] = useState("");
   const [newName, setNewName] = useState("");
   const [createError, setCreateError] = useState<ApiError | null>(null);
+  const [editingGroup, setEditingGroup] = useState<GroupOut | null>(null);
 
   async function createGroup(event: React.FormEvent) {
     event.preventDefault();
@@ -236,6 +135,48 @@ export default function GroupsPage() {
       setCreateError(err as ApiError);
     }
   }
+
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? (groups ?? []).filter(
+        (g) =>
+          g.name.toLowerCase().includes(q) ||
+          (g.description ?? "").toLowerCase().includes(q),
+      )
+    : (groups ?? []);
+
+  const columns: DataTableColumn<GroupOut>[] = [
+    {
+      key: "name",
+      header: "Nome",
+      render: (g) => (
+        <>
+          <span>{g.name}</span>
+          {g.description && <span className="card-hint"> — {g.description}</span>}
+        </>
+      ),
+    },
+    {
+      key: "receiver_count",
+      header: "Receiver configurati",
+      render: (g) => <span>{g.receiver_count}</span>,
+    },
+    {
+      key: "actions",
+      header: "Azioni",
+      render: (g) => (
+        <div className="row-actions">
+          <button onClick={() => navigate(`/groups/${g.id}`)}>Apri</button>
+          {hasRole(role, ADMIN_ROLES) && (
+            <>
+              <button onClick={() => setEditingGroup(g)}>Modifica gruppo</button>
+              <DeleteGroupButton group={g} />
+            </>
+          )}
+        </div>
+      ),
+    },
+  ];
 
   return (
     <div>
@@ -263,11 +204,29 @@ export default function GroupsPage() {
         </div>
       )}
 
-      {isLoading && <p>Caricamento…</p>}
+      <div className="group-search">
+        <input
+          type="search"
+          aria-label="Cerca gruppi"
+          placeholder="Cerca gruppi…"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </div>
 
-      {groups?.map((group) => (
-        <GroupCard key={group.id} group={group} />
-      ))}
+      <DataTable
+        columns={columns}
+        rows={filtered}
+        rowKey={(g) => g.id}
+        loading={isLoading}
+        emptyMessage={q ? "Nessun gruppo corrisponde alla ricerca." : "Nessun gruppo configurato."}
+      />
+
+      {editingGroup && (
+        <div className="card">
+          <EditGroupForm group={editingGroup} onDone={() => setEditingGroup(null)} />
+        </div>
+      )}
     </div>
   );
 }

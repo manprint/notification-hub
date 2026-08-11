@@ -13,4 +13,13 @@ describe("SeverityBadge", () => {
       unmount();
     }
   });
+
+  it("severity_badge_never_wraps: il badge ha la classe 'severity-badge' che ne impedisce il wrap", () => {
+    // jsdom non applica styles.css, quindi qui si verifica la classe: la regola
+    // `.severity-badge { white-space: nowrap }` sta in styles.css.
+    const { getByText } = render(<SeverityBadge severity="critical" />);
+    const badge = getByText("Critica");
+    expect(badge).toHaveClass("severity-badge");
+    expect(badge).toHaveClass("severity-critical");
+  });
 });
