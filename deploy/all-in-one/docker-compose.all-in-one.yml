@@ -11,12 +11,7 @@
 
 services:
   notifyhub:
-    image: ${NOTIFYHUB_IMAGE:-notifyhub-all-in-one}:${NOTIFYHUB_VERSION:-1.0.0}
-    build:
-      context: ../..
-      dockerfile: deploy/all-in-one/Dockerfile.all
-      args:
-        APP_VERSION: ${NOTIFYHUB_VERSION:-1.0.0}
+    image: ${NOTIFYHUB_IMAGE:-ghcr.io/manprint/notification-hub}:${NOTIFYHUB_VERSION:-v0.0.1}
     container_name: notifyhub
     env_file: .env
     ports:

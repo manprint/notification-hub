@@ -25,7 +25,7 @@ COLOR_NC='\033[0m'
 test_passed=0
 test_failed=0
 
-IMAGE="${SMOKE_IMAGE:-notifyhub-all-in-one:1.0.0}"
+IMAGE="${SMOKE_IMAGE:-ghcr.io/manprint/notification-hub:v0.0.1}"
 NETWORK="${SMOKE_NETWORK:-notifyhub-smoke}"
 CONTAINER="${SMOKE_CONTAINER:-notifyhub-smoke}"
 MOCK="${SMOKE_MOCK:-mock-webhook}"
