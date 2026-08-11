@@ -1,0 +1,22 @@
+# Python local environments and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.coverage*
+htmlcov/
+
+# JavaScript dependencies and generated output
+node_modules/
+dist/
+build/
+.vite/
+coverage/
+*.tsbuildinfo
+
+# Local tool caches/configuration
+.serena/cache/
+.serena/project.local.yml
