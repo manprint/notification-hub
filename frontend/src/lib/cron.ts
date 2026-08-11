@@ -3,7 +3,7 @@
 // guidare l'operatore nel form. Il backend resta l'unica autorita': questa
 // libreria non salva nulla, mostra e blocca.
 
-import { parseExpression } from "cron-parser";
+import { CronExpressionParser } from "cron-parser";
 
 /** Minuto ora giorno mese giorno-settimana, come in crontab. */
 export const CRON_FIELDS = 5;
@@ -22,7 +22,7 @@ export function validateCronExpression(expression: string): string | null {
     return `L'espressione cron supera ${CRON_MAX_CHARS} caratteri.`;
   if (candidate.split(/\s+/).length !== CRON_FIELDS) return MESSAGGIO_5_CAMPI;
   try {
-    const iter = parseExpression(candidate, { currentDate: new Date() });
+    const iter = CronExpressionParser.parse(candidate, { currentDate: new Date() });
     iter.next();
     return null;
   } catch {
@@ -56,7 +56,7 @@ export function nextCronExecutions(
 ): Date[] {
   let iter;
   try {
-    iter = parseExpression(expression, {
+    iter = CronExpressionParser.parse(expression, {
       currentDate: now,
       tz: timezone,
     });

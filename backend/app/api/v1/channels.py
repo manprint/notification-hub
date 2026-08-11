@@ -209,10 +209,14 @@ async def test_channel(
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(webhook_url, json=payload)
-            response.raise_for_status()
-        return DeliveryChannelTestOut(sent=True, detail=f"HTTP {response.status_code}")
-    except httpx.HTTPError as exc:
-        return DeliveryChannelTestOut(sent=False, detail=str(exc))
+    except httpx.RequestError:
+        # Le eccezioni httpx possono includere l'URL completo, che per Slack e
+        # Google Chat contiene il segreto del webhook nel path.
+        return DeliveryChannelTestOut(sent=False, detail="Connessione al webhook fallita.")
+    return DeliveryChannelTestOut(
+        sent=response.is_success,
+        detail=f"HTTP {response.status_code}",
+    )
 
 
 @router.put("/groups/{group_id}/channels/{channel_id}", response_model=GroupChannelBindingOut)

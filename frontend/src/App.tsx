@@ -1,21 +1,22 @@
-import type { ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 import RequireRole from "./components/RequireRole";
 import { SessionProvider, useSession } from "./hooks/useSession";
-import AcceptInvitePage from "./pages/AcceptInvitePage";
-import ChannelsPage from "./pages/ChannelsPage";
-import DeliveriesPage from "./pages/DeliveriesPage";
-import GroupDetailPage from "./pages/GroupDetailPage";
-import GroupsPage from "./pages/GroupsPage";
-import HomePage from "./pages/HomePage";
-import LoginPage from "./pages/LoginPage";
-import NotificationDetailPage from "./pages/NotificationDetailPage";
-import NotificationsPage from "./pages/NotificationsPage";
-import PresetsPage from "./pages/PresetsPage";
-import ReceiverDetailPage from "./pages/ReceiverDetailPage";
-import SettingsPage from "./pages/SettingsPage";
-import UsersPage from "./pages/UsersPage";
+
+const AcceptInvitePage = lazy(() => import("./pages/AcceptInvitePage"));
+const ChannelsPage = lazy(() => import("./pages/ChannelsPage"));
+const DeliveriesPage = lazy(() => import("./pages/DeliveriesPage"));
+const GroupDetailPage = lazy(() => import("./pages/GroupDetailPage"));
+const GroupsPage = lazy(() => import("./pages/GroupsPage"));
+const HomePage = lazy(() => import("./pages/HomePage"));
+const LoginPage = lazy(() => import("./pages/LoginPage"));
+const NotificationDetailPage = lazy(() => import("./pages/NotificationDetailPage"));
+const NotificationsPage = lazy(() => import("./pages/NotificationsPage"));
+const PresetsPage = lazy(() => import("./pages/PresetsPage"));
+const ReceiverDetailPage = lazy(() => import("./pages/ReceiverDetailPage"));
+const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const UsersPage = lazy(() => import("./pages/UsersPage"));
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useSession();
@@ -29,16 +30,17 @@ function RequireAuth({ children }: { children: ReactNode }) {
 export default function App() {
   return (
     <SessionProvider>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/invite" element={<AcceptInvitePage />} />
-        <Route
-          element={
-            <RequireAuth>
-              <Layout />
-            </RequireAuth>
-          }
-        >
+      <Suspense fallback={<div className="empty-state">Caricamento…</div>}>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/invite" element={<AcceptInvitePage />} />
+          <Route
+            element={
+              <RequireAuth>
+                <Layout />
+              </RequireAuth>
+            }
+          >
           <Route index element={<HomePage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/notifications/:id" element={<NotificationDetailPage />} />
@@ -99,8 +101,9 @@ export default function App() {
               </RequireRole>
             }
           />
-        </Route>
-      </Routes>
+          </Route>
+        </Routes>
+      </Suspense>
     </SessionProvider>
   );
 }

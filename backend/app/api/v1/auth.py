@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -81,13 +82,14 @@ async def register(body: RegisterIn) -> dict:
         session.add(tenant)
         await session.commit()
 
+    password_hash = await asyncio.to_thread(hash_password, body.password)
     user_id = uuid.uuid4()
     async with tenant_session(tenant_id) as session:
         user = User(
             id=user_id,
             tenant_id=tenant_id,
             email=body.email,
-            password_hash=hash_password(body.password),
+            password_hash=password_hash,
             role=UserRole.OWNER,
             status=UserStatus.ACTIVE,
         )
@@ -123,7 +125,11 @@ async def login(body: LoginIn, request: Request) -> TokenPairOut:
 
     user_identity = await find_user_by_email(body.email)
 
-    if not user_identity or not verify_password(body.password, user_identity.password_hash):
+    password_matches = bool(
+        user_identity
+        and await asyncio.to_thread(verify_password, body.password, user_identity.password_hash)
+    )
+    if not password_matches or user_identity is None:
         raise Problem(
             status=401,
             type=PROBLEM_TYPES["unauthorized"],
@@ -204,7 +210,12 @@ async def refresh(body: RefreshIn) -> TokenPairOut:
 
     tenant_id = uuid.UUID(refresh_token_identity.tenant_id)
     async with tenant_session(tenant_id) as session:
-        refresh_token_row = await session.get(RefreshToken, uuid.UUID(refresh_token_identity.id))
+        refresh_result = await session.execute(
+            select(RefreshToken)
+            .where(RefreshToken.id == uuid.UUID(refresh_token_identity.id))
+            .with_for_update()
+        )
+        refresh_token_row = refresh_result.scalar_one_or_none()
 
         if refresh_token_row is None or refresh_token_row.revoked_at is not None:
             # Riuso di un token gia ruotato: revoca l'intera famiglia (spec 4.1).
@@ -350,15 +361,21 @@ async def _send_invitation_email(email: str, invite_url: str) -> bool:
     message.set_content(f"Sei stato invitato a NotifyHub. Accetta l'invito: {invite_url}")
 
     smtp_host: str = settings.smtp_host
-    try:
-        with smtplib.SMTP(smtp_host, settings.smtp_port or 587, timeout=10) as smtp:
-            if settings.smtp_user and settings.smtp_password:
-                smtp.starttls()
-                smtp.login(settings.smtp_user, settings.smtp_password)
-            smtp.send_message(message)
-        return True
-    except OSError:
-        return False
+
+    def _send() -> bool:
+        try:
+            with smtplib.SMTP(smtp_host, settings.smtp_port or 587, timeout=10) as smtp:
+                if settings.smtp_user and settings.smtp_password:
+                    smtp.starttls()
+                    smtp.login(settings.smtp_user, settings.smtp_password)
+                smtp.send_message(message)
+            return True
+        except OSError:
+            return False
+
+    # smtplib e' sincrono e puo restare bloccato fino al timeout: non deve
+    # fermare l'event loop dell'API e tutte le richieste concorrenti.
+    return await asyncio.to_thread(_send)
 
 
 @invitations_router.post("", response_model=InvitationOut, status_code=201)
@@ -505,7 +522,9 @@ async def accept_invitation(body: InvitationAcceptIn) -> dict:
             )
 
         invitation_result = await session.execute(
-            select(Invitation).where(Invitation.id == uuid.UUID(invitation_identity.id))
+            select(Invitation)
+            .where(Invitation.id == uuid.UUID(invitation_identity.id))
+            .with_for_update()
         )
         invitation = invitation_result.scalar_one()
         if invitation.accepted_at is not None:
@@ -516,11 +535,12 @@ async def accept_invitation(body: InvitationAcceptIn) -> dict:
                 detail="Invalid or already accepted invitation.",
             )
 
+        password_hash = await asyncio.to_thread(hash_password, body.password)
         user = User(
             id=user_id,
             tenant_id=tenant_id,
             email=invitation.email,
-            password_hash=hash_password(body.password),
+            password_hash=password_hash,
             role=invitation.role,
             status=UserStatus.ACTIVE,
         )

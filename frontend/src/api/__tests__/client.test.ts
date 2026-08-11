@@ -48,6 +48,33 @@ describe("client", () => {
     expect(refreshCalls).toBe(1);
   });
 
+  it("test_reload_con_refresh_token_non_invia_prima_una_richiesta_401", async () => {
+    setRefreshToken("refresh-token-fixture");
+
+    let refreshCalls = 0;
+    let probeCalls = 0;
+    server.use(
+      http.post("/api/v1/auth/refresh", () => {
+        refreshCalls += 1;
+        return HttpResponse.json({
+          access_token: "new-token",
+          refresh_token: "new-refresh-token",
+          token_type: "bearer",
+          expires_in: 900,
+        });
+      }),
+      http.get("/api/v1/probe", ({ request }) => {
+        probeCalls += 1;
+        expect(request.headers.get("authorization")).toBe("Bearer new-token");
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+
+    await expect(apiGet<{ ok: boolean }>("/api/v1/probe")).resolves.toEqual({ ok: true });
+    expect(refreshCalls).toBe(1);
+    expect(probeCalls).toBe(1);
+  });
+
   it("test_refresh_fallito_pulisce_la_sessione: refresh 401 rimuove il token ed emette logout", async () => {
     setAccessToken("expired-token");
     setRefreshToken("refresh-token-fixture");
@@ -67,6 +94,21 @@ describe("client", () => {
     expect(loggedOut).toBe(true);
     expect(getRefreshToken()).toBeNull();
     unsubscribe();
+  });
+
+  it("test_refresh_offline_restituisce_api_error_senza_distruggere_la_sessione", async () => {
+    setAccessToken("expired-token");
+    setRefreshToken("refresh-token-fixture");
+    server.use(
+      http.post("/api/v1/auth/refresh", () => HttpResponse.error()),
+      http.get("/api/v1/probe", () => new HttpResponse(null, { status: 401 })),
+    );
+
+    await expect(apiGet("/api/v1/probe")).rejects.toMatchObject({
+      status: 0,
+      type: "/problems/network-unreachable",
+    } satisfies Partial<ApiError>);
+    expect(getRefreshToken()).toBe("refresh-token-fixture");
   });
 
   it("test_errore_problem_json_tradotto: un 422 RFC 7807 diventa un ApiError con detail", async () => {

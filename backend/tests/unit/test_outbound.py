@@ -1,9 +1,11 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from app.outbound.formatters.duration import duration_note, format_duration_ms
 from app.outbound.formatters.google_chat import GOOGLE_CHAT_BODY_LIMIT, build_google_chat_payload
 from app.outbound.formatters.slack import SLACK_BODY_LIMIT, build_slack_payload
-from app.outbound.sender import MAX_ATTEMPTS, calculate_retry_delay
+from app.outbound.sender import MAX_ATTEMPTS, calculate_retry_delay, parse_retry_after
 
 
 @pytest.mark.unit
@@ -19,6 +21,17 @@ def test_backoff_schedule_rispetta_la_spec():
 def test_backoff_oltre_max_attempts_e_zero():
     assert calculate_retry_delay(MAX_ATTEMPTS + 1) == 0
     assert calculate_retry_delay(0) == 0
+
+
+@pytest.mark.unit
+def test_retry_after_accetta_secondi_data_http_e_valori_malformati():
+    now = datetime(2026, 8, 11, 10, 0, tzinfo=UTC)
+    assert parse_retry_after("120", now=now) == 120
+    assert parse_retry_after("Tue, 11 Aug 2026 10:02:00 GMT", now=now) == 120
+    assert parse_retry_after("non-una-data", now=now) == 60
+    assert parse_retry_after(None, now=now) == 60
+    past = (now - timedelta(minutes=1)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    assert parse_retry_after(past, now=now) == 1
 
 
 @pytest.mark.unit

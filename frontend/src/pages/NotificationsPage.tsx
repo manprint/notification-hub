@@ -42,6 +42,8 @@ const SOURCES: SeveritySource[] = [
 export default function NotificationsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [q, setQ] = useState(searchParams.get("q") ?? "");
+  const [actionError, setActionError] = useState<ApiError | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const groupId = searchParams.get("group_id") ?? undefined;
@@ -73,25 +75,43 @@ export default function NotificationsPage() {
   const rows = data?.pages.flatMap((page: NotificationListOut) => page.notifications) ?? [];
 
   async function setStatus(id: string, status: NotificationStatus) {
-    await apiPatch(`/api/v1/notifications/${id}`, { status });
-    await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    await runAction(`status:${id}`, async () => {
+      await apiPatch(`/api/v1/notifications/${id}`, { status });
+      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    });
   }
 
   async function setVerified(id: string, verified: boolean) {
-    await apiPatch(`/api/v1/notifications/${id}`, { verified });
-    await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    await runAction(`verified:${id}`, async () => {
+      await apiPatch(`/api/v1/notifications/${id}`, { verified });
+      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    });
   }
 
   async function bulkRead() {
-    await apiPost("/api/v1/notifications/bulk-read", {
-      group_id: groupId,
-      severity_min: severityMin,
-      // Lo stesso filtro della lista: "segna tutte come lette" non deve toccare
-      // cio' che il filtro sull'origine sta tenendo fuori dalla vista.
-      source,
-      q: q || undefined,
+    await runAction("bulk", async () => {
+      await apiPost("/api/v1/notifications/bulk-read", {
+        group_id: groupId,
+        severity_min: severityMin,
+        // Lo stesso filtro della lista: "segna tutte come lette" non deve toccare
+        // cio' che il filtro sull'origine sta tenendo fuori dalla vista.
+        source,
+        q: q || undefined,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
     });
-    await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+  }
+
+  async function runAction(name: string, action: () => Promise<void>) {
+    setActionError(null);
+    setBusyAction(name);
+    try {
+      await action();
+    } catch (err) {
+      setActionError(err as ApiError);
+    } finally {
+      setBusyAction(null);
+    }
   }
 
   function selectGroup(groupId: string) {
@@ -172,10 +192,13 @@ export default function NotificationsPage() {
       header: "",
       render: (n) => (
         <div className="row-actions">
-          <button onClick={() => void setStatus(n.id, n.status === "unread" ? "read" : "unread")}>
+          <button
+            disabled={busyAction !== null}
+            onClick={() => void setStatus(n.id, n.status === "unread" ? "read" : "unread")}
+          >
             {n.status === "unread" ? "Segna come letta" : "Segna come non letta"}
           </button>
-          <button onClick={() => void setVerified(n.id, !n.verified)}>
+          <button disabled={busyAction !== null} onClick={() => void setVerified(n.id, !n.verified)}>
             {n.verified ? "Segna come non verificata" : "Segna come verificata"}
           </button>
         </div>
@@ -203,6 +226,7 @@ export default function NotificationsPage() {
       </Link>
       <h1>Notifiche</h1>
       {error && <ErrorBanner error={error} />}
+      {actionError && <ErrorBanner error={actionError} />}
 
       <div className="toolbar">
         <select
@@ -252,7 +276,9 @@ export default function NotificationsPage() {
           onChange={(event) => setQ(event.target.value)}
         />
 
-        <button onClick={() => void bulkRead()}>Segna tutte come lette</button>
+        <button disabled={busyAction !== null} onClick={() => void bulkRead()}>
+          {busyAction === "bulk" ? "Aggiornamento…" : "Segna tutte come lette"}
+        </button>
       </div>
 
       <p style={{ fontSize: 13, color: "var(--color-text-muted)" }}>

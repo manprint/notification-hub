@@ -129,7 +129,28 @@ async def test_429_ripianifica_rispettando_retry_after(two_tenants):
     async with tenant_session(tenant_id) as session:
         delivery = await session.get(Delivery, delivery_id)
         assert delivery.status == DeliveryStatus.FAILED
-        assert delivery.attempts == 0
+        assert delivery.attempts == 1
+
+
+@pytest.mark.integration
+@respx.mock
+async def test_429_al_quinto_tentativo_diventa_dead(two_tenants):
+    tenant_id, _ = two_tenants
+    delivery_id, _ = await _setup_delivery(tenant_id)
+    respx.post(WEBHOOK_URL).mock(
+        return_value=httpx.Response(429, headers={"Retry-After": "non-valido"})
+    )
+
+    async with tenant_session(tenant_id) as session:
+        delivery = await session.get(Delivery, delivery_id)
+        delivery.attempts = 4
+
+    dispatch_delivery(str(delivery_id), str(tenant_id))
+
+    async with tenant_session(tenant_id) as session:
+        delivery = await session.get(Delivery, delivery_id)
+        assert delivery.status == DeliveryStatus.DEAD
+        assert delivery.attempts == 5
 
 
 @pytest.mark.integration
@@ -180,3 +201,19 @@ async def test_delivery_gia_sent_viene_ignorata(two_tenants):
         delivery = await session.get(Delivery, delivery_id)
         assert delivery.status == DeliveryStatus.SENT
         assert delivery.attempts == 0
+
+
+@pytest.mark.integration
+async def test_canale_disabilitato_rende_terminale_la_delivery(two_tenants):
+    tenant_id, _ = two_tenants
+    delivery_id, channel_id = await _setup_delivery(tenant_id)
+    async with tenant_session(tenant_id) as session:
+        channel = await session.get(DeliveryChannel, channel_id)
+        channel.enabled = False
+
+    dispatch_delivery(str(delivery_id), str(tenant_id))
+
+    async with tenant_session(tenant_id) as session:
+        delivery = await session.get(Delivery, delivery_id)
+        assert delivery.status == DeliveryStatus.DEAD
+        assert delivery.last_error == "channel disabled before delivery"

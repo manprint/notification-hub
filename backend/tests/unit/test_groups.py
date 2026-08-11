@@ -37,6 +37,8 @@ def test_group_out_schema():
         name="Output Group",
         description="Test output",
         receiver_count=0,
+        notification_count=0,
+        unread_count=0,
     )
 
     assert group_out.name == "Output Group"
@@ -51,6 +53,8 @@ def test_group_out_schema_receiver_count():
         name="Output Group",
         description=None,
         receiver_count=3,
+        notification_count=0,
+        unread_count=0,
     )
 
     assert group_out.receiver_count == 3

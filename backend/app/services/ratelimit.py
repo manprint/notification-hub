@@ -6,6 +6,36 @@ from dataclasses import dataclass
 
 from app.core.redis import get_redis
 
+_SLIDING_WINDOW_SCRIPT = """
+local key = KEYS[1]
+local window_start_ms = tonumber(ARGV[1])
+local now_ms = tonumber(ARGV[2])
+local limit = tonumber(ARGV[3])
+local window_seconds = tonumber(ARGV[4])
+local member = ARGV[5]
+
+redis.call("ZREMRANGEBYSCORE", key, "-inf", window_start_ms)
+local count = redis.call("ZCARD", key)
+
+if count >= limit then
+    local oldest = redis.call("ZRANGE", key, 0, 0, "WITHSCORES")
+    local retry_after = window_seconds
+    if #oldest >= 2 then
+        retry_after = math.ceil(
+            (tonumber(oldest[2]) + (window_seconds * 1000) - now_ms) / 1000
+        )
+        if retry_after < 1 then
+            retry_after = 1
+        end
+    end
+    return {0, 0, retry_after}
+end
+
+redis.call("ZADD", key, now_ms, member)
+redis.call("EXPIRE", key, window_seconds)
+return {1, limit - count - 1, 0}
+"""
+
 
 @dataclass
 class RateLimitResult:
@@ -29,26 +59,22 @@ async def sliding_window_hit(key: str, limit: int, window_seconds: int) -> RateL
 
     redis = await get_redis()
     now_ms = int(time.time() * 1000)
-    window_start_ms = now_ms - (window_seconds * 1000)
-
-    await redis.zremrangebyscore(key, 0, window_start_ms)
-    count = await redis.zcard(key)
-
-    if count >= limit:
-        oldest = await redis.zrange(key, 0, 0, withscores=True)
-        if oldest:
-            oldest_score = int(oldest[0][1])
-            retry_after = (oldest_score + (window_seconds * 1000) - now_ms) // 1000
-        else:
-            retry_after = window_seconds
-        return RateLimitResult(allowed=False, remaining=0, retry_after=max(1, retry_after))
-
     member = f"{now_ms}:{uuid.uuid4()}"
-    await redis.zadd(key, {member: now_ms})
-    await redis.expire(key, window_seconds)
-
-    remaining = max(0, limit - count - 1)
-    return RateLimitResult(allowed=True, remaining=remaining, retry_after=0)
+    allowed, remaining, retry_after = await redis.eval(
+        _SLIDING_WINDOW_SCRIPT,
+        1,
+        key,
+        now_ms - (window_seconds * 1000),
+        now_ms,
+        limit,
+        window_seconds,
+        member,
+    )
+    return RateLimitResult(
+        allowed=bool(allowed),
+        remaining=int(remaining),
+        retry_after=int(retry_after),
+    )
 
 
 IP_RATE_LIMIT_PER_MINUTE = 300

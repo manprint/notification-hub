@@ -22,9 +22,10 @@ async def test_groups_notification_counts_list(api_client, two_tenants, owner_to
         assert resp.status_code == 201, resp.text
 
     notifications = [
-        n["id"] for n in (await api_client.get(
-            "/api/v1/notifications", headers=headers
-        )).json()["notifications"]
+        n["id"]
+        for n in (await api_client.get("/api/v1/notifications", headers=headers)).json()[
+            "notifications"
+        ]
     ]
     patch = await api_client.patch(
         f"/api/v1/notifications/{notifications[0]}", json={"status": "read"}, headers=headers

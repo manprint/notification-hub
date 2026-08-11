@@ -1,5 +1,6 @@
 """E2E per autenticazione (spec 9.2, 10.2)."""
 
+import asyncio
 import uuid
 
 import pytest
@@ -89,6 +90,31 @@ async def test_refresh_ruota_il_token_e_rileva_il_riuso(api_client, two_tenants)
     # token2 apparteneva alla stessa famiglia di token1: deve essere revocato.
     followup_resp = await api_client.post("/api/v1/auth/refresh", json={"refresh_token": token2})
     assert followup_resp.status_code == 401
+
+
+@pytest.mark.e2e
+async def test_due_refresh_concorrenti_non_emettono_due_token_validi(api_client, two_tenants):
+    tenant_id, _ = two_tenants
+    email = f"owner-{tenant_id.hex[:8]}@test.com"
+    await _create_owner(tenant_id, email, "correct-horse-battery")
+    login_resp = await api_client.post(
+        "/api/v1/auth/login", json={"email": email, "password": "correct-horse-battery"}
+    )
+    token = login_resp.json()["refresh_token"]
+
+    responses = await asyncio.gather(
+        api_client.post("/api/v1/auth/refresh", json={"refresh_token": token}),
+        api_client.post("/api/v1/auth/refresh", json={"refresh_token": token}),
+    )
+    assert sorted(response.status_code for response in responses) == [200, 401]
+
+    issued = next(
+        response.json()["refresh_token"] for response in responses if response.status_code == 200
+    )
+    # La seconda richiesta e' un riuso: revoca l'intera famiglia, compreso il
+    # token che la prima richiesta aveva appena emesso.
+    followup = await api_client.post("/api/v1/auth/refresh", json={"refresh_token": issued})
+    assert followup.status_code == 401
 
 
 @pytest.mark.e2e

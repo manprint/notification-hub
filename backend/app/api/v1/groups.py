@@ -129,9 +129,7 @@ async def list_groups(
     groups = result.scalars().all()
     counts = await _receiver_counts(session, uuid.UUID(claims.tid), [g.id for g in groups])
     notif = await _notification_counts(session, uuid.UUID(claims.tid), [g.id for g in groups])
-    return [
-        _group_out(g, counts.get(g.id, 0), **notif.get(g.id, {})) for g in groups
-    ]
+    return [_group_out(g, counts.get(g.id, 0), **notif.get(g.id, {})) for g in groups]
 
 
 @router.post("", response_model=GroupOut, status_code=201)

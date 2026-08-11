@@ -1,0 +1,1 @@
+import{j as e}from"./index-aCq9Jm8s.js";const i={critical:"Critica",error:"Errore",warning:"Attenzione",info:"Info",debug:"Debug"};function t({severity:r}){return e.jsx("span",{className:`severity-badge severity-${r}`,children:i[r]})}export{t as S};

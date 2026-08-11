@@ -1,0 +1,1 @@
+import{j as a}from"./index-aCq9Jm8s.js";const n={unread:"Non letta",read:"Letta",pending:"In attesa",sending:"In invio",sent:"Inviata",failed:"Fallita",dead:"Morta"};function s({status:t}){return a.jsx("span",{className:"status-pill",children:n[t]})}export{s as S};

@@ -314,6 +314,7 @@ async def test_prova_canale_riporta_lesito_senza_far_fallire_la_richiesta(
     assert set(corpo) == {"sent", "detail"}
     assert corpo["sent"] is False  # hooks.slack.com rifiuta un webhook inventato
     assert corpo["detail"]
+    assert WEBHOOK not in corpo["detail"]
 
 
 @pytest.mark.e2e

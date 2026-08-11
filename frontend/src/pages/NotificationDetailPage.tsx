@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { apiDelete, apiGet, apiPatch } from "../api/client";
 import type { ApiError, NotificationDetailOut, NotificationStatus } from "../api/types";
@@ -17,6 +18,8 @@ export default function NotificationDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { role } = useSession();
+  const [actionError, setActionError] = useState<ApiError | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
 
   const { data, isLoading, error } = useQuery<NotificationDetailOut, ApiError>({
     queryKey: ["notification", id],
@@ -28,37 +31,61 @@ export default function NotificationDetailPage() {
   if (error) return <ErrorBanner error={error} />;
   if (!data) return null;
 
+  async function runAction(name: string, action: () => Promise<void>) {
+    setActionError(null);
+    setBusyAction(name);
+    try {
+      await action();
+    } catch (err) {
+      setActionError(err as ApiError);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function setStatus(status: NotificationStatus) {
-    await apiPatch(`/api/v1/notifications/${id}`, { status });
-    await queryClient.invalidateQueries({ queryKey: ["notification", id] });
+    await runAction("status", async () => {
+      await apiPatch(`/api/v1/notifications/${id}`, { status });
+      await queryClient.invalidateQueries({ queryKey: ["notification", id] });
+    });
   }
 
   async function setVerified(verified: boolean) {
-    await apiPatch(`/api/v1/notifications/${id}`, { verified });
-    await queryClient.invalidateQueries({ queryKey: ["notification", id] });
+    await runAction("verified", async () => {
+      await apiPatch(`/api/v1/notifications/${id}`, { verified });
+      await queryClient.invalidateQueries({ queryKey: ["notification", id] });
+    });
   }
 
   async function remove() {
-    await apiDelete(`/api/v1/notifications/${id}`);
-    navigate("/notifications", { replace: true });
+    await runAction("delete", async () => {
+      await apiDelete(`/api/v1/notifications/${id}`);
+      navigate("/notifications", { replace: true });
+    });
   }
 
   // L'endpoint del contenuto richiede il Bearer token: un <a href download>
   // partiva senza header Authorization e riceveva 401. Va scaricato dal client
   // API e consegnato al browser come blob.
   async function downloadContent() {
-    const text = await apiGet<string>(`/api/v1/notifications/${id}/content`);
-    const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `notifica-${id}.txt`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    await runAction("download", async () => {
+      const text = await apiGet<string>(`/api/v1/notifications/${id}/content`);
+      const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+      try {
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `notifica-${id}.txt`;
+        anchor.click();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    });
   }
 
   return (
     <div>
       <h1>Dettaglio notifica</h1>
+      {actionError && <ErrorBanner error={actionError} />}
 
       <div className="card">
         <SeverityBadge severity={data.severity} /> <StatusPill status={data.status} />{" "}
@@ -105,21 +132,28 @@ export default function NotificationDetailPage() {
           <div>
             <p>{`Contenuto salvato su object storage (${data.content_size} byte).`}</p>
             {data.content_url && (
-              <button onClick={() => void downloadContent()}>Scarica contenuto completo</button>
+              <button disabled={busyAction !== null} onClick={() => void downloadContent()}>
+                {busyAction === "download" ? "Download…" : "Scarica contenuto completo"}
+              </button>
             )}
           </div>
         )}
       </div>
 
       <div className="toolbar">
-        <button onClick={() => void setStatus(data.status === "unread" ? "read" : "unread")}>
+        <button
+          disabled={busyAction !== null}
+          onClick={() => void setStatus(data.status === "unread" ? "read" : "unread")}
+        >
           {data.status === "unread" ? "Segna come letta" : "Segna come non letta"}
         </button>
-        <button onClick={() => void setVerified(!data.verified)}>
+        <button disabled={busyAction !== null} onClick={() => void setVerified(!data.verified)}>
           {data.verified ? "Segna come non verificata" : "Segna come verificata"}
         </button>
         {role !== null && DELETE_ALLOWED_ROLES.includes(role) && (
-          <button onClick={() => void remove()}>Elimina</button>
+          <button disabled={busyAction !== null} onClick={() => void remove()}>
+            {busyAction === "delete" ? "Eliminazione…" : "Elimina"}
+          </button>
         )}
       </div>
     </div>

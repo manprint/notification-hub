@@ -7,6 +7,8 @@ resta async, il worker no, per evitare un event loop per task.
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import select
+
 from app.core.crypto import decrypt_secret
 from app.core.logging import get_logger
 from app.core.metrics import deliveries_total
@@ -32,11 +34,15 @@ def dispatch_delivery(delivery_id: str, tenant_id: str) -> None:
     # messaggio. Transazione breve: non tiene un lock durante la chiamata
     # di rete.
     with tenant_session_sync(tid) as session:
-        delivery = session.get(Delivery, did)
-        if delivery is None or delivery.status not in (
-            DeliveryStatus.PENDING,
-            DeliveryStatus.FAILED,
-        ):
+        delivery = session.execute(
+            select(Delivery)
+            .where(
+                Delivery.id == did,
+                Delivery.status.in_((DeliveryStatus.PENDING, DeliveryStatus.FAILED)),
+            )
+            .with_for_update(skip_locked=True)
+        ).scalar_one_or_none()
+        if delivery is None:
             logger.info("dispatch_delivery_skipped", delivery_id=delivery_id, reason="wrong_state")
             return
 
@@ -47,6 +53,8 @@ def dispatch_delivery(delivery_id: str, tenant_id: str) -> None:
             delivery.last_error = "channel or notification missing"
             return
         if not channel.enabled:
+            delivery.status = DeliveryStatus.DEAD
+            delivery.last_error = "channel disabled before delivery"
             logger.info(
                 "dispatch_delivery_skipped", delivery_id=delivery_id, reason="channel_disabled"
             )
@@ -106,11 +114,16 @@ def dispatch_delivery(delivery_id: str, tenant_id: str) -> None:
             return
 
         if result.status_code == 429:
-            delivery.status = DeliveryStatus.FAILED
+            delivery.attempts = attempts_so_far + 1
             delivery.response_code = result.status_code
             delivery.last_error = result.error
-            delivery.next_attempt_at = now + timedelta(seconds=result.retry_after or 60)
-            deliveries_total.labels(outcome="rate_limited").inc()
+            if delivery.attempts >= MAX_ATTEMPTS:
+                delivery.status = DeliveryStatus.DEAD
+                deliveries_total.labels(outcome="dead").inc()
+            else:
+                delivery.status = DeliveryStatus.FAILED
+                delivery.next_attempt_at = now + timedelta(seconds=result.retry_after or 60)
+                deliveries_total.labels(outcome="rate_limited").inc()
             return
 
         if result.status_code is not None and 400 <= result.status_code < 500:

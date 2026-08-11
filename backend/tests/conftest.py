@@ -8,7 +8,10 @@ from sqlalchemy import text
 
 backend_dir = os.path.join(os.path.dirname(__file__), "..")
 env_file = os.path.join(backend_dir, os.environ.get("ENV_FILE", ".env.test"))
-load_dotenv(env_file)
+# La suite deve usare sempre l'infrastruttura isolata dichiarata nel file scelto.
+# Senza override, variabili ereditate dalla shell (anche URL dev/prod) avrebbero
+# precedenza e i test potrebbero migrare o modificare il database sbagliato.
+load_dotenv(env_file, override=True)
 
 import app.models  # noqa: F401, E402
 from app.db.session import engine_app, tenant_session  # noqa: E402

@@ -86,6 +86,27 @@ async def test_purge_notifications_rispetta_retention_days(two_tenants):
 
 
 @pytest.mark.integration
+async def test_purge_notifications_reimposta_il_tenant_fra_batch(two_tenants, monkeypatch):
+    tenant_id, _ = two_tenants
+    receiver_id = await create_receiver(tenant_id, uuid.uuid4().hex[:22])
+    async with async_session_factory_app() as session:
+        await session.execute(update(Tenant).where(Tenant.id == tenant_id).values(retention_days=7))
+        await session.commit()
+
+    old_ids = [
+        await _insert_notification(tenant_id, receiver_id, datetime.now(UTC) - timedelta(days=10))
+        for _ in range(3)
+    ]
+    monkeypatch.setattr("app.tasks.maintenance.PURGE_BATCH_SIZE", 2)
+
+    purge_notifications()
+
+    async with tenant_session(tenant_id) as session:
+        for notification_id in old_ids:
+            assert await session.get(Notification, notification_id) is None
+
+
+@pytest.mark.integration
 async def test_purge_deliveries_elimina_sent_vecchie_non_tocca_dead(two_tenants):
     tenant_id, _ = two_tenants
     slug = uuid.uuid4().hex[:22]
@@ -295,22 +316,36 @@ async def test_reconcile_deliveries_ripesca_pending_scadute_e_sending_bloccate(t
         )
         await session.flush()
 
-    channel_id_2 = uuid.uuid4()
+    channel_id_2, disabled_channel_id = uuid.uuid4(), uuid.uuid4()
     async with tenant_session(tenant_id) as session:
-        session.add(
-            DeliveryChannel(
-                id=channel_id_2,
-                tenant_id=tenant_id,
-                name="Slack #ops-2",
-                type="slack",
-                webhook_url=encrypt_secret("https://hooks.slack.com/services/T/B/Y"),
-                enabled=True,
-            )
+        session.add_all(
+            [
+                DeliveryChannel(
+                    id=channel_id_2,
+                    tenant_id=tenant_id,
+                    name="Slack #ops-2",
+                    type="slack",
+                    webhook_url=encrypt_secret("https://hooks.slack.com/services/T/B/Y"),
+                    enabled=True,
+                ),
+                DeliveryChannel(
+                    id=disabled_channel_id,
+                    tenant_id=tenant_id,
+                    name="Slack disabilitato",
+                    type="slack",
+                    webhook_url=encrypt_secret("https://hooks.slack.com/services/T/B/Z"),
+                    enabled=False,
+                ),
+            ]
         )
         await session.flush()
 
     now = datetime.now(UTC)
-    due_pending_id, stuck_sending_id = uuid.uuid4(), uuid.uuid4()
+    due_pending_id, stuck_sending_id, disabled_pending_id = (
+        uuid.uuid4(),
+        uuid.uuid4(),
+        uuid.uuid4(),
+    )
     async with tenant_session(tenant_id) as session:
         session.add_all(
             [
@@ -333,6 +368,15 @@ async def test_reconcile_deliveries_ripesca_pending_scadute_e_sending_bloccate(t
                     next_attempt_at=now,
                     locked_at=now - timedelta(minutes=15),
                 ),
+                Delivery(
+                    id=disabled_pending_id,
+                    tenant_id=tenant_id,
+                    notification_id=notification_id,
+                    channel_id=disabled_channel_id,
+                    status=DeliveryStatus.PENDING,
+                    attempts=0,
+                    next_attempt_at=now - timedelta(minutes=1),
+                ),
             ]
         )
         await session.flush()
@@ -347,6 +391,7 @@ async def test_reconcile_deliveries_ripesca_pending_scadute_e_sending_bloccate(t
     requeued_ids = {r[0] for r in requeued}
     assert str(due_pending_id) in requeued_ids
     assert str(stuck_sending_id) in requeued_ids
+    assert str(disabled_pending_id) in requeued_ids
 
     async with tenant_session(tenant_id) as session:
         stuck = await session.get(Delivery, stuck_sending_id)

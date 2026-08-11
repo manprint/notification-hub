@@ -1,13 +1,32 @@
 """Idempotenza dell'ingestion su X-Request-Id (spec 6.3)."""
 
+import asyncio
 import json
+import secrets
 from dataclasses import dataclass
 from hashlib import sha256
 
 from app.core.redis import get_redis
 
 IDEMPOTENCY_WINDOW_SECONDS = 300
-_PROCESSING_SENTINEL = "__processing__"
+IDEMPOTENCY_WAIT_SECONDS = 5.0
+IDEMPOTENCY_POLL_SECONDS = 0.05
+_PROCESSING_PREFIX = "__processing__:"
+
+_COMPARE_AND_DELETE = """
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("DEL", KEYS[1])
+end
+return 0
+"""
+
+_COMPARE_AND_STORE = """
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    redis.call("SET", KEYS[1], ARGV[2], "EX", ARGV[3])
+    return 1
+end
+return 0
+"""
 
 
 def _idempotency_key(receiver_id: str, request_id: str) -> str:
@@ -19,6 +38,8 @@ def _idempotency_key(receiver_id: str, request_id: str) -> str:
 class IdempotencyReservation:
     is_replay: bool
     replay_body: dict | None = None
+    owner_token: str | None = None
+    in_progress: bool = False
 
 
 async def reserve(receiver_id: str, request_id: str | None) -> IdempotencyReservation:
@@ -36,24 +57,58 @@ async def reserve(receiver_id: str, request_id: str | None) -> IdempotencyReserv
     redis = await get_redis()
     key = _idempotency_key(receiver_id, request_id)
 
-    was_set = await redis.set(key, _PROCESSING_SENTINEL, nx=True, ex=IDEMPOTENCY_WINDOW_SECONDS)
+    owner_token = secrets.token_urlsafe(16)
+    sentinel = f"{_PROCESSING_PREFIX}{owner_token}"
+    was_set = await redis.set(key, sentinel, nx=True, ex=IDEMPOTENCY_WINDOW_SECONDS)
     if was_set:
-        return IdempotencyReservation(is_replay=False)
+        return IdempotencyReservation(is_replay=False, owner_token=owner_token)
 
-    stored = await redis.get(key)
-    if stored is None or stored == _PROCESSING_SENTINEL:
-        # Race fra due richieste concorrenti con lo stesso X-Request-Id: la prima
-        # non ha ancora scritto la risposta finale. Trattarla come non deduplicata
-        # e la scelta piu semplice che non perde la richiesta; resta un caso raro
-        # (stesso ID, stesso istante), non il retry di rete che la spec copre.
-        return IdempotencyReservation(is_replay=False)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + IDEMPOTENCY_WAIT_SECONDS
+    while True:
+        stored = await redis.get(key)
+        if stored is None:
+            # Il proprietario ha fallito e ha rilasciato la prenotazione: prova
+            # a subentrare senza aprire una finestra per due proprietari.
+            was_set = await redis.set(key, sentinel, nx=True, ex=IDEMPOTENCY_WINDOW_SECONDS)
+            if was_set:
+                return IdempotencyReservation(is_replay=False, owner_token=owner_token)
+        elif not stored.startswith(_PROCESSING_PREFIX):
+            return IdempotencyReservation(is_replay=True, replay_body=json.loads(stored))
 
-    return IdempotencyReservation(is_replay=True, replay_body=json.loads(stored))
+        if loop.time() >= deadline:
+            return IdempotencyReservation(is_replay=False, in_progress=True)
+        await asyncio.sleep(IDEMPOTENCY_POLL_SECONDS)
 
 
-async def store_response(receiver_id: str, request_id: str | None, body: dict) -> None:
-    if not request_id:
+async def store_response(
+    receiver_id: str,
+    request_id: str | None,
+    owner_token: str | None,
+    body: dict,
+) -> None:
+    if not request_id or owner_token is None:
         return
     redis = await get_redis()
     key = _idempotency_key(receiver_id, request_id)
-    await redis.set(key, json.dumps(body), ex=IDEMPOTENCY_WINDOW_SECONDS)
+    await redis.eval(
+        _COMPARE_AND_STORE,
+        1,
+        key,
+        f"{_PROCESSING_PREFIX}{owner_token}",
+        json.dumps(body),
+        IDEMPOTENCY_WINDOW_SECONDS,
+    )
+
+
+async def release(receiver_id: str, request_id: str | None, owner_token: str | None) -> None:
+    if not request_id or owner_token is None:
+        return
+    redis = await get_redis()
+    key = _idempotency_key(receiver_id, request_id)
+    await redis.eval(
+        _COMPARE_AND_DELETE,
+        1,
+        key,
+        f"{_PROCESSING_PREFIX}{owner_token}",
+    )
