@@ -71,13 +71,13 @@ Idea per dopo, non ora: ping di inizio esecuzione dal wrapper (X-Phase: start), 
 
 
 
-/plan-analize-v3 Nella pagina dei gruppi (/groups) voglio che facciamo un po di sistemazione grafica. 
-1. Qui voglio una barra di ricerca, che insiste sui gruppi creati. 
+/plan-analize-v3 Nella pagina dei gruppi (/groups) voglio che facciamo un po di sistemazione grafica.
+1. Qui voglio una barra di ricerca, che insiste sui gruppi creati.
   - I gruppi devono essere rappresentati in tabella per righe; su ogni riga voglio il nome del gruppo, il numero di receiver onfigurati, i pulsanti modifica ed elimina gruppo eil nuovo pulsante "apri", che apre il gruppo.
 2. Se faccio clic sul pulsante "apri" del gruppo, in una nuova pagina, voglio vedere una tabella con a. nome receiber, b. slug. Lo slug se è lungo può essere trncato con tre puntini ... e per lo slug deve mostrare il pulsante copia che lo copia nella clipboard.
-3. Cliccando sul nome del receiver si apre la schermata di dettaglio del receiver (come adesso). 
+3. Cliccando sul nome del receiver si apre la schermata di dettaglio del receiver (come adesso).
 - Le tabelle ben formattate, con una dimensione appropriata.
-- Presta massima attenzione ai riferimenti tra le pagine. 
+- Presta massima attenzione ai riferimenti tra le pagine.
 - Voglio uno sviluppo ben testato e senza regressioni
 **Chiedi dettagli se non sei sicuro, non fare assunzioni**
 
