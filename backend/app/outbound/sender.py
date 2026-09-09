@@ -4,6 +4,7 @@ import random
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -49,6 +50,14 @@ def calculate_retry_delay(attempt_number: int) -> int:
     base = _BACKOFF_SCHEDULE_SECONDS[attempt_number - 1]
     jitter = random.uniform(0, base * 0.2)  # noqa: S311 (jitter, non crittografico)
     return int(base + jitter)
+
+
+def _host_of(webhook_url: str) -> str:
+    """Solo l'host, per il log: il path di un webhook Slack/Google Chat E' il
+    segreto e non deve finire in nessuna riga di log. `urlsplit` non solleva su
+    un URL malformato, a differenza dello split su "/" usato prima, che su una
+    stringa senza doppio slash dava IndexError proprio nel gestore d'errore."""
+    return urlsplit(webhook_url).hostname or "unknown"
 
 
 @dataclass
@@ -133,8 +142,14 @@ def send_webhook_sync(
             retry_after=None,
             error=f"HTTP {response.status_code}: {response.text[:200]}",
         )
-    except httpx.HTTPError as exc:
-        logger.error(
-            "webhook_delivery_failed", webhook_host=webhook_url.split("/")[2], error=str(exc)
-        )
+    except Exception as exc:  # noqa: BLE001
+        # Deliberatamente su Exception e non su httpx.HTTPError: qualunque
+        # eccezione che sfugga qui esce da dispatch_delivery mentre la riga e
+        # `sending`, e da quel punto il ciclo e' senza uscita — reconcile la
+        # riporta a `failed` dopo 10 minuti, la riaccoda, si rompe di nuovo, per
+        # sempre, senza mai arrivare a `dead`. httpx.InvalidURL (webhook_url
+        # malformato) e gli errori di serializzazione del payload non sono
+        # HTTPError. Un guasto va contato come tentativo fallito, non ripetuto
+        # all'infinito.
+        logger.error("webhook_delivery_failed", webhook_host=_host_of(webhook_url), error=str(exc))
         return WebhookResult(ok=False, status_code=None, retry_after=None, error=str(exc))

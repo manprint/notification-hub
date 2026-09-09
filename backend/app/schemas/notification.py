@@ -81,6 +81,9 @@ class BulkReadIn(BaseModel):
     # Stesso filtro della lista: senza, "segna come letto tutto quello che
     # vedo" agirebbe anche su cio' che il filtro sull'origine sta escludendo.
     source: SeveritySource | None = None
+    # Idem per la revisione manuale: con il filtro "non verificate" attivo,
+    # "segna tutte come lette" non deve toccare quelle gia verificate.
+    verified: bool | None = None
     q: str | None = None
     from_: datetime | None = Field(default=None, alias="from")
     to: datetime | None = None

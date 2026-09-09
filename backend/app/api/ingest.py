@@ -8,6 +8,7 @@ import asyncio
 from fastapi import APIRouter, Header, Query, Request
 from fastapi.responses import JSONResponse
 
+from app.api.deps import client_ip
 from app.core.config import get_settings
 from app.core.errors import PROBLEM_TYPES, Problem, ingest_not_found
 from app.core.logging import get_logger
@@ -30,16 +31,6 @@ logger = get_logger(__name__)
 router = APIRouter(tags=["ingest"])
 
 
-def _source_ip(request: Request) -> str:
-    settings = get_settings()
-    client_host = request.client.host if request.client else "unknown"
-    if client_host in settings.trusted_proxies_list:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-    return client_host
-
-
 _ACCEPTED_MEDIA_TYPES = {"text/plain", "application/x-www-form-urlencoded"}
 
 
@@ -56,7 +47,10 @@ def _validate_content_type(content_type: str | None) -> None:
             status=415,
             type=PROBLEM_TYPES["unsupported_media_type"],
             title="Unsupported Media Type",
-            detail="Only text/plain is accepted by the http_raw ingestion module.",
+            detail=(
+                "The http_raw ingestion module accepts "
+                f"{', '.join(sorted(_ACCEPTED_MEDIA_TYPES))} or no Content-Type at all."
+            ),
         )
 
 
@@ -128,7 +122,7 @@ async def _ingest(
     x_phase: str | None = None,
 ) -> JSONResponse:
     settings = get_settings()
-    source_ip = _source_ip(request)
+    source_ip = client_ip(request)
 
     # 1. Rate limit per IP: primo gate, prima di risolvere lo slug (spec 10.1).
     ip_limit = await check_ip_rate_limit(source_ip)

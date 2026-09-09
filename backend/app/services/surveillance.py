@@ -37,9 +37,6 @@ if TYPE_CHECKING:  # solo per l'annotazione: nessun import a runtime
 DEFAULT_TIMEZONE = "UTC"
 CRON_FIELDS = 5  # minuto ora giorno mese giorno-settimana, come in crontab
 CRON_MAX_CHARS = 100
-# Oltre questo non si cerca piu' indietro: un cron valido ma che non scatta mai
-# nella pratica (`0 0 30 2 *`, 30 febbraio) non deve far girare croniter a vuoto.
-CRON_LOOKBACK_DAYS = 400
 
 
 class InvalidScheduleError(ValueError):

@@ -1,7 +1,23 @@
 # NotifyHub — Resume
 
 > **Next:** nessuna sotto-fase aperta. Il piano e implementato e verificato end-to-end.
-> **Last updated:** 2026-08-01 (revisione post-10.6: remediation completa + verifica del compose di produzione)
+> **Last updated:** 2026-09-09 (revisione pre-staging: vedi `docs/REVIEW.md`, "Verifica 3")
+
+> **Revisione pre-staging del 2026-09-09.** Passata completa su backend,
+> frontend, job, deploy e documentazione, con i gate gia tutti verdi in
+> partenza: i sette difetti trovati erano tutti latenti e nessuno rompeva un
+> test esistente. Il piu grave (`purge_orphan_objects` che cancellava da MinIO i
+> payload delle notifiche ancora in elenco, perche leggeva `notifications` senza
+> contesto di tenant e RLS forzata gli restituiva zero righe in silenzio) e
+> corretto e coperto da un test che, rimessa la vecchia implementazione,
+> fallisce. Sono stati chiusi anche due criteri di `.planning/ROADMAP.md` che
+> risultavano non implementati: ruolo minimo `member` sulle mutazioni di stato
+> delle notifiche e filtri `status`/`verified` su API e UI. Elenco completo,
+> difetto per difetto, con i test corrispondenti, in `docs/REVIEW.md`.
+>
+> Stato dopo la passata: **634 test backend** (copertura 90,55%, soglia 88%),
+> **165 test frontend**, `fmt-check`/`lint`/`types`/`fe-lint`/`fe-build` puliti,
+> `scripts/smoke.sh` sullo stack containerizzato completo **24/24, SMOKE OK**.
 
 > Le righe sotto sostituiscono lo stato registrato dopo la revisione 10.6 (esito RESPINTO,
 > dettagliata in `docs/REVIEW.md`). Da allora il repository e stato ricostruito secondo l'ordine

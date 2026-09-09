@@ -4,16 +4,26 @@
 
 This milestone extends the existing NotifyHub dashboard with trustworthy operator state and schedule feedback. The roadmap moves from durable notification state and authorization through server-side filters and UI actions, then delivers a server-authoritative cron preview with invalid-save protection and a final cross-layer verification pass.
 
+> **Stato aggiornato il 2026-09-09 (revisione pre-staging).** Le caselle qui
+> sotto erano rimaste tutte vuote perché il lavoro è stato eseguito attraverso i
+> piani in `docs/plans/` (`plan_notification-unread-verified`,
+> `plan_cron-validation-preview`) invece che attraverso questa roadmap, che non è
+> mai stata ripresa. La revisione pre-staging ha verificato ogni criterio di
+> successo contro il codice reale e ha chiuso i due che risultavano davvero non
+> implementati: il ruolo minimo sulle mutazioni di stato (fase 2, criterio 2) e i
+> filtri `status`/`verified` lato API e UI (fasi 3 e 4). Dettaglio in
+> `docs/REVIEW.md`, sezione "Verifica 3", difetti D3 e D7.
+
 ## Phases
 
-- [ ] **Phase 1: Notification State Model** - Persist an independent verified state alongside read/unread without weakening tenant isolation.
-- [ ] **Phase 2: State Mutation API** - Expose reversible state transitions with role enforcement for member, admin, and owner.
-- [ ] **Phase 3: Notification Query Filters** - Add read and verified predicates to paginated notification queries and counts.
-- [ ] **Phase 4: Notification State UI** - Make both badges directly actionable in list/detail views and preserve existing unread behavior.
-- [ ] **Phase 5: Cron Preview Domain** - Establish shared validation and next-three calculation contracts using the configured time zone.
-- [ ] **Phase 6: Cron Preview API** - Provide an unsaved-input preview contract and enforce invalid cron rejection at persistence boundaries.
-- [ ] **Phase 7: Receiver Editor Feedback** - Render live red validation, next-three execution preview, and blocked saves in the frontend.
-- [ ] **Phase 8: Cross-Layer Verification** - Complete regression coverage and verify combined notification states and DST-aware cron behavior.
+- [x] **Phase 1: Notification State Model** - Persist an independent verified state alongside read/unread without weakening tenant isolation. *(migrazione 0014, `notifications.verified NOT NULL DEFAULT false`)*
+- [x] **Phase 2: State Mutation API** - Expose reversible state transitions with role enforcement for member, admin, and owner. *(`MarkStatusIn` + `PATCH /notifications/{id}`; il ruolo minimo `member` mancava ed è stato aggiunto nella revisione pre-staging)*
+- [x] **Phase 3: Notification Query Filters** - Add read and verified predicates to paginated notification queries and counts. *(`status` c'era, `verified` aggiunto nella revisione pre-staging, su lista e bulk-read)*
+- [x] **Phase 4: Notification State UI** - Make both badges directly actionable in list/detail views and preserve existing unread behavior. *(azioni e pill già presenti; i due filtri URL-backed aggiunti nella revisione pre-staging)*
+- [x] **Phase 5: Cron Preview Domain** - Establish shared validation and next-three calculation contracts using the configured time zone. *(`app/services/surveillance.py`: `validate_cron`, `validate_timezone`, `alert_deadline`)*
+- [x] **Phase 6: Cron Preview API** - Provide an unsaved-input preview contract and enforce invalid cron rejection at persistence boundaries. *(preview sui receiver + validazione negli schemi Pydantic: un cron non valido non si persiste nemmeno bypassando la UI)*
+- [x] **Phase 7: Receiver Editor Feedback** - Render live red validation, next-three execution preview, and blocked saves in the frontend. *(`plan_cron-validation-preview`, fasi 1-2. **Divergenza rispetto a questa roadmap:** la preview delle prossime 3 esecuzioni è calcolata lato client con `cron-parser`, non richiesta al server; la validazione autorevole resta comunque quella del backend)*
+- [x] **Phase 8: Cross-Layer Verification** - Complete regression coverage and verify combined notification states and DST-aware cron behavior. *(634 test backend + 165 frontend, gate e smoke test containerizzato verdi)*
 
 ## Phase Details
 
@@ -135,13 +145,17 @@ Plans:
 **Execution Order:**
 Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 
-| Phase | Plans Complete | Status | Completed |
-|-------|----------------|--------|-----------|
-| 1. Notification State Model | 0/1 | Not started | - |
-| 2. State Mutation API | 0/2 | Not started | - |
-| 3. Notification Query Filters | 0/2 | Not started | - |
-| 4. Notification State UI | 0/3 | Not started | - |
-| 5. Cron Preview Domain | 0/1 | Not started | - |
-| 6. Cron Preview API | 0/2 | Not started | - |
-| 7. Receiver Editor Feedback | 0/2 | Not started | - |
-| 8. Cross-Layer Verification | 0/2 | Not started | - |
+Il conteggio dei "plan" resta a 0: il lavoro non è passato da questa roadmap ma
+dai piani in `docs/plans/`. La colonna che conta è lo stato, verificato contro
+il codice.
+
+| Phase | Status | Completed | Verificata in |
+|-------|--------|-----------|---------------|
+| 1. Notification State Model | Done | 2026-08-05 | `plan_notification-unread-verified` fase 0 |
+| 2. State Mutation API | Done | 2026-09-09 | idem + ruolo minimo aggiunto in Verifica 3 (D3) |
+| 3. Notification Query Filters | Done | 2026-09-09 | filtro `verified` aggiunto in Verifica 3 (D7) |
+| 4. Notification State UI | Done | 2026-09-09 | idem + filtri URL-backed in Verifica 3 (D7) |
+| 5. Cron Preview Domain | Done | 2026-08-05 | `app/services/surveillance.py` |
+| 6. Cron Preview API | Done | 2026-08-05 | preview receiver + validazione negli schemi |
+| 7. Receiver Editor Feedback | Done (con divergenza) | 2026-08-05 | `plan_cron-validation-preview`: preview lato client |
+| 8. Cross-Layer Verification | Done | 2026-09-09 | `docs/REVIEW.md` "Verifica 3" |

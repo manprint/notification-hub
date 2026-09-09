@@ -474,3 +474,134 @@ abbassano per far passare una modifica. I test sono esclusi dalla propria misura
   rami non coperti sono varianti di errore su percorsi gia' verificati.
 - `ChannelsPage.tsx` (60%) e `UsersPage.tsx` (77%) sono le due pagine piu' grosse
   del frontend: coperte nei percorsi principali, non in ogni variante di form.
+
+---
+
+## Verifica 3 — revisione pre-staging (2026-09-09)
+
+Passata di revisione completa su tutto il repository (backend, frontend, job,
+deploy, documentazione) con l'obiettivo di consegnare per lo staging, piu il
+controllo che i piani in `docs/` e `.planning/` corrispondano al codice.
+
+**Stato di partenza:** tutti i gate erano verdi (619 test backend, 163 frontend,
+`fmt-check`/`lint`/`types`/`fe-lint`/`fe-build` puliti). I difetti sotto erano
+tutti **latenti**: nessuno di essi rompeva un test esistente, e il piu grave non
+si vede affatto finche non passa un giorno con un payload offloaded in archivio.
+
+### D1 — `purge_orphan_objects` cancellava i payload delle notifiche vive (perdita di dati)
+
+`app/tasks/maintenance.py` leggeva l'insieme delle `storage_key` note da
+`sync_session_factory()`, cioe da una sessione **senza `app.tenant_id`**.
+`notifications` ha `FORCE ROW LEVEL SECURITY` e il ruolo `notifyhub_app` non ha
+`BYPASSRLS`: quella SELECT non da errore, torna **zero righe**. L'insieme delle
+chiavi note era quindi vuoto per costruzione e ogni oggetto del bucket piu
+vecchio di 24h risultava orfano.
+
+Effetto reale, ogni notte alle 04:00: cancellazione da MinIO di **tutti** i
+payload offloaded (>1MB) piu vecchi di un giorno, con le righe `notifications`
+ancora al loro posto e `GET /notifications/{id}/content` rotto per sempre.
+Nessun errore nei log: il job registrava `purge_orphan_objects_done` con un
+contatore alto e si dichiarava riuscito.
+
+Lo stesso file conteneva gia la spiegazione del perche non si puo fare, nel
+docstring di `recompute_tenant_usage`. Corretto iterando i tenant come tutti
+gli altri job. Il test aggiunto, eseguito contro la vecchia implementazione,
+fallisce cancellando 3 oggetti su 3.
+
+### D2 — `Content-Length` sbagliato sul download di un payload normalizzato
+
+`GET /notifications/{id}/content` dichiarava `Content-Length: content_size`, che
+e la dimensione del corpo **originale**. Per un payload `inline` normalizzato
+(UTF-8 non valido sostituito con U+FFFD, byte NUL rimossi — spec 6.2) i byte
+inviati sono di piu: 10 byte in ingresso diventano 12 in uscita. Il client
+tronca la risposta o la rifiuta. Ora la lunghezza e quella dei byte inviati.
+
+### D3 — un `viewer` poteva marcare come letta, verificata e cancellare
+
+`PATCH /notifications/{id}`, `POST /notifications/bulk-read` e
+`DELETE /notifications/{id}` passavano da `current_claims` con
+`assert_group_access(write=False)`: un `viewer`, che per spec ha accesso in sola
+lettura, poteva modificare lo stato di qualunque notifica dei gruppi che gli
+sono visibili. Ora richiedono `require_member` e il controllo di gruppo col
+metro della scrittura. E anche il criterio 2 della fase 2 di
+`.planning/ROADMAP.md`, che era dato per non implementato.
+
+### D4 — il rate limit del login era di fatto per-email, non per (email, IP)
+
+`login` leggeva `request.client.host` direttamente. Dietro il reverse proxy del
+deploy standard quell'indirizzo e quello di nginx per **ogni** client: la chiave
+`login_attempts:{email}:{ip}` si riduceva alla sola email e 10 tentativi
+sbagliati bastavano a bloccare per 15 minuti un account noto — esattamente
+l'attacco che la chiave composta doveva impedire, e che il commento nel codice
+dichiarava di impedire. La risoluzione dell'IP con trusted proxy esisteva solo
+nell'ingestion: e stata estratta in `app/api/deps.py:client_ip` e ora la usano
+entrambi.
+
+### D5 — un'eccezione non-HTTP nel worker lasciava la delivery bloccata per sempre
+
+`send_webhook_sync` intercettava solo `httpx.HTTPError`. Qualunque altra
+eccezione (`httpx.InvalidURL` su un `webhook_url` malformato, un errore di
+serializzazione del payload) uscisse da `dispatch_delivery` lasciava la riga in
+`sending`: `reconcile_deliveries` la riporta a `failed` dopo 10 minuti, la
+riaccoda, si rompe di nuovo, per sempre, senza mai arrivare a `dead` e senza mai
+contare un tentativo. Il gestore d'errore stesso poteva poi sollevare
+`IndexError` (`webhook_url.split("/")[2]` su una stringa senza doppio slash).
+Ora un guasto qualunque diventa un tentativo fallito, e l'host per il log si
+estrae con `urlsplit` (il path di un webhook Slack **e** il segreto e non va
+mai nei log).
+
+### D6 — `FOR UPDATE` sul tenant a ogni ingestion, anche senza quote
+
+`enforce_tenant_quotas` prendeva sempre un lock di riga sul tenant. Quel lock
+serializza **tutte** le ingestion di quel tenant per la durata della
+transazione, e veniva preso anche con entrambe le quote a `NULL`, cioe nella
+configurazione di default, dove non c'e niente da proteggere. Ora si legge
+prima se una quota esiste e il lock si prende solo in quel caso.
+
+### D7 — filtri di stato mai implementati (fasi 3 e 4 di `.planning/ROADMAP.md`)
+
+Il filtro `verified` non esisteva ne nell'API ne nella UI, e il parametro
+`status` veniva letto dall'URL dalla pagina notifiche senza che nessun controllo
+lo scrivesse: era cablatura morta. Aggiunti `verified` a
+`GET /notifications` e a `POST /notifications/bulk-read` (combinabile con
+`status`, sono due dimensioni indipendenti) e i due select corrispondenti nella
+toolbar, con lo stato nell'URL come gli altri filtri.
+
+### Pulizie
+
+`CRON_LOOKBACK_DAYS` in `surveillance.py` (costante non usata, con un commento
+che descriveva una protezione inesistente — quel caso e comunque coperto perche
+`CroniterBadDateError` deriva da `ValueError`); parametri morti
+`_synthetic_notification(group_name=...)` e `_reference_instant(schedule)`;
+`except (ClientError, BotoCoreError, Exception)` in `readiness.py`, dove i primi
+due termini non hanno effetto; messaggio del 415 dell'ingestion, che elencava
+solo `text/plain` mentre l'endpoint accetta anche
+`application/x-www-form-urlencoded` e l'assenza di Content-Type.
+
+### Test aggiunti
+
+| File | Test | Dimostra |
+|---|---|---|
+| `tests/integration/test_review_staging.py` | `una_lettura_senza_contesto_di_tenant_non_vede_nessuna_storage_key` | il meccanismo di D1 isolato: RLS forzata torna zero righe, non un errore |
+| | `purge_orphan_objects_non_cancella_i_payload_delle_notifiche_vive` | D1: l'orfano vero se ne va, il payload di una notifica in elenco resta |
+| | `le_quote_illimitate_non_serializzano_l_ingestion` | D6: con quote NULL una seconda transazione riesce a bloccare la riga tenant (`FOR UPDATE NOWAIT`) |
+| | `con_una_quota_configurata_il_lock_resta` | D6, l'altra meta: con una quota il lock c'e ancora |
+| `tests/e2e/test_review_staging.py` | `content_length_descrive_i_byte_inviati_non_il_corpo_originale` | D2 |
+| | `viewer_non_puo_marcare_letta_ne_verificata` | D3: 403 su PATCH/bulk-read/DELETE, 200 in lettura, stato invariato |
+| | `filtro_verified_indipendente_da_status` | D7: le due dimensioni si combinano |
+| | `bulk_read_rispetta_il_filtro_verified` | D7: "segna tutte come lette" non tocca cio che il filtro esclude |
+| | `rate_limit_del_login_separato_per_ip_dietro_un_proxy_fidato` | D4 |
+| | `content_type_non_supportato_dice_quali_sono_accettati` | messaggio del 415 |
+| `tests/unit/test_review_staging.py` | `client_ip_*` (3 test) | D4: X-Forwarded-For solo da un proxy dichiarato |
+| | `send_webhook_sync_non_lascia_uscire_eccezioni_non_http` | D5 |
+| | `host_of_non_solleva_su_url_malformato_e_non_rivela_il_path` | D5, gestore d'errore |
+| `frontend/.../notifications.test.tsx` | `i_filtri_di_stato_e_verifica_finiscono_nell_URL` | D7 lato UI |
+| | `segna_tutte_come_lette_non_tocca_cio_che_il_filtro_verifica_esclude` | D7, corpo della bulk-read |
+
+### Gate dopo la passata
+
+- Backend: `fmt-check`, `lint`, `types` puliti. **634 test passati** (da 619),
+  copertura **90,55%** (soglia 88%).
+- Frontend: `fe-lint` a zero warning, **165 test** (da 163), `fe-build` pulito,
+  soglie di copertura rispettate (87,6 / 80,1).
+- `scripts/smoke.sh` sullo stack containerizzato completo: vedi sotto.

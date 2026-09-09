@@ -446,4 +446,62 @@ describe("NotificationsPage", () => {
     });
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
+
+  // .planning/ROADMAP.md fase 4: read e verified sono due dimensioni di stato
+  // filtrabili in modo indipendente, dall'URL, senza perdere gli altri filtri.
+  // Il parametro `status` veniva letto dall'URL ma nessun controllo lo scriveva,
+  // e `verified` non esisteva ne qui ne nell'API.
+  it("i filtri di stato e verifica finiscono nell'URL e nella richiesta", async () => {
+    let capturedUrl: URL | null = null;
+    server.use(
+      http.get("/api/v1/notifications", ({ request }) => {
+        capturedUrl = new URL(request.url);
+        return HttpResponse.json({ notifications: [], next_cursor: null, unread_count: 0 });
+      }),
+    );
+
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1&severity_min=error"]);
+    await waitFor(() => {
+      expect(capturedUrl?.searchParams.get("group_id")).toBe("g1");
+    });
+
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByLabelText("Stato di verifica"), "true");
+    await waitFor(() => {
+      expect(capturedUrl?.searchParams.get("verified")).toBe("true");
+    });
+
+    await user.selectOptions(screen.getByLabelText("Stato di lettura"), "unread");
+    await waitFor(() => {
+      expect(capturedUrl?.searchParams.get("status")).toBe("unread");
+      // Le due dimensioni si combinano fra loro e con i filtri preesistenti.
+      expect(capturedUrl?.searchParams.get("verified")).toBe("true");
+      expect(capturedUrl?.searchParams.get("severity_min")).toBe("error");
+    });
+  });
+
+  it("'segna tutte come lette' non tocca cio' che il filtro verifica esclude", async () => {
+    let bulkBody: Record<string, unknown> | null = null;
+    server.use(
+      http.post("/api/v1/notifications/bulk-read", async ({ request }) => {
+        bulkBody = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ marked_read: 1 });
+      }),
+    );
+
+    renderWithProviders(<NotificationsPage />, [
+      "/notifications?group_id=g1&verified=false",
+    ]);
+    await waitFor(() => {
+      expect(screen.getByRole("table")).toBeInTheDocument();
+    });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Segna tutte come lette" }));
+
+    await waitFor(() => {
+      expect(bulkBody).not.toBeNull();
+    });
+    expect(bulkBody).toMatchObject({ group_id: "g1", verified: false });
+  });
 });

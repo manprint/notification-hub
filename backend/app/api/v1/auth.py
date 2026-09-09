@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import current_claims, db, require_admin
+from app.api.deps import client_ip, current_claims, db, require_admin
 from app.core.config import get_settings
 from app.core.errors import PROBLEM_TYPES, Problem
 from app.core.security import (
@@ -110,8 +110,13 @@ async def login(body: LoginIn, request: Request) -> TokenPairOut:
     # Chiave su (email, IP): sulla sola email chiunque conosca un indirizzo
     # potrebbe bloccare quell'account inviando richieste false (spec 10.2
     # chiede esplicitamente (email, IP)).
-    client_ip = request.client.host if request.client else "unknown"
-    rate_limit_key = f"login_attempts:{body.email}:{client_ip}"
+    #
+    # L'IP va risolto con la stessa regola dell'ingestion (api/deps.client_ip):
+    # dietro nginx `request.client.host` e l'indirizzo del proxy per TUTTI, la
+    # chiave si riduce di fatto alla sola email ed e' di nuovo possibile bloccare
+    # un account noto con dieci tentativi sbagliati — esattamente cio' che questa
+    # chiave composta doveva impedire.
+    rate_limit_key = f"login_attempts:{body.email}:{client_ip(request)}"
     rate_limit = await sliding_window_hit(rate_limit_key, 10, 900)
 
     if not rate_limit.allowed:

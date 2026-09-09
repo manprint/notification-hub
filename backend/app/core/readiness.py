@@ -1,7 +1,6 @@
 """GET /readyz: Postgres + Redis + MinIO HeadBucket (spec 13)."""
 
 import aioboto3
-from botocore.exceptions import BotoCoreError, ClientError
 from sqlalchemy import text
 
 from app.core.config import get_settings
@@ -44,7 +43,7 @@ async def _check_minio() -> bool:
         ) as s3:
             await s3.head_bucket(Bucket=settings.notifyhub_s3_bucket)
         return True
-    except (ClientError, BotoCoreError, Exception):
+    except Exception:
         logger.warning("readyz_minio_unreachable")
         return False
 

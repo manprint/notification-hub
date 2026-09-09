@@ -16,6 +16,8 @@ export interface NotificationFilters {
   // Chi ha deciso la severity: serve a isolare gli allarmi scritti dalla
   // sorveglianza (missing/recovered) dai messaggi inviati davvero.
   source?: SeveritySource;
+  // Revisione manuale, indipendente da `status`: i due filtri si combinano.
+  verified?: boolean;
   q?: string;
   from?: string;
   to?: string;

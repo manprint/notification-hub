@@ -50,6 +50,20 @@ export default function NotificationsPage() {
   const severityMin = (searchParams.get("severity_min") as Severity | null) ?? undefined;
   const status = (searchParams.get("status") as NotificationStatus | null) ?? undefined;
   const source = (searchParams.get("source") as SeveritySource | null) ?? undefined;
+  // Le due dimensioni di stato stanno nell'URL come tutti gli altri filtri:
+  // una vista filtrata resta condivisibile e sopravvive al ricaricamento.
+  // Assente = qualsiasi; sono indipendenti e si combinano.
+  const verifiedParam = searchParams.get("verified");
+  const verified = verifiedParam === null ? undefined : verifiedParam === "true";
+
+  function setFilter(key: string, value: string) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set(key, value);
+      else next.delete(key);
+      return next;
+    });
+  }
 
   const {
     data: groups,
@@ -67,6 +81,7 @@ export default function NotificationsPage() {
         severity_min: severityMin,
         status,
         source,
+        verified,
         q: q || undefined,
       },
       { enabled: !!groupId },
@@ -94,8 +109,9 @@ export default function NotificationsPage() {
         group_id: groupId,
         severity_min: severityMin,
         // Lo stesso filtro della lista: "segna tutte come lette" non deve toccare
-        // cio' che il filtro sull'origine sta tenendo fuori dalla vista.
+        // cio' che i filtri stanno tenendo fuori dalla vista.
         source,
+        verified,
         q: q || undefined,
       });
       await queryClient.invalidateQueries({ queryKey: ["notifications"] });
@@ -231,15 +247,7 @@ export default function NotificationsPage() {
       <div className="toolbar">
         <select
           value={severityMin ?? ""}
-          onChange={(event) => {
-            const value = event.target.value;
-            setSearchParams((prev) => {
-              const next = new URLSearchParams(prev);
-              if (value) next.set("severity_min", value);
-              else next.delete("severity_min");
-              return next;
-            });
-          }}
+          onChange={(event) => setFilter("severity_min", event.target.value)}
         >
           <option value="">Qualsiasi severity</option>
           {SEVERITIES.map((s) => (
@@ -252,15 +260,7 @@ export default function NotificationsPage() {
         <select
           aria-label="Origine della notifica"
           value={source ?? ""}
-          onChange={(event) => {
-            const value = event.target.value;
-            setSearchParams((prev) => {
-              const next = new URLSearchParams(prev);
-              if (value) next.set("source", value);
-              else next.delete("source");
-              return next;
-            });
-          }}
+          onChange={(event) => setFilter("source", event.target.value)}
         >
           <option value="">Qualsiasi origine</option>
           {SOURCES.map((item) => (
@@ -268,6 +268,26 @@ export default function NotificationsPage() {
               {SEVERITY_SOURCE_LABELS[item]}
             </option>
           ))}
+        </select>
+
+        <select
+          aria-label="Stato di lettura"
+          value={status ?? ""}
+          onChange={(event) => setFilter("status", event.target.value)}
+        >
+          <option value="">Lette e non lette</option>
+          <option value="unread">Solo non lette</option>
+          <option value="read">Solo lette</option>
+        </select>
+
+        <select
+          aria-label="Stato di verifica"
+          value={verifiedParam ?? ""}
+          onChange={(event) => setFilter("verified", event.target.value)}
+        >
+          <option value="">Verificate e non</option>
+          <option value="true">Solo verificate</option>
+          <option value="false">Solo non verificate</option>
         </select>
 
         <input

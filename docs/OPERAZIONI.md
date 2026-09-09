@@ -167,6 +167,16 @@ falliti la riga resta e alimenta la metrica `notifyhub_maintenance_job_runs_tota
 
 **Importanza:** MEDIA. Previene accumulo di oggetti orfani.
 
+**Attenzione, se si tocca questo job:** l'insieme delle `storage_key` note va
+raccolto iterando i tenant con `SET LOCAL app.tenant_id` (`tenant_session_sync`),
+mai da una sessione senza contesto di tenant. `notifications` ha
+`FORCE ROW LEVEL SECURITY` e il ruolo `notifyhub_app` non ha `BYPASSRLS`: una
+lettura senza contesto **non da errore, torna zero righe**, quindi ogni oggetto
+oltre le 24h risulterebbe orfano e il job cancellerebbe i payload delle notifiche
+ancora in elenco, dichiarandosi riuscito. E' stato un difetto reale: vedi
+`docs/REVIEW.md`, "Verifica 3", D1, e il test
+`tests/integration/test_review_staging.py`.
+
 **Esecuzione manuale:**
 
 ```bash

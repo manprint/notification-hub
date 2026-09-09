@@ -29,7 +29,6 @@ from app.models.refresh_token import RefreshToken
 from app.models.tenant import Tenant
 from app.services.outbound_resolver import create_deliveries_for_notification_sync
 from app.services.surveillance import (
-    ExpectedSchedule,
     InvalidScheduleError,
     alert_deadline,
     missing_content,
@@ -245,14 +244,26 @@ def purge_orphan_objects() -> None:
     )
 
     cutoff = datetime.now(UTC) - timedelta(hours=24)
-    with sync_session_factory() as session:
-        known_keys = set(
-            session.execute(
-                select(Notification.storage_key).where(Notification.storage_key.isnot(None))
+    # notifications ha FORCE ROW LEVEL SECURITY e il ruolo notifyhub_app non ha
+    # BYPASSRLS: una SELECT senza app.tenant_id impostato non torna NESSUNA riga,
+    # non un errore. Leggere le chiavi note da una sessione senza contesto di
+    # tenant produceva quindi un insieme vuoto e faceva considerare orfano OGNI
+    # oggetto oltre le 24h, cancellando i payload delle notifiche ancora vive.
+    # Va iterato tenant per tenant come tutti gli altri job (spec 5.3).
+    known_keys: set[str] = set()
+    for tenant_id in _all_tenant_ids():
+        with tenant_session_sync(tenant_id) as session:
+            rows = (
+                session.execute(
+                    select(Notification.storage_key).where(
+                        Notification.tenant_id == tenant_id,
+                        Notification.storage_key.isnot(None),
+                    )
+                )
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
+            known_keys.update(key for key in rows if key is not None)
 
     purged = 0
     paginator = s3.get_paginator("list_objects_v2")
@@ -301,7 +312,6 @@ def _synthetic_notification(
     *,
     tenant_id: uuid.UUID,
     receiver: Receiver,
-    group_name: str,
     content: str,
     severity: Severity,
     source: SeveritySource,
@@ -348,7 +358,7 @@ def _synthetic_notification(
     )
 
 
-def _reference_instant(receiver: Receiver, schedule: ExpectedSchedule) -> datetime | None:
+def _reference_instant(receiver: Receiver) -> datetime | None:
     """Da quando si conta l'attesa: l'ultimo invio vero, oppure il momento in cui
     la politica e' entrata in vigore per un receiver che non ha mai ricevuto
     niente. Senza nessuno dei due non si puo' decidere e si lascia stare."""
@@ -428,7 +438,6 @@ def check_expected_schedules() -> None:
                             session,
                             tenant_id=tenant_id,
                             receiver=receiver,
-                            group_name=group_name,
                             content=recovered_content(
                                 receiver_name=receiver.name,
                                 group_name=group_name,
@@ -454,7 +463,7 @@ def check_expected_schedules() -> None:
                 if receiver.missing_alerted_at is not None:
                     continue
 
-                reference = _reference_instant(receiver, schedule)
+                reference = _reference_instant(receiver)
                 if reference is None:
                     continue
 
@@ -481,7 +490,6 @@ def check_expected_schedules() -> None:
                         session,
                         tenant_id=tenant_id,
                         receiver=receiver,
-                        group_name=group_name,
                         content=missing_content(
                             receiver_name=receiver.name,
                             group_name=group_name,

@@ -62,20 +62,30 @@ async def _apply_filters(
     receiver_id: uuid.UUID | None,
     severity_min: Severity | None,
     source: SeveritySource | None,
+    verified: bool | None,
     q: str | None,
     from_: datetime | None,
     to: datetime | None,
+    write: bool = False,
 ) -> bool:
     """Costruisce le condizioni di filtro. Restituisce False quando il
     chiamante non puo vedere nulla (member/viewer senza gruppi associati):
     senza il vincolo di appartenenza, member e viewer leggevano le notifiche
-    di tutti i gruppi del tenant, non solo dei propri."""
+    di tutti i gruppi del tenant, non solo dei propri.
+
+    `write=True` per gli endpoint che modificano (bulk-read): il controllo di
+    appartenenza al gruppo va fatto col metro della scrittura, non della lettura.
+    """
     tenant_id = uuid.UUID(claims.tid)
     conditions.append(Notification.tenant_id == tenant_id)
     if receiver_id is not None:
         conditions.append(Notification.receiver_id == receiver_id)
     if severity_min is not None:
         conditions.append(Notification.severity >= severity_min)
+    if verified is not None:
+        # Revisione manuale, indipendente da read/unread: si filtra su una
+        # dimensione senza toccare l'altra e le due si possono combinare.
+        conditions.append(Notification.verified.is_(verified))
     if source is not None:
         # Chi ha deciso la severity, che per 'missing' e 'recovered' vuol dire
         # anche "chi ha scritto la notifica": e il filtro con cui si isolano gli
@@ -94,7 +104,7 @@ async def _apply_filters(
 
     receiver_conditions = [Receiver.tenant_id == tenant_id]
     if group_id is not None:
-        await assert_group_access(session, claims, group_id, write=False)
+        await assert_group_access(session, claims, group_id, write=write)
         receiver_conditions.append(Receiver.group_id == group_id)
 
     allowed = await accessible_group_ids(session, claims)
@@ -117,6 +127,7 @@ async def list_notifications(
     status_filter: NotificationStatus | None = Query(default=None, alias="status"),  # noqa: B008
     severity_min: Severity | None = Query(default=None),  # noqa: B008
     source: SeveritySource | None = Query(default=None),  # noqa: B008
+    verified: bool | None = Query(default=None),  # noqa: B008
     q: str | None = Query(default=None),  # noqa: B008
     from_: datetime | None = Query(default=None, alias="from"),  # noqa: B008
     to: datetime | None = Query(default=None),  # noqa: B008
@@ -138,6 +149,7 @@ async def list_notifications(
         receiver_id=receiver_id,
         severity_min=severity_min,
         source=source,
+        verified=verified,
         q=q,
         from_=from_,
         to=to,
@@ -210,7 +222,11 @@ async def list_notifications(
 
 
 async def _get_notification_or_404(
-    session: AsyncSession, claims: AccessClaims, notification_id: uuid.UUID
+    session: AsyncSession,
+    claims: AccessClaims,
+    notification_id: uuid.UUID,
+    *,
+    write: bool = False,
 ) -> Notification:
     tenant_id = uuid.UUID(claims.tid)
     result = await session.execute(
@@ -227,7 +243,7 @@ async def _get_notification_or_404(
             detail="Notification not found.",
         )
     notification, group_id = row
-    await assert_group_access(session, claims, group_id, write=False)
+    await assert_group_access(session, claims, group_id, write=write)
     return notification
 
 
@@ -289,10 +305,15 @@ async def get_notification_content(
     async def _stream() -> AsyncIterator[bytes]:
         yield body
 
+    # Content-Length sui byte che si stanno davvero mandando, non su
+    # content_size: quello e la dimensione del corpo ORIGINALE, e per un payload
+    # inline normalizzato (UTF-8 non valido sostituito con U+FFFD, byte NUL
+    # rimossi, spec 6.2) le due misure non coincidono. Dichiarare la lunghezza
+    # sbagliata fa troncare la risposta o fallire il client.
     return StreamingResponse(
         _stream(),
         media_type="text/plain",
-        headers={"Content-Length": str(notification.content_size)},
+        headers={"Content-Length": str(len(body))},
     )
 
 
@@ -301,10 +322,13 @@ async def mark_notification_status(
     notification_id: uuid.UUID,
     body: MarkStatusIn,
     request: Request,
-    claims: AccessClaims = Depends(current_claims),  # noqa: B008
+    claims: AccessClaims = Depends(require_member),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> NotificationDetailOut:
-    notification = await _get_notification_or_404(session, claims, notification_id)
+    """Cambia read/unread e/o verified. Serve il ruolo member: un viewer ha
+    accesso in sola lettura (spec 3, ruoli) e prima poteva invece marcare come
+    letta o verificata qualunque notifica dei gruppi che gli sono visibili."""
+    notification = await _get_notification_or_404(session, claims, notification_id, write=True)
     if body.status is not None:
         notification.status = body.status
     if body.verified is not None:
@@ -339,9 +363,10 @@ async def mark_notification_status(
 @router.post("/bulk-read", response_model=BulkReadOut)
 async def bulk_mark_read(
     body: BulkReadIn,
-    claims: AccessClaims = Depends(current_claims),  # noqa: B008
+    claims: AccessClaims = Depends(require_member),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> BulkReadOut:
+    """Come PATCH: e una scrittura, quindi serve il ruolo member."""
     conditions: list = []
     visible = await _apply_filters(
         conditions,
@@ -351,9 +376,11 @@ async def bulk_mark_read(
         receiver_id=body.receiver_id,
         severity_min=body.severity_min,
         source=body.source,
+        verified=body.verified,
         q=body.q,
         from_=body.from_,
         to=body.to,
+        write=True,
     )
     if not visible:
         return BulkReadOut(marked_read=0)
@@ -377,5 +404,5 @@ async def delete_notification(
     """Il trigger AFTER DELETE (migrazione 0002) accoda storage_key in
     pending_object_deletions per i payload offloaded (invariante I-8): qui
     basta cancellare la riga."""
-    notification = await _get_notification_or_404(session, claims, notification_id)
+    notification = await _get_notification_or_404(session, claims, notification_id, write=True)
     await session.delete(notification)

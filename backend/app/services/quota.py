@@ -19,9 +19,25 @@ async def enforce_tenant_quotas(
     """Solleva 429 se il tenant ha superato max_notifications_per_day o
     max_storage_bytes (NULL = illimitato, spec 4.1). Va chiamato PRIMA di
     scrivere la nuova Notification."""
-    # Il controllo e l'INSERT della notifica avvengono nella stessa transazione.
-    # Il lock sulla riga tenant serializza gli ingestion concorrenti: senza, due
-    # richieste potevano entrambe osservare quota disponibile e superarla.
+    # Prima una lettura senza lock, solo per sapere se c'e' una quota da
+    # applicare: `FOR UPDATE` sulla riga del tenant serializza TUTTE le
+    # ingestion di quel tenant per la durata della transazione, e prenderlo
+    # anche quando entrambe le quote sono NULL (il default: illimitate) rendeva
+    # sequenziale l'intera ingestion senza che ci fosse niente da proteggere.
+    limits = (
+        await session.execute(
+            select(Tenant.max_notifications_per_day, Tenant.max_storage_bytes).where(
+                Tenant.id == tenant_id
+            )
+        )
+    ).one()
+    if limits.max_notifications_per_day is None and limits.max_storage_bytes is None:
+        return
+
+    # Con almeno una quota configurata il lock serve: il controllo e l'INSERT
+    # della notifica avvengono nella stessa transazione e senza serializzare
+    # due richieste concorrenti potevano entrambe osservare quota disponibile
+    # e superarla.
     tenant_result = await session.execute(
         select(Tenant).where(Tenant.id == tenant_id).with_for_update()
     )

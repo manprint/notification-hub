@@ -485,7 +485,7 @@ Bucket unico per deployment (`notifyhub-payloads`, env `NOTIFYHUB_S3_BUCKET`), p
 
 - `GET /api/v1/notifications` → solo `content_preview` troncato a 500 caratteri + `content_size`. Mai MinIO.
 - `GET /api/v1/notifications/{id}` → se `inline` restituisce `content`; se `object` restituisce i metadati + `content_url`.
-- `GET /api/v1/notifications/{id}/content` → streaming proxy dell'oggetto, `Content-Type: text/plain`, `Content-Length` da `content_size`.
+- `GET /api/v1/notifications/{id}/content` → streaming proxy dell'oggetto, `Content-Type: text/plain`, `Content-Length` **dei byte effettivamente inviati**. Non è `content_size`: quella è la dimensione del corpo *originale*, e per un payload `inline` normalizzato (UTF-8 non valido sostituito, byte NUL rimossi — §6.2) le due misure differiscono. Dichiarare `content_size` fa troncare la risposta.
 - Il **worker outbound non legge mai MinIO**: formatta da `content_preview` (4096 caratteri, sopra i 3800 richiesti da Google Chat).
 
 **Cancellazione**
@@ -687,11 +687,11 @@ Le sotto-risorse sono identificate da `channel_id`: `PUT`/`DELETE` su una collez
 
 | Metodo | Path | Descrizione |
 |---|---|---|
-| GET | `/api/v1/notifications` | Filtri: `group_id`, `receiver_id`, `status`, `severity_min`, `q` (full-text), `from`, `to`. Paginazione **a cursore** su `(received_at, id)` |
+| GET | `/api/v1/notifications` | Filtri: `group_id`, `receiver_id`, `status`, `verified`, `severity_min`, `source`, `q` (full-text), `from`, `to`. `status` (letta/non letta) e `verified` (revisione manuale) sono **due dimensioni indipendenti** e si combinano. Paginazione **a cursore** su `(received_at, id)` |
 | GET | `/api/v1/notifications/{id}` | Dettaglio. `content` inline se ≤1MB, altrimenti `content_url` |
 | GET | `/api/v1/notifications/{id}/content` | Streaming del corpo completo (proxy MinIO se offloaded) |
 | PATCH | `/api/v1/notifications/{id}` | Segna letta / non letta e verificata / non verificata. Body: almeno uno fra `status` e `verified`; body vuoto → 422 |
-| POST | `/api/v1/notifications/bulk-read` | Segna in blocco (per filtro) |
+| POST | `/api/v1/notifications/bulk-read` | Segna in blocco (per filtro, gli stessi della lista) |
 | DELETE | `/api/v1/notifications/{id}` | Elimina |
 | GET | `/api/v1/stats/summary` | Conteggi per gruppo / severity / non lette, per la home della dashboard |
 
@@ -719,6 +719,8 @@ La lista **non** restituisce il `content` completo ma i primi 500 caratteri di `
 ### 10.2 Management
 
 - Password con Argon2id, policy minima 12 caratteri
+- **Rate limit del login su `(email, IP)`**, 10 tentativi / 15 min. L'IP si risolve con la stessa regola dell'ingestion (§10.1: `X-Forwarded-For` solo da un trusted proxy): dietro reverse proxy l'IP della connessione è quello del proxy per *tutti*, e senza questa risoluzione la chiave si riduce alla sola email — 10 tentativi sbagliati basterebbero a bloccare un account noto a tutti gli altri
+- **Scritture sulle notifiche riservate a `member` e superiori**: `PATCH /notifications/{id}`, `POST /notifications/bulk-read` e `DELETE /notifications/{id}` richiedono il ruolo `member`; un `viewer` legge e riceve `403` su ognuna
 - **Registrazione pubblica disabilitata di default**: `ALLOW_PUBLIC_REGISTRATION=false`. Con il flag a `false`, `POST /auth/register` risponde `403` e il primo tenant si crea da CLI:
   ```bash
   docker compose run --rm api python -m notifyhub.cli bootstrap \
@@ -759,7 +761,7 @@ Job Celery Beat. Tutti girano con il ruolo `notifyhub_app`, senza alcun privileg
 | `cleanup_tokens` | ogni ora | Elimina refresh token scaduti/revocati e inviti scaduti |
 | `reconcile_deliveries` | ogni 5 min | Ripesca le delivery `pending`/`failed` con `next_attempt_at` scaduto e le `sending` con `locked_at` più vecchio di 10 minuti |
 | `drain_object_deletions` | ogni 10 min | Svuota `pending_object_deletions` cancellando gli oggetti da MinIO. Dopo 10 tentativi falliti la riga resta e alimenta una metrica di allarme |
-| `purge_orphan_objects` | ogni notte 04:00 | Elimina gli oggetti del bucket più vecchi di 24h senza riga corrispondente in `notifications.storage_key`. Recupera i PUT riusciti con commit fallito |
+| `purge_orphan_objects` | ogni notte 04:00 | Elimina gli oggetti del bucket più vecchi di 24h senza riga corrispondente in `notifications.storage_key`. Recupera i PUT riusciti con commit fallito. ⚠️ Le `storage_key` note vanno raccolte **iterando i tenant** con `SET LOCAL app.tenant_id`: `notifications` ha `FORCE ROW LEVEL SECURITY` e una lettura senza contesto di tenant torna zero righe *senza errore*, facendo risultare orfano ogni oggetto |
 | `recompute_tenant_usage` | ogni notte 04:30 | Ricalcola lo spazio occupato per tenant (F7, alimenta `max_storage_bytes`) |
 | `check_expected_schedules` | ogni 60 s | **Sorveglianza dell'attesa** (§4.2, `receivers.expected_*`): per ogni tenant attivo confronta `last_notification_at` con la scadenza dichiarata (intervallo o cron + tolleranza) e scrive una notifica sintetica `severity_source = 'missing'` per chi ha sforato, una `recovered` (`info`) per chi e' tornato a inviare. Una sola notifica per assenza, riarmata al primo invio vero |
 
