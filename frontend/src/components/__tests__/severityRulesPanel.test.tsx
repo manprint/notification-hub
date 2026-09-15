@@ -214,7 +214,8 @@ describe("SeverityRulesPanel", () => {
     await user.click(screen.getByRole("button", { name: "Aggiungi regola" }));
 
     await waitFor(() => {
-      expect(screen.getByText(/not compilable by RE2/)).toBeInTheDocument();
+      // Due volte: l'avviso immediato e il banner che resta dentro il modulo.
+      expect(screen.getAllByText(/not compilable by RE2/).length).toBeGreaterThanOrEqual(2);
     });
   });
 

@@ -11,8 +11,11 @@ import type {
   SyncBuiltinPresetsOut,
 } from "../api/types";
 import ConfirmDialog from "../components/ConfirmDialog";
+import EmptyState from "../components/EmptyState";
 import ErrorBanner from "../components/ErrorBanner";
+import Field, { RequiredLegend, fieldAria } from "../components/Field";
 import SeverityBadge from "../components/SeverityBadge";
+import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
 import { ADMIN_ROLES, hasRole } from "../lib/roles";
 
@@ -31,40 +34,54 @@ function PresetRuleForm({
   const [pattern, setPattern] = useState(rule?.pattern ?? "");
   const [severity, setSeverity] = useState<Severity>(rule?.severity ?? "error");
   const [caseInsensitive, setCaseInsensitive] = useState(rule?.case_insensitive ?? true);
-  const [error, setError] = useState<ApiError | null>(null);
+  const [patternError, setPatternError] = useState<string | null>(null);
+  const { busy, error, run } = useAction();
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    setError(null);
-    try {
-      const body = { pattern, severity, case_insensitive: caseInsensitive };
-      if (rule) {
-        await apiPatch(`/api/v1/severity-preset-rules/${rule.id}`, body);
-      } else {
-        // Nessuna priorità: il backend accoda. L'ordine si cambia con le frecce.
-        await apiPost(`/api/v1/severity-presets/${presetId}/rules`, { ...body, enabled: true });
-        setPattern("");
-      }
-      await queryClient.invalidateQueries({ queryKey: ["preset", presetId] });
-      await queryClient.invalidateQueries({ queryKey: ["presets"] });
+    if (pattern.trim() === "") {
+      setPatternError("Il pattern è obbligatorio.");
+      return;
+    }
+    setPatternError(null);
+    const body = { pattern, severity, case_insensitive: caseInsensitive };
+    const ok = await run(
+      async () => {
+        if (rule) {
+          await apiPatch(`/api/v1/severity-preset-rules/${rule.id}`, body);
+        } else {
+          // Nessuna priorità: il backend accoda. L'ordine si cambia con le frecce.
+          await apiPost(`/api/v1/severity-presets/${presetId}/rules`, { ...body, enabled: true });
+        }
+        await queryClient.invalidateQueries({ queryKey: ["preset", presetId] });
+        await queryClient.invalidateQueries({ queryKey: ["presets"] });
+      },
+      { success: rule ? "Regola del preset aggiornata." : "Regola aggiunta al preset." },
+    );
+    if (ok) {
+      if (!rule) setPattern("");
       onDone();
-    } catch (err) {
-      setError(err as ApiError);
     }
   }
 
   return (
     <form onSubmit={(event) => void handleSubmit(event)}>
       {error && <ErrorBanner error={error} />}
+      {patternError && (
+        <p className="field-error" role="alert">
+          {patternError}
+        </p>
+      )}
       <div className="toolbar">
         <input
           aria-label="Pattern RE2 del preset"
+          aria-invalid={patternError ? true : undefined}
           placeholder="Pattern RE2, es. No space left on device"
           value={pattern}
           onChange={(event) => setPattern(event.target.value)}
           required
           maxLength={200}
-          style={{ minWidth: "18rem" }}
+          className="grow-input"
         />
         <select
           aria-label="Severity della regola del preset"
@@ -85,7 +102,7 @@ function PresetRuleForm({
           />
           ignora maiuscole
         </label>
-        <button type="submit" className="primary">
+        <button type="submit" className="primary" disabled={busy !== null}>
           {rule ? "Salva" : "Aggiungi regola"}
         </button>
         {rule && (
@@ -100,8 +117,9 @@ function PresetRuleForm({
 
 function PresetRules({ presetId, canManage }: { presetId: string; canManage: boolean }) {
   const queryClient = useQueryClient();
-  const [error, setError] = useState<ApiError | null>(null);
+  const { busy, error, run } = useAction();
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [deletingRule, setDeletingRule] = useState<SeverityPresetRuleOut | null>(null);
 
   const { data, error: loadError } = useQuery<SeverityPresetDetailOut, ApiError>({
     queryKey: ["preset", presetId],
@@ -110,15 +128,12 @@ function PresetRules({ presetId, canManage }: { presetId: string; canManage: boo
 
   const rules = data?.rules ?? [];
 
-  async function mutate(action: () => Promise<unknown>) {
-    setError(null);
-    try {
+  async function mutate(action: () => Promise<unknown>, success: string) {
+    await run(async () => {
       await action();
       await queryClient.invalidateQueries({ queryKey: ["preset", presetId] });
       await queryClient.invalidateQueries({ queryKey: ["presets"] });
-    } catch (err) {
-      setError(err as ApiError);
-    }
+    }, { success });
   }
 
   function move(index: number, delta: number) {
@@ -126,10 +141,12 @@ function PresetRules({ presetId, canManage }: { presetId: string; canManage: boo
     const target = index + delta;
     if (target < 0 || target >= next.length) return;
     [next[index], next[target]] = [next[target], next[index]];
-    void mutate(() =>
-      apiPut(`/api/v1/severity-presets/${presetId}/rules/order`, {
-        rule_ids: next.map((r) => r.id),
-      }),
+    void mutate(
+      () =>
+        apiPut(`/api/v1/severity-presets/${presetId}/rules/order`, {
+          rule_ids: next.map((r) => r.id),
+        }),
+      "Ordine delle regole aggiornato.",
     );
   }
 
@@ -205,10 +222,12 @@ function PresetRules({ presetId, canManage }: { presetId: string; canManage: boo
                             checked={rule.enabled}
                             aria-label={`Attiva ${rule.pattern}`}
                             onChange={() =>
-                              void mutate(() =>
-                                apiPatch(`/api/v1/severity-preset-rules/${rule.id}`, {
-                                  enabled: !rule.enabled,
-                                }),
+                              void mutate(
+                                () =>
+                                  apiPatch(`/api/v1/severity-preset-rules/${rule.id}`, {
+                                    enabled: !rule.enabled,
+                                  }),
+                                rule.enabled ? "Regola disattivata." : "Regola attivata.",
                               )
                             }
                           />
@@ -221,13 +240,13 @@ function PresetRules({ presetId, canManage }: { presetId: string; canManage: boo
                     <td>
                       {canManage && (
                         <div className="row-actions">
-                          <button onClick={() => setEditingId(rule.id)}>Modifica</button>
+                          <button disabled={busy !== null} onClick={() => setEditingId(rule.id)}>
+                            Modifica
+                          </button>
                           <button
-                            onClick={() =>
-                              void mutate(() =>
-                                apiDelete(`/api/v1/severity-preset-rules/${rule.id}`),
-                              )
-                            }
+                            className="danger"
+                            disabled={busy !== null}
+                            onClick={() => setDeletingRule(rule)}
                           >
                             Elimina
                           </button>
@@ -248,6 +267,29 @@ function PresetRules({ presetId, canManage }: { presetId: string; canManage: boo
           <PresetRuleForm presetId={presetId} onDone={() => undefined} />
         </>
       )}
+
+      {deletingRule && (
+        <ConfirmDialog
+          title="Elimina questa regola del preset"
+          confirmLabel="Elimina regola"
+          onConfirm={() => {
+            const rule = deletingRule;
+            setDeletingRule(null);
+            void mutate(
+              () => apiDelete(`/api/v1/severity-preset-rules/${rule.id}`),
+              "Regola eliminata dal preset.",
+            );
+          }}
+          onCancel={() => setDeletingRule(null)}
+        >
+          <p>
+            La regola sparisce da <strong>tutti</strong> i receiver che usano questo preset.
+          </p>
+          <p>
+            <code>{deletingRule.pattern}</code>
+          </p>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }
@@ -259,28 +301,24 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
   const [name, setName] = useState(preset.name);
   const [description, setDescription] = useState(preset.description);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [error, setError] = useState<ApiError | null>(null);
+  const { busy, error, run } = useAction();
 
-  async function mutate(action: () => Promise<unknown>): Promise<boolean> {
-    setError(null);
-    try {
+  async function mutate(action: () => Promise<unknown>, success: string): Promise<boolean> {
+    return run(async () => {
       await action();
       await queryClient.invalidateQueries({ queryKey: ["presets"] });
       await queryClient.invalidateQueries({ queryKey: ["preset", preset.id] });
       await queryClient.invalidateQueries({ queryKey: ["presets-catalog"] });
-      return true;
-    } catch (err) {
-      setError(err as ApiError);
-      return false;
-    }
+    }, { success });
   }
 
   async function saveRename(event: React.FormEvent) {
     event.preventDefault();
     // Il modulo resta aperto se il salvataggio fallisce (nome duplicato → 409):
     // chiuderlo comunque farebbe sparire il testo insieme all'errore.
-    const ok = await mutate(() =>
-      apiPatch(`/api/v1/severity-presets/${preset.id}`, { name, description }),
+    const ok = await mutate(
+      () => apiPatch(`/api/v1/severity-presets/${preset.id}`, { name, description }),
+      "Preset rinominato.",
     );
     if (ok) setRenaming(false);
   }
@@ -291,26 +329,27 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
 
       {renaming ? (
         <form onSubmit={(event) => void saveRename(event)}>
-          <div className="form-row">
-            <label htmlFor={`preset-name-${preset.id}`}>Nome</label>
+          <RequiredLegend />
+          <Field id={`preset-name-${preset.id}`} label="Nome" required>
             <input
-              id={`preset-name-${preset.id}`}
+              {...fieldAria(`preset-name-${preset.id}`)}
               required
+              maxLength={120}
               value={name}
               onChange={(event) => setName(event.target.value)}
             />
-          </div>
-          <div className="form-row">
-            <label htmlFor={`preset-desc-${preset.id}`}>Descrizione</label>
+          </Field>
+          <Field id={`preset-desc-${preset.id}`} label="Descrizione" optional>
             <input
-              id={`preset-desc-${preset.id}`}
+              {...fieldAria(`preset-desc-${preset.id}`)}
+              maxLength={500}
               value={description}
               onChange={(event) => setDescription(event.target.value)}
             />
-          </div>
-          <div className="toolbar">
-            <button type="submit" className="primary">
-              Salva
+          </Field>
+          <div className="form-actions">
+            <button type="submit" className="primary" disabled={busy !== null}>
+              {busy !== null ? "Salvataggio…" : "Salva"}
             </button>
             <button type="button" onClick={() => setRenaming(false)}>
               Annulla
@@ -341,14 +380,20 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
             <button onClick={() => setRenaming(true)}>Rinomina</button>
             {preset.builtin_key && (
               <button
+                disabled={busy !== null}
                 onClick={() =>
-                  void mutate(() => apiPost(`/api/v1/severity-presets/${preset.id}/reset`))
+                  void mutate(
+                    () => apiPost(`/api/v1/severity-presets/${preset.id}/reset`),
+                    `Preset «${preset.name}» riportato ai valori predefiniti.`,
+                  )
                 }
               >
                 Ripristina i valori predefiniti
               </button>
             )}
-            <button onClick={() => setConfirmDelete(true)}>Elimina preset</button>
+            <button className="danger" onClick={() => setConfirmDelete(true)}>
+              Elimina preset
+            </button>
           </>
         )}
       </div>
@@ -357,9 +402,13 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
         <ConfirmDialog
           title={`Elimina preset "${preset.name}"`}
           expectedText={preset.name}
+          confirmLabel="Elimina preset"
           onConfirm={() => {
             setConfirmDelete(false);
-            void mutate(() => apiDelete(`/api/v1/severity-presets/${preset.id}`));
+            void mutate(
+              () => apiDelete(`/api/v1/severity-presets/${preset.id}`),
+              `Preset «${preset.name}» eliminato.`,
+            );
           }}
           onCancel={() => setConfirmDelete(false)}
         >
@@ -379,70 +428,84 @@ function NewPresetForm() {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [error, setError] = useState<ApiError | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
+  const { busy, error, run } = useAction();
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    setError(null);
-    try {
-      await apiPost("/api/v1/severity-presets", { name, description });
+    if (name.trim() === "") {
+      setNameError("Il nome del preset è obbligatorio.");
+      return;
+    }
+    setNameError(null);
+    const ok = await run(
+      async () => {
+        await apiPost("/api/v1/severity-presets", { name: name.trim(), description });
+        await queryClient.invalidateQueries({ queryKey: ["presets"] });
+      },
+      { success: `Preset «${name.trim()}» creato.` },
+    );
+    if (ok) {
       setName("");
       setDescription("");
-      await queryClient.invalidateQueries({ queryKey: ["presets"] });
-    } catch (err) {
-      setError(err as ApiError);
     }
   }
 
   return (
-    <div className="card">
-      <h3>Nuovo preset</h3>
+    <details className="card collapsible">
+      <summary>Nuovo preset</summary>
       {error && <ErrorBanner error={error} />}
-      <form onSubmit={(event) => void handleSubmit(event)}>
-        <div className="form-row">
-          <label htmlFor="new-preset-name">Nome</label>
+      <form className="form-stacked" onSubmit={(event) => void handleSubmit(event)}>
+        <RequiredLegend />
+        <Field id="new-preset-name" label="Nome" required error={nameError}>
           <input
-            id="new-preset-name"
+            {...fieldAria("new-preset-name", { error: nameError })}
             required
             maxLength={120}
             value={name}
             onChange={(event) => setName(event.target.value)}
           />
-        </div>
-        <div className="form-row">
-          <label htmlFor="new-preset-description">Descrizione</label>
+        </Field>
+        <Field
+          id="new-preset-description"
+          label="Descrizione"
+          optional
+          hint="A cosa serve questo preset: si legge nell'elenco e nella pagina del receiver."
+        >
           <input
-            id="new-preset-description"
+            {...fieldAria("new-preset-description", { hint: true })}
             maxLength={500}
             value={description}
             onChange={(event) => setDescription(event.target.value)}
           />
+        </Field>
+        <div className="form-actions">
+          <button type="submit" className="primary" disabled={busy !== null}>
+            {busy !== null ? "Creazione…" : "Crea preset"}
+          </button>
         </div>
-        <button type="submit" className="primary">
-          Crea preset
-        </button>
       </form>
-    </div>
+    </details>
   );
 }
 
 function MissingBuiltins({ missing }: { missing: BuiltinPresetOut[] }) {
   const queryClient = useQueryClient();
-  const [error, setError] = useState<ApiError | null>(null);
   const [installed, setInstalled] = useState<string[] | null>(null);
+  const { busy, error, run } = useAction();
 
   async function install() {
-    setError(null);
-    try {
-      const result = await apiPost<SyncBuiltinPresetsOut>(
-        "/api/v1/severity-presets/sync-builtin",
-      );
-      setInstalled(result.installed);
-      await queryClient.invalidateQueries({ queryKey: ["presets"] });
-      await queryClient.invalidateQueries({ queryKey: ["presets-catalog"] });
-    } catch (err) {
-      setError(err as ApiError);
-    }
+    await run(
+      async () => {
+        const result = await apiPost<SyncBuiltinPresetsOut>(
+          "/api/v1/severity-presets/sync-builtin",
+        );
+        setInstalled(result.installed);
+        await queryClient.invalidateQueries({ queryKey: ["presets"] });
+        await queryClient.invalidateQueries({ queryKey: ["presets-catalog"] });
+      },
+      { success: "Preset predefiniti installati nel tenant." },
+    );
   }
 
   if (installed !== null) {
@@ -455,7 +518,9 @@ function MissingBuiltins({ missing }: { missing: BuiltinPresetOut[] }) {
 
   return (
     <div className="card">
-      <h3>Preset predefiniti non ancora installati</h3>
+      <div className="card-header">
+        <h3>Preset predefiniti non ancora installati</h3>
+      </div>
       {error && <ErrorBanner error={error} />}
       <p className="card-hint">
         Vengono copiati dentro il tuo tenant: da quel momento si modificano come tutti gli altri e
@@ -468,8 +533,8 @@ function MissingBuiltins({ missing }: { missing: BuiltinPresetOut[] }) {
           </li>
         ))}
       </ul>
-      <button className="primary" onClick={() => void install()}>
-        Installa i {missing.length} preset mancanti
+      <button className="primary" disabled={busy !== null} onClick={() => void install()}>
+        {busy !== null ? "Installazione…" : `Installa i ${missing.length} preset mancanti`}
       </button>
     </div>
   );
@@ -493,7 +558,9 @@ export default function PresetsPage() {
 
   return (
     <div>
-      <h1>Preset di regole</h1>
+      <div className="page-header">
+        <h1>Preset di regole</h1>
+      </div>
       <div className="card">
         <p>
           Un preset è un insieme di regole di severity riusabile: si scrive una volta e si applica a
@@ -510,7 +577,7 @@ export default function PresetsPage() {
       {canManage && missing.length > 0 && <MissingBuiltins missing={missing} />}
       {canManage && <NewPresetForm />}
 
-      {isLoading && <p>Caricamento…</p>}
+      {isLoading && <EmptyState message="Caricamento…" />}
       {presets?.length === 0 && !isLoading && (
         <p className="card-hint">Nessun preset in questo tenant.</p>
       )}

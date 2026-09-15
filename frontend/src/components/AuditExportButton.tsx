@@ -1,6 +1,5 @@
-import { useState } from "react";
 import { apiGetFile } from "../api/client";
-import type { ApiError } from "../api/types";
+import { useAction } from "../hooks/useAction";
 import type { AuditFilters } from "../hooks/useAuditEvents";
 import ErrorBanner from "./ErrorBanner";
 
@@ -13,13 +12,10 @@ export default function AuditExportButton({
   filters: AuditFilters;
   notificationStatusOnly?: boolean;
 }) {
-  const [error, setError] = useState<ApiError | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { busy, error, run } = useAction();
 
   async function download() {
-    setError(null);
-    setBusy(true);
-    try {
+    await run(async () => {
       const query = new URLSearchParams({ format: "csv" });
       if (notificationStatusOnly) query.set("notification_status_only", "true");
       for (const [key, value] of Object.entries(filters)) {
@@ -35,17 +31,13 @@ export default function AuditExportButton({
       link.download = filename;
       link.click();
       URL.revokeObjectURL(url);
-    } catch (err) {
-      setError(err as ApiError);
-    } finally {
-      setBusy(false);
-    }
+    });
   }
 
   return (
     <>
-      <button type="button" onClick={() => void download()} disabled={busy}>
-        {busy ? "Esporto…" : "Esporta CSV"}
+      <button type="button" onClick={() => void download()} disabled={busy !== null}>
+        {busy !== null ? "Esporto…" : "Esporta CSV"}
       </button>
       {error && <ErrorBanner error={error} />}
     </>

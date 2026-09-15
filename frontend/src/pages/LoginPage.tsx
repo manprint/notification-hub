@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useSession } from "../hooks/useSession";
 import type { ApiError } from "../api/types";
 import ErrorBanner from "../components/ErrorBanner";
+import Field, { RequiredLegend, fieldAria } from "../components/Field";
+import { useSession } from "../hooks/useSession";
 
 export default function LoginPage() {
   const { login } = useSession();
@@ -32,40 +33,47 @@ export default function LoginPage() {
   const retryAfterMinutes = retryAfterSeconds !== null ? Math.ceil(retryAfterSeconds / 60) : null;
 
   return (
-    <div className="app-main" style={{ maxWidth: 360, margin: "80px auto" }}>
-      <h1>NotifyHub</h1>
-      {rateLimited ? (
-        <div className="error-banner">
-          {`Troppi tentativi, riprova fra ${retryAfterMinutes ?? "qualche"} minuti.`}
-        </div>
-      ) : (
-        error && <ErrorBanner error={error} />
-      )}
-      <form onSubmit={(event) => void handleSubmit(event)}>
-        <div className="form-row">
-          <label htmlFor="email">Email</label>
-          <input
-            id="email"
-            type="email"
-            required
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-          />
-        </div>
-        <div className="form-row">
-          <label htmlFor="password">Password</label>
-          <input
-            id="password"
-            type="password"
-            required
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </div>
-        <button type="submit" className="primary" disabled={submitting}>
-          Accedi
-        </button>
-      </form>
+    <div className="auth-shell">
+      <div className="card auth-card">
+        <h1 className="auth-title">NotifyHub</h1>
+        <p className="auth-subtitle">Accedi per vedere le notifiche del tuo tenant.</p>
+        {rateLimited ? (
+          <div className="error-banner" role="alert">
+            {`Troppi tentativi, riprova fra ${retryAfterMinutes ?? "qualche"} minuti.`}
+          </div>
+        ) : (
+          error && <ErrorBanner error={error} />
+        )}
+        <form className="form-stacked" onSubmit={(event) => void handleSubmit(event)}>
+          <RequiredLegend />
+          <Field id="email" label="Email" required>
+            <input
+              {...fieldAria("email")}
+              type="email"
+              required
+              autoComplete="username"
+              autoFocus
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+            />
+          </Field>
+          <Field id="password" label="Password" required>
+            <input
+              {...fieldAria("password")}
+              type="password"
+              required
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </Field>
+          <div className="form-actions">
+            <button type="submit" className="primary" disabled={submitting}>
+              {submitting ? "Accesso in corso…" : "Accedi"}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

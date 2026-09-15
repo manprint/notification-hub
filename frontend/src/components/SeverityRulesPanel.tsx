@@ -10,10 +10,14 @@ import type {
   SeverityRuleOut,
   TestSeverityOut,
 } from "../api/types";
+import ConfirmDialog from "./ConfirmDialog";
 import ErrorBanner from "./ErrorBanner";
+import Field, { fieldAria } from "./Field";
 import SeverityBadge from "./SeverityBadge";
+import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
 import { formatDurationSeconds } from "../lib/duration";
+import { formatDateTime } from "../lib/format";
 import { MEMBER_ROLES, hasRole } from "../lib/roles";
 import { severitySourceLabel } from "../lib/severitySource";
 
@@ -89,40 +93,58 @@ function RuleForm({
   const [pattern, setPattern] = useState(rule?.pattern ?? "");
   const [severity, setSeverity] = useState<Severity>(rule?.severity ?? "error");
   const [caseInsensitive, setCaseInsensitive] = useState(rule?.case_insensitive ?? true);
-  const [error, setError] = useState<ApiError | null>(null);
+  const [patternError, setPatternError] = useState<string | null>(null);
+  const { busy, error, run } = useAction();
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    setError(null);
-    try {
-      const body = { pattern, severity, case_insensitive: caseInsensitive };
-      if (rule) {
-        await apiPatch(`/api/v1/severity-rules/${rule.id}`, body);
-      } else {
-        // Nessuna priorità: il backend accoda la regola in fondo. L'ordine si
-        // cambia con le frecce, non indovinando un numero libero.
-        await apiPost(`/api/v1/receivers/${receiverId}/severity-rules`, { ...body, enabled: true });
-        setPattern("");
-      }
-      await queryClient.invalidateQueries({ queryKey: ["severity-rules", receiverId] });
+    if (pattern.trim() === "") {
+      setPatternError("Il pattern è obbligatorio.");
+      return;
+    }
+    setPatternError(null);
+    const body = { pattern, severity, case_insensitive: caseInsensitive };
+    const ok = await run(
+      async () => {
+        if (rule) {
+          await apiPatch(`/api/v1/severity-rules/${rule.id}`, body);
+        } else {
+          // Nessuna priorità: il backend accoda la regola in fondo. L'ordine si
+          // cambia con le frecce, non indovinando un numero libero.
+          await apiPost(`/api/v1/receivers/${receiverId}/severity-rules`, {
+            ...body,
+            enabled: true,
+          });
+        }
+        await queryClient.invalidateQueries({ queryKey: ["severity-rules", receiverId] });
+        await queryClient.invalidateQueries({ queryKey: ["severity-chain", receiverId] });
+      },
+      { success: rule ? "Regola aggiornata." : "Regola aggiunta in fondo alla catena." },
+    );
+    if (ok) {
+      if (!rule) setPattern("");
       onDone();
-    } catch (err) {
-      setError(err as ApiError);
     }
   }
 
   return (
     <form onSubmit={(event) => void handleSubmit(event)}>
       {error && <ErrorBanner error={error} />}
+      {patternError && (
+        <p className="field-error" role="alert">
+          {patternError}
+        </p>
+      )}
       <div className="toolbar">
         <input
           aria-label="Pattern RE2"
+          aria-invalid={patternError ? true : undefined}
           placeholder="Pattern RE2, es. ERRORE|FALL(ITO|IMENTO)"
           value={pattern}
           onChange={(event) => setPattern(event.target.value)}
           required
           maxLength={200}
-          style={{ minWidth: "18rem" }}
+          className="grow-input"
         />
         <select
           aria-label="Severity assegnata"
@@ -143,7 +165,7 @@ function RuleForm({
           />
           ignora maiuscole
         </label>
-        <button type="submit" className="primary">
+        <button type="submit" className="primary" disabled={busy !== null}>
           {rule ? "Salva" : "Aggiungi regola"}
         </button>
         {rule && (
@@ -258,7 +280,7 @@ function ReplayPanel({ receiverId }: { receiverId: string }) {
               <tbody>
                 {data.items.map((item) => (
                   <tr key={item.notification_id}>
-                    <td>{new Date(item.received_at).toLocaleString("it-IT")}</td>
+                    <td>{formatDateTime(item.received_at)}</td>
                     <td className="cell-preview">
                       {item.content_preview}
                       {item.truncated && (
@@ -306,8 +328,9 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
     queryFn: () => apiGet<SeverityRuleOut[]>(`/api/v1/receivers/${receiverId}/severity-rules`),
   });
 
-  const [error, setError] = useState<ApiError | null>(null);
+  const { busy, error, run } = useAction();
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [deletingRule, setDeletingRule] = useState<SeverityRuleOut | null>(null);
   const [testContent, setTestContent] = useState("");
   const [testExitCode, setTestExitCode] = useState("");
   const [testDurationSeconds, setTestDurationSeconds] = useState("");
@@ -317,16 +340,13 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
   const ordered = rules ?? [];
   const firstActiveId = ordered.find((r) => r.enabled)?.id;
 
-  async function mutate(action: () => Promise<unknown>) {
-    setError(null);
-    try {
+  async function mutate(action: () => Promise<unknown>, success: string) {
+    await run(async () => {
       await action();
       await queryClient.invalidateQueries({ queryKey: ["severity-rules", receiverId] });
       await queryClient.invalidateQueries({ queryKey: ["severity-chain", receiverId] });
       await queryClient.invalidateQueries({ queryKey: ["severity-replay", receiverId] });
-    } catch (err) {
-      setError(err as ApiError);
-    }
+    }, { success });
   }
 
   function move(index: number, delta: number) {
@@ -334,10 +354,12 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
     const target = index + delta;
     if (target < 0 || target >= next.length) return;
     [next[index], next[target]] = [next[target], next[index]];
-    void mutate(() =>
-      apiPut(`/api/v1/receivers/${receiverId}/severity-rules/order`, {
-        rule_ids: next.map((r) => r.id),
-      }),
+    void mutate(
+      () =>
+        apiPut(`/api/v1/receivers/${receiverId}/severity-rules/order`, {
+          rule_ids: next.map((r) => r.id),
+        }),
+      "Ordine delle regole aggiornato.",
     );
   }
 
@@ -364,12 +386,16 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
   return (
     <>
       <div className="card">
-        <h3>Come viene decisa la severity</h3>
+        <div className="card-header">
+          <h3>Come viene decisa la severity</h3>
+        </div>
         <SeverityChainSummary receiver={receiver} activeRules={ordered.filter((r) => r.enabled).length} />
       </div>
 
       <div className="card">
-        <h3>Regole di severity</h3>
+        <div className="card-header">
+          <h3>Regole di severity</h3>
+        </div>
         <p className="card-hint">
           Valutate nell'ordine in cui compaiono qui: <strong>la prima che corrisponde vince</strong> e
           ferma la catena. Il pattern è un'espressione regolare RE2 (niente lookahead né
@@ -445,10 +471,12 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
                             checked={rule.enabled}
                             aria-label={`Attiva ${rule.pattern}`}
                             onChange={() =>
-                              void mutate(() =>
-                                apiPatch(`/api/v1/severity-rules/${rule.id}`, {
-                                  enabled: !rule.enabled,
-                                }),
+                              void mutate(
+                                () =>
+                                  apiPatch(`/api/v1/severity-rules/${rule.id}`, {
+                                    enabled: !rule.enabled,
+                                  }),
+                                rule.enabled ? "Regola disattivata." : "Regola attivata.",
                               )
                             }
                           />
@@ -461,11 +489,13 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
                     <td>
                       {canManage && (
                         <div className="row-actions">
-                          <button onClick={() => setEditingId(rule.id)}>Modifica</button>
+                          <button disabled={busy !== null} onClick={() => setEditingId(rule.id)}>
+                            Modifica
+                          </button>
                           <button
-                            onClick={() =>
-                              void mutate(() => apiDelete(`/api/v1/severity-rules/${rule.id}`))
-                            }
+                            className="danger"
+                            disabled={busy !== null}
+                            onClick={() => setDeletingRule(rule)}
                           >
                             Elimina
                           </button>
@@ -494,7 +524,9 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
       </div>
 
       <div className="card">
-        <h3>Catena effettiva</h3>
+        <div className="card-header">
+          <h3>Catena effettiva</h3>
+        </div>
         <p className="card-hint">
           Tutte le regole attive di questo receiver, proprie e dei preset, nell'ordine esatto in cui
           vengono provate.
@@ -503,43 +535,59 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
       </div>
 
       <div className="card">
-        <h3>Prova severity</h3>
+        <div className="card-header">
+          <h3>Prova severity</h3>
+        </div>
         <p className="card-hint">
           Verifica la catena su un testo di esempio senza scrivere nessuna notifica.
         </p>
         {testError && <ErrorBanner error={testError} />}
         <form onSubmit={(event) => void runTest(event)}>
-          <div className="form-row">
-            <label htmlFor="test-content">Contenuto di prova</label>
+          <Field
+            id="test-content"
+            label="Contenuto di prova"
+            wide
+            hint="Il testo che arriverebbe dal job: le regole si applicano a tutto il messaggio."
+          >
             <textarea
-              id="test-content"
+              {...fieldAria("test-content", { hint: true })}
               rows={4}
               value={testContent}
               onChange={(event) => setTestContent(event.target.value)}
             />
-          </div>
-          <div className="form-row">
-            <label htmlFor="test-exit-code">Exit code simulato (vuoto = nessuno)</label>
-            <input
+          </Field>
+          <div className="form-grid">
+            <Field
               id="test-exit-code"
-              type="number"
-              style={{ maxWidth: "10rem" }}
-              value={testExitCode}
-              onChange={(event) => setTestExitCode(event.target.value)}
-            />
-          </div>
-          <div className="form-row">
-            <label htmlFor="test-duration">Durata simulata in secondi (vuoto = nessuna)</label>
-            <input
+              label="Exit code simulato"
+              optional
+              hint="Vuoto = nessun exit code."
+            >
+              <input
+                {...fieldAria("test-exit-code", { hint: true })}
+                type="number"
+                value={testExitCode}
+                onChange={(event) => setTestExitCode(event.target.value)}
+              />
+            </Field>
+            <Field
               id="test-duration"
-              type="number"
-              min={0}
-              style={{ maxWidth: "10rem" }}
-              value={testDurationSeconds}
-              onChange={(event) => setTestDurationSeconds(event.target.value)}
-            />
+              label="Durata simulata in secondi"
+              optional
+              hint="Vuoto = nessuna durata."
+            >
+              <input
+                {...fieldAria("test-duration", { hint: true })}
+                type="number"
+                min={0}
+                value={testDurationSeconds}
+                onChange={(event) => setTestDurationSeconds(event.target.value)}
+              />
+            </Field>
           </div>
-          <button type="submit">Esegui prova</button>
+          <div className="form-actions">
+            <button type="submit">Esegui prova</button>
+          </div>
         </form>
         {testResult && (
           <p>
@@ -565,6 +613,29 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
         </p>
         <ReplayPanel receiverId={receiverId} />
       </div>
+
+      {deletingRule && (
+        <ConfirmDialog
+          title="Elimina questa regola"
+          confirmLabel="Elimina regola"
+          onConfirm={() => {
+            const rule = deletingRule;
+            setDeletingRule(null);
+            void mutate(
+              () => apiDelete(`/api/v1/severity-rules/${rule.id}`),
+              "Regola eliminata.",
+            );
+          }}
+          onCancel={() => setDeletingRule(null)}
+        >
+          <p>
+            Le notifiche già ricevute non cambiano severity: la regola smette di valere da adesso.
+          </p>
+          <p>
+            <code>{deletingRule.pattern}</code>
+          </p>
+        </ConfirmDialog>
+      )}
     </>
   );
 }

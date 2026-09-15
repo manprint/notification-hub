@@ -16,6 +16,8 @@ import GroupList from "../components/GroupList";
 import ReceiverNotificationsTable, {
   type ReceiverTableFilters,
 } from "../components/ReceiverNotificationsTable";
+import { useAction } from "../hooks/useAction";
+import { useDebounced } from "../hooks/useDebounced";
 import { SEVERITY_SOURCE_LABELS } from "../lib/severitySource";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
@@ -36,8 +38,10 @@ const SOURCES: SeveritySource[] = [
 export default function NotificationsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [q, setQ] = useState(searchParams.get("q") ?? "");
-  const [actionError, setActionError] = useState<ApiError | null>(null);
-  const [busyAction, setBusyAction] = useState<string | null>(null);
+  // La ricerca parte quando chi scrive si ferma: una richiesta per tasto
+  // premuto riempiva la rete e faceva lampeggiare le tabelle.
+  const debouncedQ = useDebounced(q);
+  const { busy, error: actionError, run } = useAction();
   const queryClient = useQueryClient();
 
   const groupId = searchParams.get("group_id") ?? undefined;
@@ -82,6 +86,19 @@ export default function NotificationsPage() {
   });
 
   const currentGroup = groups?.find((g) => g.id === groupId);
+  // Quanti filtri stanno restringendo la vista (il gruppo non conta: è la
+  // pagina, non un filtro). Serve a spiegare un elenco vuoto senza far
+  // ricontrollare una tendina alla volta.
+  const filtriAttivi = [receiverId, severityMin, status, source, verifiedParam, q].filter(
+    Boolean,
+  ).length;
+
+  function clearFilters() {
+    const next = new URLSearchParams();
+    if (groupId) next.set("group_id", groupId);
+    setQ("");
+    setSearchParams(next);
+  }
 
   // Filtri comuni a tutte le tabelle. Il receiver non sta qui: lo mette ogni
   // tabella con il proprio.
@@ -91,33 +108,24 @@ export default function NotificationsPage() {
     status,
     source,
     verified,
-    q: q || undefined,
+    q: debouncedQ || undefined,
   };
 
   const visibleReceivers = (receivers ?? []).filter((r) => !receiverId || r.id === receiverId);
 
-  async function runAction(name: string, action: () => Promise<void>) {
-    setActionError(null);
-    setBusyAction(name);
-    try {
-      await action();
-    } catch (err) {
-      setActionError(err as ApiError);
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
   async function bulkRead() {
-    await runAction("bulk", async () => {
-      await apiPost("/api/v1/notifications/bulk-read", {
-        ...filters,
-        // Lo stesso filtro della vista: "segna tutte come lette" non deve toccare
-        // cio' che i filtri stanno tenendo fuori, receiver compreso.
-        receiver_id: receiverId,
-      });
-      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
-    });
+    await run(
+      async () => {
+        await apiPost("/api/v1/notifications/bulk-read", {
+          ...filters,
+          // Lo stesso filtro della vista: "segna tutte come lette" non deve toccare
+          // cio' che i filtri stanno tenendo fuori, receiver compreso.
+          receiver_id: receiverId,
+        });
+        await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+      },
+      { name: "bulk", success: "Notifiche del gruppo segnate come lette." },
+    );
   }
 
   function selectGroup(groupId: string) {
@@ -132,7 +140,9 @@ export default function NotificationsPage() {
   if (!groupId) {
     return (
       <div>
-        <h1>Notifiche</h1>
+        <div className="page-header">
+          <h1>Notifiche</h1>
+        </div>
         <p className="page-subtitle">
           Seleziona un gruppo per vedere le notifiche ricevute dal gruppo.
         </p>
@@ -144,94 +154,128 @@ export default function NotificationsPage() {
 
   return (
     <div>
-      <Link to="/notifications" style={{ marginRight: 8, fontSize: 13 }}>
+      <Link className="back-link" to="/notifications">
         ← Torna ai gruppi
       </Link>
       {/* Il nome del gruppo sta nel titolo, non solo nella query string: dentro
           la pagina si deve sapere in che gruppo si e' senza leggere l'URL. */}
-      <h1>
-        Notifiche <span className="title-separator">/</span>{" "}
-        <span className="title-context">{currentGroup?.name ?? "Gruppo"}</span>
-      </h1>
+      <div className="page-header">
+        <h1>
+          Notifiche <span className="title-separator">/</span>{" "}
+          <span className="title-context">{currentGroup?.name ?? "Gruppo"}</span>
+        </h1>
+        <div className="page-header-actions">
+          <button className="primary" disabled={busy !== null} onClick={() => void bulkRead()}>
+            {busy === "bulk" ? "Aggiornamento…" : "Segna tutte come lette"}
+          </button>
+        </div>
+      </div>
       {currentGroup?.description && <p className="page-subtitle">{currentGroup.description}</p>}
       {receiversError && <ErrorBanner error={receiversError} />}
       {actionError && <ErrorBanner error={actionError} />}
 
-      <div className="toolbar">
-        <select
-          aria-label="Receiver del gruppo"
-          value={receiverId ?? ""}
-          onChange={(event) => setFilter("receiver_id", event.target.value)}
-        >
-          <option value="">Tutti i receiver</option>
-          {(receivers ?? []).map((receiver) => (
-            <option key={receiver.id} value={receiver.id}>
-              {receiver.name}
-              {receiver.status === "disabled" ? " (disabilitato)" : ""}
-            </option>
-          ))}
-        </select>
+      {/* Ogni filtro con la propria etichetta: una tendina su "Solo non lette"
+          non dice da sola che dimensione sta filtrando. */}
+      <div className="card">
+        <div className="filters">
+          <div className="form-row">
+            <label htmlFor="filter-receiver">Receiver del gruppo</label>
+            <select
+              id="filter-receiver"
+              value={receiverId ?? ""}
+              onChange={(event) => setFilter("receiver_id", event.target.value)}
+            >
+              <option value="">Tutti i receiver</option>
+              {(receivers ?? []).map((receiver) => (
+                <option key={receiver.id} value={receiver.id}>
+                  {receiver.name}
+                  {receiver.status === "disabled" ? " (disabilitato)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
 
-        <select
-          value={severityMin ?? ""}
-          onChange={(event) => setFilter("severity_min", event.target.value)}
-        >
-          <option value="">Qualsiasi severity</option>
-          {SEVERITIES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
+          <div className="form-row">
+            <label htmlFor="filter-severity">Severity minima</label>
+            <select
+              id="filter-severity"
+              value={severityMin ?? ""}
+              onChange={(event) => setFilter("severity_min", event.target.value)}
+            >
+              <option value="">Qualsiasi severity</option>
+              {SEVERITIES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
 
-        <select
-          aria-label="Origine della notifica"
-          value={source ?? ""}
-          onChange={(event) => setFilter("source", event.target.value)}
-        >
-          <option value="">Qualsiasi origine</option>
-          {SOURCES.map((item) => (
-            <option key={item} value={item}>
-              {SEVERITY_SOURCE_LABELS[item]}
-            </option>
-          ))}
-        </select>
+          <div className="form-row">
+            <label htmlFor="filter-source">Origine della notifica</label>
+            <select
+              id="filter-source"
+              value={source ?? ""}
+              onChange={(event) => setFilter("source", event.target.value)}
+            >
+              <option value="">Qualsiasi origine</option>
+              {SOURCES.map((item) => (
+                <option key={item} value={item}>
+                  {SEVERITY_SOURCE_LABELS[item]}
+                </option>
+              ))}
+            </select>
+          </div>
 
-        <select
-          aria-label="Stato di lettura"
-          value={status ?? ""}
-          onChange={(event) => setFilter("status", event.target.value)}
-        >
-          <option value="">Lette e non lette</option>
-          <option value="unread">Solo non lette</option>
-          <option value="read">Solo lette</option>
-        </select>
+          <div className="form-row">
+            <label htmlFor="filter-status">Stato di lettura</label>
+            <select
+              id="filter-status"
+              value={status ?? ""}
+              onChange={(event) => setFilter("status", event.target.value)}
+            >
+              <option value="">Lette e non lette</option>
+              <option value="unread">Solo non lette</option>
+              <option value="read">Solo lette</option>
+            </select>
+          </div>
 
-        <select
-          aria-label="Stato di verifica"
-          value={verifiedParam ?? ""}
-          onChange={(event) => setFilter("verified", event.target.value)}
-        >
-          <option value="">Verificate e non</option>
-          <option value="true">Solo verificate</option>
-          <option value="false">Solo non verificate</option>
-        </select>
+          <div className="form-row">
+            <label htmlFor="filter-verified">Stato di verifica</label>
+            <select
+              id="filter-verified"
+              value={verifiedParam ?? ""}
+              onChange={(event) => setFilter("verified", event.target.value)}
+            >
+              <option value="">Verificate e non</option>
+              <option value="true">Solo verificate</option>
+              <option value="false">Solo non verificate</option>
+            </select>
+          </div>
 
-        <input
-          placeholder="Cerca nel contenuto…"
-          value={q}
-          onChange={(event) => setQ(event.target.value)}
-        />
+          <div className="form-row grow">
+            <label htmlFor="filter-q">Cerca nel contenuto</label>
+            <input
+              id="filter-q"
+              type="search"
+              placeholder="Cerca nel contenuto…"
+              value={q}
+              onChange={(event) => setQ(event.target.value)}
+              aria-describedby="filter-q-hint"
+            />
+            <span className="field-hint" id="filter-q-hint">
+              La ricerca esamina l'intero contenuto del messaggio. Per i payload archiviati su
+              object storage esamina i primi 4096 caratteri.
+            </span>
+          </div>
 
-        <button disabled={busyAction !== null} onClick={() => void bulkRead()}>
-          {busyAction === "bulk" ? "Aggiornamento…" : "Segna tutte come lette"}
-        </button>
+          {filtriAttivi > 0 && (
+            <div className="filters-actions">
+              <button onClick={clearFilters}>Azzera i filtri ({filtriAttivi})</button>
+            </div>
+          )}
+        </div>
       </div>
-
-      <p style={{ fontSize: 13, color: "var(--color-text-muted)" }}>
-        La ricerca esamina l'intero contenuto del messaggio. Per i payload archiviati su object
-        storage esamina i primi 4096 caratteri.
-      </p>
 
       {receiversLoading && <EmptyState message="Caricamento…" />}
       {!receiversLoading && visibleReceivers.length === 0 && (

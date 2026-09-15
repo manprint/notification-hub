@@ -36,19 +36,44 @@ export default function HomePage() {
 
   return (
     <div>
-      <h1>Riepilogo</h1>
+      <div className="page-header">
+        <h1>Riepilogo</h1>
+      </div>
 
-      <div className="card">
-        <strong>{data.total_unread}</strong> notifiche non lette in totale
+      {/* I tre numeri che si guardano per primi, affiancati: in colonna
+          occupavano tre schermate di card mezze vuote. */}
+      <div className="kpi-grid">
+        <div className="kpi">
+          <span className="kpi-label">Non lette</span>
+          <span className="kpi-value accent">{data.total_unread}</span>
+          <span className="kpi-note">
+            <Link to="/notifications">Vai alle notifiche</Link>
+          </span>
+        </div>
+        <div className="kpi">
+          <span className="kpi-label">Ricevute nelle ultime 24 ore</span>
+          <span className="kpi-value">{data.notifications_last_24h}</span>
+          <span className="kpi-note">Su tutti i gruppi visibili</span>
+        </div>
+        <div className="kpi">
+          <span className="kpi-label">Consegne morte</span>
+          <span className={data.deliveries_dead > 0 ? "kpi-value danger" : "kpi-value"}>
+            {data.deliveries_dead}
+          </span>
+          <span className="kpi-note">
+            <Link to="/deliveries?status=dead">Tentativi esauriti, da ri-accodare</Link>
+          </span>
+        </div>
       </div>
 
       <div className="card">
         <h3>Per severity</h3>
-        <div className="toolbar">
+        <div className="severity-counts">
           {SEVERITIES.map((severity) => (
-            <div key={severity}>
-              <SeverityBadge severity={severity} /> {data.by_severity[severity] ?? 0}
-            </div>
+            <span className="severity-count" key={severity}>
+              <SeverityBadge severity={severity} />
+              <strong>{data.by_severity[severity] ?? 0}</strong>
+            </span>
           ))}
         </div>
       </div>
@@ -105,16 +130,16 @@ export default function HomePage() {
                         <tr key={receiver.receiver_id} className="stats-receiver-row">
                           <td className="stats-toggle-col"></td>
                           <td>
-                            <Link
-                              to={`/notifications?group_id=${group.group_id}&receiver_id=${receiver.receiver_id}`}
-                            >
-                              {receiver.receiver_name}
-                            </Link>
-                            {receiver.status === "disabled" && (
-                              <span className="status-pill" style={{ marginLeft: 8 }}>
-                                disabilitato
-                              </span>
-                            )}
+                            <span className="status-cell">
+                              <Link
+                                to={`/notifications?group_id=${group.group_id}&receiver_id=${receiver.receiver_id}`}
+                              >
+                                {receiver.receiver_name}
+                              </Link>
+                              {receiver.status === "disabled" && (
+                                <span className="status-pill warn">disabilitato</span>
+                              )}
+                            </span>
                           </td>
                           <td>{receiver.total}</td>
                           <td>{receiver.unread_count}</td>
@@ -127,13 +152,6 @@ export default function HomePage() {
           </table>
         </div>
         {data.by_group.length === 0 && <EmptyState message="Nessun gruppo." />}
-      </div>
-
-      <div className="card">
-        <p>{data.notifications_last_24h} notifiche ricevute nelle ultime 24 ore.</p>
-        <p>
-          <Link to="/deliveries?status=dead">{data.deliveries_dead} consegne in stato morto</Link>
-        </p>
       </div>
     </div>
   );

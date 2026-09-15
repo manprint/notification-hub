@@ -25,7 +25,11 @@ describe("GroupsPage", () => {
     expect(screen.getByText(`${fixtureDeleteImpact.notifications} notifiche`)).toBeInTheDocument();
     expect(screen.getByText(`${fixtureDeleteImpact.deliveries} consegne`)).toBeInTheDocument();
 
-    const confirmButton = screen.getByRole("button", { name: "Conferma" });
+    // L'etichetta dice cosa succede, non "Conferma": è l'ultimo punto in cui
+    // si può capire che si sta cancellando un gruppo intero. Va cercata dentro
+    // il dialogo, perché il pulsante della riga si chiama allo stesso modo.
+    const dialogo = within(screen.getByRole("dialog"));
+    const confirmButton = dialogo.getByRole("button", { name: "Elimina gruppo" });
     expect(confirmButton).toBeDisabled();
 
     await user.type(screen.getByLabelText(/digita/i), "Server Produzione");

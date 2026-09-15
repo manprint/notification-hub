@@ -151,7 +151,12 @@ describe("ReceiverNotificationsTable", () => {
     const tabella = within(await screen.findByRole("table"));
     await user.click(tabella.getAllByRole("button", { name: "Segna come letta" })[0]);
 
-    expect(await screen.findByText(/Serve il ruolo member/)).toBeInTheDocument();
+    // Il messaggio compare due volte, e deve: il toast lo dice subito, il
+    // banner dentro la tabella resta e dice quale tabella ha fallito.
+    const occorrenze = await screen.findAllByText(/Serve il ruolo member/);
+    expect(occorrenze.length).toBeGreaterThanOrEqual(2);
+    const sezione = within(screen.getByRole("region", { name: /Notifiche di/ }));
+    expect(sezione.getByRole("alert")).toHaveTextContent(/Serve il ruolo member/);
   });
 
   it("T-RCV6 un receiver senza notifiche mostra la tabella vuota, non sparisce", async () => {

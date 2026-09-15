@@ -1,5 +1,4 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { apiGet, apiPost } from "../api/client";
 import type { ApiError, DeliveryChannelOut, DeliveryOut, DeliveryStatus } from "../api/types";
@@ -7,7 +6,9 @@ import DataTable, { type DataTableColumn } from "../components/DataTable";
 import ErrorBanner from "../components/ErrorBanner";
 import SeverityBadge from "../components/SeverityBadge";
 import StatusPill from "../components/StatusPill";
+import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
+import { formatDateTime } from "../lib/format";
 import { MEMBER_ROLES, hasRole } from "../lib/roles";
 
 const STATUSES: DeliveryStatus[] = ["pending", "sending", "sent", "failed", "dead"];
@@ -26,8 +27,7 @@ export default function DeliveriesPage() {
   const channelId = searchParams.get("channel_id") ?? undefined;
   const queryClient = useQueryClient();
   const { role } = useSession();
-  const [actionError, setActionError] = useState<ApiError | null>(null);
-  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const { busy: retryingId, error: actionError, run } = useAction();
 
   const { data, isLoading, error } = useQuery<DeliveryOut[], ApiError>({
     queryKey: ["deliveries", status, channelId],
@@ -49,16 +49,13 @@ export default function DeliveriesPage() {
   }
 
   async function retry(id: string) {
-    setActionError(null);
-    setRetryingId(id);
-    try {
-      await apiPost(`/api/v1/deliveries/${id}/retry`);
-      await queryClient.invalidateQueries({ queryKey: ["deliveries"] });
-    } catch (err) {
-      setActionError(err as ApiError);
-    } finally {
-      setRetryingId(null);
-    }
+    await run(
+      async () => {
+        await apiPost(`/api/v1/deliveries/${id}/retry`);
+        await queryClient.invalidateQueries({ queryKey: ["deliveries"] });
+      },
+      { name: id, success: "Consegna rimessa in coda." },
+    );
   }
 
   const canRetry = hasRole(role, MEMBER_ROLES);
@@ -72,7 +69,7 @@ export default function DeliveriesPage() {
           <Link to={`/notifications/${d.notification_id}`}>{d.content_preview || "(vuota)"}</Link>
           <div className="cell-diagnostics">
             <SeverityBadge severity={d.severity} /> da {d.receiver_name} ·{" "}
-            {new Date(d.received_at).toLocaleString("it-IT")}
+            {formatDateTime(d.received_at)}
           </div>
         </div>
       ),
@@ -95,13 +92,11 @@ export default function DeliveriesPage() {
         <div>
           {d.attempts}
           {d.sent_at && (
-            <div className="cell-diagnostics">
-              inviata: {new Date(d.sent_at).toLocaleString("it-IT")}
-            </div>
+            <div className="cell-diagnostics">inviata: {formatDateTime(d.sent_at)}</div>
           )}
           {!d.sent_at && d.status !== "sent" && (
             <div className="cell-diagnostics">
-              prossimo tentativo: {new Date(d.next_attempt_at).toLocaleString("it-IT")}
+              prossimo tentativo: {formatDateTime(d.next_attempt_at)}
             </div>
           )}
         </div>
@@ -131,8 +126,10 @@ export default function DeliveriesPage() {
 
   return (
     <div>
-      <h1>Consegne</h1>
-      <p className="card-hint">
+      <div className="page-header">
+        <h1>Consegne</h1>
+      </div>
+      <p className="page-subtitle">
         Storico degli inoltri verso Slack e Google Chat: una riga per ogni notifica spedita a un canale.
         Serve a capire perché un messaggio non è arrivato — codice HTTP, errore e tentativi. Le consegne
         in stato «morta» hanno esaurito i 5 tentativi e si ri-accodano a mano.
@@ -140,27 +137,40 @@ export default function DeliveriesPage() {
       {error && <ErrorBanner error={error} />}
       {actionError && <ErrorBanner error={actionError} />}
 
-      <div className="toolbar">
-        <select value={status ?? ""} onChange={(event) => setParam("status", event.target.value)}>
-          <option value="">Tutti gli stati</option>
-          {STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
+      <div className="card">
+        <div className="filters">
+          <div className="form-row">
+            <label htmlFor="delivery-status">Stato della consegna</label>
+            <select
+              id="delivery-status"
+              value={status ?? ""}
+              onChange={(event) => setParam("status", event.target.value)}
+            >
+              <option value="">Tutti gli stati</option>
+              {STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
 
-        <select
-          value={channelId ?? ""}
-          onChange={(event) => setParam("channel_id", event.target.value)}
-        >
-          <option value="">Tutti i canali</option>
-          {channels?.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
+          <div className="form-row">
+            <label htmlFor="delivery-channel">Canale</label>
+            <select
+              id="delivery-channel"
+              value={channelId ?? ""}
+              onChange={(event) => setParam("channel_id", event.target.value)}
+            >
+              <option value="">Tutti i canali</option>
+              {channels?.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
       </div>
 
       <DataTable

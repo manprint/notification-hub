@@ -39,6 +39,17 @@ describe("validateCronExpression", () => {
     expect(validateCronExpression("0 3 * * * ; rm -rf /")).not.toBeNull();
   });
 
+  it("T-CRON3b rifiuta le espressioni che non scattano mai, come il backend", () => {
+    // Sintassi corretta ma nessuna data che le soddisfi: il 30 febbraio e il 31
+    // aprile non esistono. Il backend le respinge con 422 ("non scatta mai"), e
+    // il form non deve lasciarle salvare per poi mostrare l'errore del server.
+    expect(validateCronExpression("0 0 30 2 *")).not.toBeNull();
+    expect(validateCronExpression("0 0 31 4 *")).not.toBeNull();
+    // Il 29 febbraio invece esiste (negli anni bisestili) ed e' accettato da
+    // entrambi i lati: la regola e' "non scatta mai", non "scatta di rado".
+    expect(validateCronExpression("0 0 29 2 *")).toBeNull();
+  });
+
   it("T-CRON4 rifiuta le espressioni piu' lunghe della soglia", () => {
     const overlong = `0 ${"3".repeat(200)} * * *`;
     expect(validateCronExpression(overlong)).toContain("100 caratteri");

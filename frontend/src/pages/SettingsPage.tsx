@@ -2,9 +2,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiGet, apiPatch } from "../api/client";
 import type { ApiError, TenantOut } from "../api/types";
+import EmptyState from "../components/EmptyState";
 import ErrorBanner from "../components/ErrorBanner";
+import Field, { fieldAria } from "../components/Field";
 import SettingsTabs from "../components/SettingsTabs";
+import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
+import { formatBytes } from "../lib/format";
 
 interface ConflictingReceiver {
   name: string;
@@ -14,7 +18,7 @@ interface ConflictingReceiver {
 export default function SettingsPage() {
   const queryClient = useQueryClient();
   const { role } = useSession();
-  const { data: tenant, isLoading } = useQuery({
+  const { data: tenant, isLoading } = useQuery<TenantOut, ApiError>({
     queryKey: ["tenant"],
     queryFn: () => apiGet<TenantOut>("/api/v1/tenant"),
   });
@@ -23,33 +27,47 @@ export default function SettingsPage() {
   const [retentionDays, setRetentionDays] = useState<string>("");
   const [maxNotificationsPerDay, setMaxNotificationsPerDay] = useState<string>("");
   const [auditRetentionDays, setAuditRetentionDays] = useState<string>("");
-  const [error, setError] = useState<ApiError | null>(null);
   const [conflicting, setConflicting] = useState<ConflictingReceiver[] | null>(null);
-
-  if (isLoading) return <p>Caricamento…</p>;
-  if (!tenant) return null;
+  const { busy, error, run } = useAction();
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    setError(null);
     setConflicting(null);
-    try {
-      await apiPatch("/api/v1/tenant", {
-        max_body_bytes: maxBodyBytes ? Number(maxBodyBytes) : undefined,
-        retention_days: retentionDays ? Number(retentionDays) : undefined,
-        max_notifications_per_day: maxNotificationsPerDay ? Number(maxNotificationsPerDay) : undefined,
-        audit_retention_days: auditRetentionDays ? Number(auditRetentionDays) : undefined,
-      });
-      await queryClient.invalidateQueries({ queryKey: ["tenant"] });
-    } catch (err) {
-      const apiError = err as ApiError;
-      setError(apiError);
-      const receivers = apiError.extra.conflicting_receivers;
-      if (Array.isArray(receivers)) {
-        setConflicting(receivers as ConflictingReceiver[]);
-      }
+    const ok = await run(
+      async () => {
+        try {
+          await apiPatch("/api/v1/tenant", {
+            max_body_bytes: maxBodyBytes ? Number(maxBodyBytes) : undefined,
+            retention_days: retentionDays ? Number(retentionDays) : undefined,
+            max_notifications_per_day: maxNotificationsPerDay
+              ? Number(maxNotificationsPerDay)
+              : undefined,
+            audit_retention_days: auditRetentionDays ? Number(auditRetentionDays) : undefined,
+          });
+        } catch (err) {
+          // Il rifiuto per i receiver che sforano porta con sé l'elenco: va
+          // mostrato per esteso, non riassunto in "conflitto".
+          const receivers = (err as ApiError).extra?.conflicting_receivers;
+          if (Array.isArray(receivers)) setConflicting(receivers as ConflictingReceiver[]);
+          throw err;
+        }
+        await queryClient.invalidateQueries({ queryKey: ["tenant"] });
+      },
+      { success: "Impostazioni del tenant salvate." },
+    );
+    // A salvataggio riuscito i campi tornano vuoti: ora il valore in vigore è
+    // quello mostrato sopra, e lasciare il numero digitato farebbe credere che
+    // ci sia ancora una modifica in sospeso.
+    if (ok) {
+      setMaxBodyBytes("");
+      setRetentionDays("");
+      setMaxNotificationsPerDay("");
+      setAuditRetentionDays("");
     }
   }
+
+  if (isLoading) return <EmptyState message="Caricamento…" />;
+  if (!tenant) return null;
 
   // Le quote del tenant restano una decisione dell'owner: un admin arriva qui
   // per l'audit, e vede le schede ma non il modulo (backend: require_owner su
@@ -60,7 +78,9 @@ export default function SettingsPage() {
   if (role !== null && role !== "owner") {
     return (
       <div>
-        <h1>Impostazioni</h1>
+        <div className="page-header">
+          <h1>Impostazioni</h1>
+        </div>
         <SettingsTabs />
         <p className="page-subtitle">
           Le impostazioni generali sono riservate all'owner. Le schede Audit e Letture e verifiche
@@ -72,7 +92,9 @@ export default function SettingsPage() {
 
   return (
     <div>
-      <h1>Impostazioni</h1>
+      <div className="page-header">
+        <h1>Impostazioni</h1>
+      </div>
       <SettingsTabs />
       {error && <ErrorBanner error={error} />}
       {conflicting && (
@@ -81,7 +103,7 @@ export default function SettingsPage() {
           <ul>
             {conflicting.map((r) => (
               <li key={r.name}>
-                {r.name}: {r.max_body_bytes} byte
+                {r.name}: {formatBytes(r.max_body_bytes)}
               </li>
             ))}
           </ul>
@@ -89,61 +111,117 @@ export default function SettingsPage() {
       )}
 
       <div className="card">
-        <p>Tenant: {tenant.name}</p>
-        <p>Cap corpo attuale: {tenant.max_body_bytes} byte</p>
-        <p>Retention attuale: {tenant.retention_days ?? "illimitata"} giorni</p>
-        <p>Quota giornaliera attuale: {tenant.max_notifications_per_day ?? "illimitata"}</p>
-        <p>Retention audit attuale: {tenant.audit_retention_days ?? "illimitata"} giorni</p>
+        <div className="card-header">
+          <h3>Valori in vigore</h3>
+          <span className="card-header-actions text-muted text-sm">{tenant.name}</span>
+        </div>
+        <div className="detail-grid">
+          <div>
+            <span className="detail-label">Cap corpo</span>
+            <p className="detail-value" title={`${tenant.max_body_bytes} byte`}>
+              {formatBytes(tenant.max_body_bytes)}
+            </p>
+          </div>
+          <div>
+            <span className="detail-label">Retention notifiche</span>
+            <p className="detail-value">
+              {tenant.retention_days === null ? "illimitata" : `${tenant.retention_days} giorni`}
+            </p>
+          </div>
+          <div>
+            <span className="detail-label">Quota giornaliera</span>
+            <p className="detail-value">
+              {tenant.max_notifications_per_day === null
+                ? "illimitata"
+                : `${tenant.max_notifications_per_day} notifiche`}
+            </p>
+          </div>
+          <div>
+            <span className="detail-label">Retention audit</span>
+            <p className="detail-value">
+              {tenant.audit_retention_days === null
+                ? "illimitata"
+                : `${tenant.audit_retention_days} giorni`}
+            </p>
+          </div>
+        </div>
       </div>
 
       <form onSubmit={(event) => void handleSubmit(event)} className="card">
-        <div className="form-row">
-          <label htmlFor="max-body-bytes">Cap corpo (byte)</label>
-          <input
+        <div className="card-header">
+          <h3>Modifica le quote</h3>
+        </div>
+        <p className="card-hint">
+          Un campo lasciato vuoto non cambia il valore in vigore: si compila solo ciò che si vuole
+          modificare.
+        </p>
+        <div className="form-grid">
+          <Field
             id="max-body-bytes"
-            type="number"
-            placeholder={String(tenant.max_body_bytes)}
-            value={maxBodyBytes}
-            onChange={(event) => setMaxBodyBytes(event.target.value)}
-          />
-        </div>
-        <div className="form-row">
-          <label htmlFor="retention-days">Retention (giorni)</label>
-          <input
+            label="Cap corpo (byte)"
+            optional
+            hint={`In vigore: ${formatBytes(tenant.max_body_bytes)}. Nessun receiver può superarlo.`}
+          >
+            <input
+              {...fieldAria("max-body-bytes", { hint: true })}
+              type="number"
+              min={1}
+              placeholder={String(tenant.max_body_bytes)}
+              value={maxBodyBytes}
+              onChange={(event) => setMaxBodyBytes(event.target.value)}
+            />
+          </Field>
+          <Field
             id="retention-days"
-            type="number"
-            placeholder={String(tenant.retention_days ?? "")}
-            value={retentionDays}
-            onChange={(event) => setRetentionDays(event.target.value)}
-          />
-        </div>
-        <div className="form-row">
-          <label htmlFor="max-notifications">Quota giornaliera notifiche</label>
-          <input
+            label="Retention (giorni)"
+            optional
+            hint="Dopo quanti giorni le notifiche vengono cancellate dal job notturno."
+          >
+            <input
+              {...fieldAria("retention-days", { hint: true })}
+              type="number"
+              min={1}
+              placeholder={String(tenant.retention_days ?? "illimitata")}
+              value={retentionDays}
+              onChange={(event) => setRetentionDays(event.target.value)}
+            />
+          </Field>
+          <Field
             id="max-notifications"
-            type="number"
-            placeholder={String(tenant.max_notifications_per_day ?? "")}
-            value={maxNotificationsPerDay}
-            onChange={(event) => setMaxNotificationsPerDay(event.target.value)}
-          />
-        </div>
-        <div className="form-row">
-          <label htmlFor="audit-retention-days">Retention audit (giorni)</label>
-          <input
+            label="Quota giornaliera notifiche"
+            optional
+            hint="Superata la quota, l'ingestion risponde 429 fino al giorno dopo."
+          >
+            <input
+              {...fieldAria("max-notifications", { hint: true })}
+              type="number"
+              min={1}
+              placeholder={String(tenant.max_notifications_per_day ?? "illimitata")}
+              value={maxNotificationsPerDay}
+              onChange={(event) => setMaxNotificationsPerDay(event.target.value)}
+            />
+          </Field>
+          <Field
             id="audit-retention-days"
-            type="number"
-            placeholder={String(tenant.audit_retention_days ?? "")}
-            value={auditRetentionDays}
-            onChange={(event) => setAuditRetentionDays(event.target.value)}
-          />
-          <p className="field-hint">
-            Separata dalla retention delle notifiche: l'audit deve poter raccontare chi ha gestito
-            una notifica anche dopo che la notifica è stata cancellata.
-          </p>
+            label="Retention audit (giorni)"
+            optional
+            hint="Separata dalla retention delle notifiche: l'audit deve poter raccontare chi ha gestito una notifica anche dopo che la notifica è stata cancellata."
+          >
+            <input
+              {...fieldAria("audit-retention-days", { hint: true })}
+              type="number"
+              min={1}
+              placeholder={String(tenant.audit_retention_days ?? "illimitata")}
+              value={auditRetentionDays}
+              onChange={(event) => setAuditRetentionDays(event.target.value)}
+            />
+          </Field>
         </div>
-        <button type="submit" className="primary">
-          Salva
-        </button>
+        <div className="form-actions">
+          <button type="submit" className="primary" disabled={busy !== null}>
+            {busy !== null ? "Salvataggio…" : "Salva"}
+          </button>
+        </div>
       </form>
     </div>
   );

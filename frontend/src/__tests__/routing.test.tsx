@@ -61,7 +61,8 @@ describe("routing", () => {
 
     const detail = renderApp("/groups/g1");
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Server Produzione" })).toBeInTheDocument();
+      // Il titolo porta il contesto: "Gruppo / Server Produzione".
+      expect(screen.getByRole("heading", { name: /Server Produzione/ })).toBeInTheDocument();
     });
 
     detail.unmount();
@@ -94,7 +95,10 @@ describe("routing", () => {
       </QueryClientProvider>,
     );
 
-    await user.type(screen.getByLabelText(/password/i), "password-lunga-123");
+    // La password si sceglie e si ribatte: una battitura sbagliata chiuderebbe
+    // fuori dall'account appena attivato.
+    await user.type(screen.getByLabelText("Scegli una password"), "password-lunga-123");
+    await user.type(screen.getByLabelText("Ripeti la password"), "password-lunga-123");
     await user.click(screen.getByRole("button", { name: "Attiva account" }));
 
     await waitFor(() => {

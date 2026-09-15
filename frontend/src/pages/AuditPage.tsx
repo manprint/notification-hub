@@ -6,6 +6,7 @@ import ErrorBanner from "../components/ErrorBanner";
 import SettingsTabs from "../components/SettingsTabs";
 import { type AuditFilters, useAuditEvents } from "../hooks/useAuditEvents";
 import { actionLabel, describeChanges, resourceLabel } from "../lib/audit";
+import { formatDateTime } from "../lib/format";
 
 const RESOURCE_TYPES = [
   "notification",
@@ -49,7 +50,7 @@ export default function AuditPage() {
     {
       key: "occurred_at",
       header: "Quando",
-      render: (event) => new Date(event.occurred_at).toLocaleString("it-IT"),
+      render: (event) => formatDateTime(event.occurred_at),
     },
     {
       key: "actor",
@@ -101,9 +102,13 @@ export default function AuditPage() {
     },
   ];
 
+  const attivi = Object.values(filters).filter(Boolean).length;
+
   return (
     <div>
-      <h1>Audit</h1>
+      <div className="page-header">
+        <h1>Audit</h1>
+      </div>
       <SettingsTabs />
       <p className="page-subtitle">
         Ogni modifica fatta da una persona, con chi l'ha fatta e cosa è cambiato. L'ingestion e i
@@ -111,53 +116,62 @@ export default function AuditPage() {
       </p>
       {error && <ErrorBanner error={error} />}
 
-      <div className="card toolbar">
-        <div className="form-row">
-          <label htmlFor="audit-resource-type">Tipo di risorsa</label>
-          <select
-            id="audit-resource-type"
-            value={filters.resource_type ?? ""}
-            onChange={(event) => setParam("resource_type", event.target.value)}
-          >
-            <option value="">Tutte</option>
-            {RESOURCE_TYPES.map((type) => (
-              <option key={type} value={type}>
-                {resourceLabel(type)}
-              </option>
-            ))}
-          </select>
+      <div className="card">
+        <div className="filters">
+          <div className="form-row">
+            <label htmlFor="audit-resource-type">Tipo di risorsa</label>
+            <select
+              id="audit-resource-type"
+              value={filters.resource_type ?? ""}
+              onChange={(event) => setParam("resource_type", event.target.value)}
+            >
+              <option value="">Tutte</option>
+              {RESOURCE_TYPES.map((type) => (
+                <option key={type} value={type}>
+                  {resourceLabel(type)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="form-row">
+            <label htmlFor="audit-outcome">Esito</label>
+            <select
+              id="audit-outcome"
+              value={filters.outcome ?? ""}
+              onChange={(event) => setParam("outcome", event.target.value)}
+            >
+              <option value="">Tutti</option>
+              <option value="success">Riuscita</option>
+              <option value="failure">Rifiutata</option>
+            </select>
+          </div>
+          <div className="form-row">
+            <label htmlFor="audit-from">Da</label>
+            <input
+              id="audit-from"
+              type="date"
+              value={filters.from ?? ""}
+              onChange={(event) => setParam("from", event.target.value)}
+            />
+          </div>
+          <div className="form-row">
+            <label htmlFor="audit-to">A</label>
+            <input
+              id="audit-to"
+              type="date"
+              value={filters.to ?? ""}
+              onChange={(event) => setParam("to", event.target.value)}
+            />
+          </div>
+          <div className="filters-actions">
+            {attivi > 0 && (
+              <button onClick={() => setSearchParams(new URLSearchParams())}>
+                Azzera i filtri ({attivi})
+              </button>
+            )}
+            <AuditExportButton filters={filters} />
+          </div>
         </div>
-        <div className="form-row">
-          <label htmlFor="audit-outcome">Esito</label>
-          <select
-            id="audit-outcome"
-            value={filters.outcome ?? ""}
-            onChange={(event) => setParam("outcome", event.target.value)}
-          >
-            <option value="">Tutti</option>
-            <option value="success">Riuscita</option>
-            <option value="failure">Rifiutata</option>
-          </select>
-        </div>
-        <div className="form-row">
-          <label htmlFor="audit-from">Da</label>
-          <input
-            id="audit-from"
-            type="date"
-            value={filters.from ?? ""}
-            onChange={(event) => setParam("from", event.target.value)}
-          />
-        </div>
-        <div className="form-row">
-          <label htmlFor="audit-to">A</label>
-          <input
-            id="audit-to"
-            type="date"
-            value={filters.to ?? ""}
-            onChange={(event) => setParam("to", event.target.value)}
-          />
-        </div>
-        <AuditExportButton filters={filters} />
       </div>
 
       <DataTable

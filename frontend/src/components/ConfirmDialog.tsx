@@ -2,11 +2,16 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode 
 
 interface ConfirmDialogProps {
   title: string;
-  expectedText: string;
+  /** Testo da ribattere per sbloccare la conferma. Si usa per le operazioni
+   *  che cancellano dati a cascata; per le altre (una regola, un invito) basta
+   *  la conferma esplicita e il campo non compare. */
+  expectedText?: string;
   children?: ReactNode;
   onConfirm: () => void;
   onCancel: () => void;
   confirmLabel?: string;
+  /** Conferma di un'azione che toglie qualcosa: pulsante rosso. */
+  destructive?: boolean;
 }
 
 export default function ConfirmDialog({
@@ -16,17 +21,22 @@ export default function ConfirmDialog({
   onConfirm,
   onCancel,
   confirmLabel = "Conferma",
+  destructive = true,
 }: ConfirmDialogProps) {
   const [typed, setTyped] = useState("");
-  const matches = typed === expectedText;
+  const matches = expectedText === undefined || typed === expectedText;
   const inputRef = useRef<HTMLInputElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef(onCancel);
   const titleId = useId();
   cancelRef.current = onCancel;
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
-    inputRef.current?.focus();
+    // Senza campo da ribattere il fuoco va sulla conferma: è l'unico controllo
+    // che l'utente deve raggiungere, e da tastiera evita un Tab a vuoto.
+    if (inputRef.current) inputRef.current.focus();
+    else confirmRef.current?.focus();
     return () => previouslyFocused?.focus();
   }, []);
 
@@ -71,21 +81,29 @@ export default function ConfirmDialog({
       >
         <h2 id={titleId}>{title}</h2>
         {children}
-        <div className="form-row">
-          <label htmlFor="confirm-text">{`Digita "${expectedText}" per confermare`}</label>
-          <input
-            ref={inputRef}
-            id="confirm-text"
-            autoComplete="off"
-            value={typed}
-            onChange={(event) => setTyped(event.target.value)}
-          />
-        </div>
-        <div className="toolbar">
+        {expectedText !== undefined && (
+          <div className="form-row">
+            <label htmlFor="confirm-text">{`Digita "${expectedText}" per confermare`}</label>
+            <input
+              ref={inputRef}
+              id="confirm-text"
+              autoComplete="off"
+              value={typed}
+              onChange={(event) => setTyped(event.target.value)}
+            />
+          </div>
+        )}
+        <div className="form-actions">
           <button type="button" onClick={onCancel}>
             Annulla
           </button>
-          <button type="button" className="primary" disabled={!matches} onClick={onConfirm}>
+          <button
+            ref={confirmRef}
+            type="button"
+            className={destructive ? "primary danger" : "primary"}
+            disabled={!matches}
+            onClick={onConfirm}
+          >
             {confirmLabel}
           </button>
         </div>

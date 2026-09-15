@@ -4,6 +4,7 @@ import { apiGet } from "../api/client";
 import type { ApiError, GroupOut, ReceiverOut } from "../api/types";
 import CopyButton from "../components/CopyButton";
 import DataTable, { type DataTableColumn } from "../components/DataTable";
+import EmptyState from "../components/EmptyState";
 import ErrorBanner from "../components/ErrorBanner";
 import NewReceiverForm from "../components/NewReceiverForm";
 import SeverityBadge from "../components/SeverityBadge";
@@ -34,7 +35,7 @@ export default function GroupDetailPage() {
     enabled: Boolean(id),
   });
 
-  if (groupLoading) return <p>Caricamento…</p>;
+  if (groupLoading) return <EmptyState message="Caricamento…" />;
   if (groupError) return <ErrorBanner error={groupError} />;
 
   const columns: DataTableColumn<ReceiverOut>[] = [
@@ -42,6 +43,20 @@ export default function GroupDetailPage() {
       key: "name",
       header: "Nome receiver",
       render: (r) => <Link to={`/receivers/${r.id}`}>{r.name}</Link>,
+    },
+    {
+      key: "status",
+      header: "Stato",
+      render: (r) => (
+        <div className="status-cell">
+          <span className={r.status === "active" ? "status-pill ok" : "status-pill warn"}>
+            {r.status === "active" ? "Attivo" : "Disabilitato"}
+          </span>
+          {/* Il ritardo della sorveglianza si vede qui e non solo aprendo il
+              receiver: è il motivo per cui si apre questa pagina. */}
+          {r.expected_late && <span className="status-pill danger">in ritardo</span>}
+        </div>
+      ),
     },
     {
       key: "slug",
@@ -62,9 +77,25 @@ export default function GroupDetailPage() {
 
   return (
     <div>
-      <h1>{group?.name ?? "Gruppo"}</h1>
+      <Link className="back-link" to="/groups">
+        ← Torna ai gruppi
+      </Link>
+      <div className="page-header">
+        <h1>
+          Gruppo <span className="title-separator">/</span>{" "}
+          <span className="title-context">{group?.name ?? "Gruppo"}</span>
+        </h1>
+      </div>
+      {group?.description && <p className="page-subtitle">{group.description}</p>}
       {receiversError && <ErrorBanner error={receiversError} />}
-      <div className="group-receivers-table">
+
+      <div className="card group-receivers-table">
+        <div className="card-header">
+          <h3>Receiver del gruppo</h3>
+          <span className="card-header-actions text-muted text-sm">
+            {(receivers ?? []).length} configurati
+          </span>
+        </div>
         <DataTable
           columns={columns}
           rows={receivers ?? []}
@@ -73,6 +104,7 @@ export default function GroupDetailPage() {
           emptyMessage="Nessun receiver in questo gruppo."
         />
       </div>
+
       {hasRole(role, MEMBER_ROLES) && <NewReceiverForm groupId={id ?? ""} />}
     </div>
   );

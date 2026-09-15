@@ -174,6 +174,8 @@ describe("ChannelBindings", () => {
 
     await user.selectOptions(within(rigaDi("Slack #ops")).getByRole("combobox"), "error");
 
-    expect(await screen.findByText(/Channel not found/)).toBeInTheDocument();
+    // Due volte: l'avviso che compare subito e il banner che resta sopra la
+    // tabella con il dettaglio.
+    expect((await screen.findAllByText(/Channel not found/)).length).toBeGreaterThanOrEqual(2);
   });
 });

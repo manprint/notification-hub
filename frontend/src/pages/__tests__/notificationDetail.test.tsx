@@ -2,7 +2,7 @@
 // tre di notte. Era al 76% di righe ma al **25% di funzioni**: segna-come-letta,
 // elimina e scarica-contenuto non erano mai stati eseguiti da un test.
 
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { Route, Routes } from "react-router-dom";
@@ -28,6 +28,12 @@ function renderDetail(id: string) {
 
 function serviDettaglio(dettaglio: Record<string, unknown>) {
   server.use(http.get("/api/v1/notifications/n1", () => HttpResponse.json(dettaglio)));
+}
+
+/** Testo di una coppia etichetta/valore della scheda: i fatti stanno in una
+ *  griglia di etichette e valori, non piu' in frasi "Etichetta: valore". */
+function campo(etichetta: string): string {
+  return screen.getByText(etichetta).parentElement?.textContent ?? "";
 }
 
 describe("NotificationDetailPage", () => {
@@ -60,14 +66,12 @@ describe("NotificationDetailPage", () => {
     renderDetail("n1");
 
     await waitFor(() => {
-      expect(screen.getByText(/Origine severity:/).textContent).toContain(
-        "regola del receiver",
-      );
+      expect(campo("Origine della severity")).toContain("regola del receiver");
     });
-    expect(screen.getByText(/Durata esecuzione:/).textContent).toContain("12m30s");
-    expect(screen.getByText(/Exit code: 1/)).toBeInTheDocument();
-    expect(screen.getByText(/Fase dell'esecuzione:/).textContent).toContain("conclusione");
-    expect(screen.getByText(/Sorgente: 203.0.113.5/)).toBeInTheDocument();
+    expect(campo("Durata esecuzione")).toContain("12m30s");
+    expect(campo("Exit code")).toContain("1");
+    expect(campo("Fase dell'esecuzione")).toContain("conclusione");
+    expect(campo("Sorgente")).toContain("203.0.113.5");
     expect(screen.getByText(fixtureNotificationDetailInline.content)).toBeInTheDocument();
   });
 
@@ -86,11 +90,11 @@ describe("NotificationDetailPage", () => {
     renderDetail("n1");
 
     await waitFor(() => {
-      expect(screen.getByText(/Origine severity:/).textContent).toContain("notifica mancante");
+      expect(campo("Origine della severity")).toContain("notifica mancante");
     });
     expect(screen.getByText(/generata da NotifyHub, non inviata da nessuno/)).toBeInTheDocument();
     // Senza mittente non si mostra una sorgente inventata.
-    expect(screen.queryByText(/Sorgente:/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Sorgente")).not.toBeInTheDocument();
     expect(screen.queryByText(/Exit code/)).not.toBeInTheDocument();
   });
 
@@ -106,9 +110,9 @@ describe("NotificationDetailPage", () => {
     renderDetail("n1");
 
     await waitFor(() => {
-      expect(screen.getByText(/Fase dell'esecuzione:/).textContent).toContain("avvio");
+      expect(campo("Fase dell'esecuzione")).toContain("avvio");
     });
-    expect(screen.getByText(/dice che il job e' partito/)).toBeInTheDocument();
+    expect(screen.getByText(/dice che il job è partito/)).toBeInTheDocument();
   });
 
   it("T-DET3 segna come letta commuta in segna come non letta", async () => {
@@ -143,7 +147,7 @@ describe("NotificationDetailPage", () => {
     renderDetail("n1");
 
     await waitFor(() => {
-      expect(screen.getByText(/Origine severity:/)).toBeInTheDocument();
+      expect(screen.getByText("Origine della severity")).toBeInTheDocument();
     });
     expect(screen.getByRole("button", { name: "Segna come letta" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Segna come non verificata" })).toBeInTheDocument();
@@ -201,7 +205,8 @@ describe("NotificationDetailPage", () => {
     try {
       renderDetail("n1");
       expect(
-        await screen.findByText(/Contenuto salvato su object storage \(2097152 byte\)/),
+        // Le dimensioni si leggono, non si contano: 2097152 byte = 2 MB.
+        await screen.findByText(/Contenuto salvato su object storage \(2 MB\)/),
       ).toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: "Scarica contenuto completo" }));
@@ -238,6 +243,11 @@ describe("NotificationDetailPage", () => {
     renderDetail("n1");
 
     await user.click(await screen.findByRole("button", { name: "Elimina" }));
+    // L'eliminazione passa da una conferma: un clic solo non deve cancellare
+    // una notifica che si stava leggendo.
+    const dialogo = within(await screen.findByRole("dialog"));
+    expect(eliminata).toBe(false);
+    await user.click(dialogo.getByRole("button", { name: "Elimina" }));
 
     await waitFor(() => expect(eliminata).toBe(true));
     // Restare sulla pagina di una notifica cancellata mostrerebbe un 404.
@@ -262,7 +272,7 @@ describe("NotificationDetailPage", () => {
     renderDetail("n1");
 
     await waitFor(() => {
-      expect(screen.getByText(/Origine severity:/)).toBeInTheDocument();
+      expect(screen.getByText("Origine della severity")).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: "Elimina" })).not.toBeInTheDocument();
     // Segnare come letta resta permesso: non tocca il contenuto.

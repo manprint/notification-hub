@@ -13,6 +13,12 @@ import {
 import { server } from "../../api/mocks/server";
 import { renderWithProviders } from "./testUtils";
 
+/** Testo completo di una cella della griglia dei dettagli: l'etichetta e il
+ *  valore stanno in due elementi fratelli. */
+function campo(etichetta: string): string {
+  return screen.getByText(etichetta).parentElement?.textContent ?? "";
+}
+
 function renderReceiverDetail() {
   return renderWithProviders(
     <Routes>
@@ -60,7 +66,7 @@ describe("ReceiverDetailPage", () => {
 
     // La vista di sola lettura riassume la politica con la durata leggibile.
     await waitFor(() => {
-      expect(screen.getByText(/Soglia di durata:/).textContent).toContain("oltre 10m00s → error");
+      expect(campo("Soglia di durata")).toContain("oltre 10m00s → error");
     });
 
     await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
@@ -89,7 +95,7 @@ describe("ReceiverDetailPage", () => {
 
     setRefreshToken("refresh-token-fixture");
     renderReceiverDetail();
-    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
 
     await user.selectOptions(
@@ -115,13 +121,13 @@ describe("ReceiverDetailPage", () => {
     renderReceiverDetail();
 
     await waitFor(() => {
-      expect(screen.getByText(/URL di invio:/).textContent).toContain(fixtureReceiver.ingest_url);
+      expect(campo("URL di invio")).toContain(fixtureReceiver.ingest_url);
     });
     // Il comando curl di esempio usa la stessa URL: dietro reverse proxy
     // window.location.origin sarebbe quello giusto solo per caso.
     expect(screen.getByText(new RegExp(`curl --data .* ${fixtureReceiver.ingest_url}`)))
       .toBeInTheDocument();
-    expect(screen.getByText(/Slug:/).textContent).toContain("maritime-backup-notturno-");
+    expect(campo("Slug")).toContain("maritime-backup-notturno-");
   });
 
   it("scarica lo script wrapper col nome scelto dal server", async () => {
@@ -143,7 +149,7 @@ describe("ReceiverDetailPage", () => {
 
     try {
       renderReceiverDetail();
-      await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
 
       await user.click(screen.getByRole("button", { name: "Scarica lo script" }));
 
@@ -186,24 +192,25 @@ describe("ReceiverDetailPage", () => {
     );
 
     renderReceiverDetail();
-    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Scarica lo script" }));
 
-    expect(await screen.findByText(/Wrapper script template unavailable/)).toBeInTheDocument();
+    // Due volte: l'avviso immediato in basso e il banner che resta accanto al
+    // pulsante col dettaglio del problema.
+    expect((await screen.findAllByText(/Wrapper script template unavailable/)).length)
+      .toBeGreaterThanOrEqual(2);
   });
 
   it("riassume la sorveglianza dell'attesa e lo stato dell'ultimo invio", async () => {
     renderReceiverDetail();
 
     await waitFor(() => {
-      expect(screen.getByText(/Sorveglianza dell'attesa:/).textContent).toContain(
-        "ogni 1g, tolleranza 30m00s → critical",
-      );
+      expect(campo("Politica in vigore")).toContain("ogni 1g, tolleranza 30m00s → critical");
     });
     // Le tre date che rispondono a "sono in ritardo?" e "e' anche partito?".
-    const stato = screen.getByText(/Ultima conclusione:/).textContent ?? "";
-    expect(stato).toContain("Allarme se non arriva entro");
-    expect(stato).toContain("Ultimo avvio:");
+    expect(campo("Ultima conclusione")).not.toMatch(/mai$/);
+    expect(campo("Ultimo avvio")).not.toMatch(/mai$/);
+    expect(campo("Allarme se non arriva entro")).not.toBe("");
   });
 
   it("segnala in evidenza un receiver in ritardo", async () => {
@@ -235,7 +242,7 @@ describe("ReceiverDetailPage", () => {
 
     setRefreshToken("refresh-token-fixture");
     renderReceiverDetail();
-    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
 
     // 86400 secondi si presentano come 1 giorno, non come 86400 secondi.
@@ -265,7 +272,7 @@ describe("ReceiverDetailPage", () => {
     const user = userEvent.setup();
     setRefreshToken("refresh-token-fixture");
     renderReceiverDetail();
-    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
     await user.selectOptions(screen.getByLabelText("Attesa"), "cron");
 
@@ -296,7 +303,7 @@ describe("ReceiverDetailPage", () => {
 
     setRefreshToken("refresh-token-fixture");
     renderReceiverDetail();
-    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
 
     await user.selectOptions(screen.getByLabelText("Attesa"), "cron");
@@ -322,7 +329,7 @@ describe("ReceiverDetailPage", () => {
 
     setRefreshToken("refresh-token-fixture");
     renderReceiverDetail();
-    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
 
     await user.selectOptions(screen.getByLabelText("Attesa"), "cron");
@@ -341,7 +348,7 @@ describe("ReceiverDetailPage", () => {
     const user = userEvent.setup();
     setRefreshToken("refresh-token-fixture");
     renderReceiverDetail();
-    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
 
     await user.selectOptions(screen.getByLabelText("Attesa"), "cron");
@@ -374,7 +381,7 @@ describe("ReceiverDetailPage", () => {
 
     setRefreshToken("refresh-token-fixture");
     renderReceiverDetail();
-    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
 
     await user.click(screen.getByRole("button", { name: "Salva" }));
@@ -391,7 +398,7 @@ describe("ReceiverDetailPage", () => {
     const user = userEvent.setup();
     setRefreshToken("refresh-token-fixture");
     renderReceiverDetail();
-    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
 
     await user.selectOptions(screen.getByLabelText("Attesa"), "cron");
@@ -411,7 +418,7 @@ describe("ReceiverDetailPage", () => {
     const user = userEvent.setup();
     setRefreshToken("refresh-token-fixture");
     renderReceiverDetail();
-    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
 
     await user.selectOptions(screen.getByLabelText("Attesa"), "cron");
@@ -445,7 +452,7 @@ describe("ReceiverDetailPage", () => {
 
     setRefreshToken("refresh-token-fixture");
     renderReceiverDetail();
-    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
 
     await user.selectOptions(screen.getByLabelText("Attesa"), "off");
@@ -467,10 +474,136 @@ describe("ReceiverDetailPage", () => {
     const user = userEvent.setup();
     setRefreshToken("refresh-token-fixture");
     renderReceiverDetail();
-    await waitFor(() => expect(screen.getByText(/Slug:/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
 
     expect(screen.getByText(/--only-on-failure/)).toBeInTheDocument();
+  });
+
+  it("chiede conferma prima di rigenerare lo slug", async () => {
+    const user = userEvent.setup();
+    let chiamate = 0;
+    server.use(
+      http.post("/api/v1/receivers/r1/rotate-slug", () => {
+        chiamate += 1;
+        return HttpResponse.json({ ...fixtureReceiver, slug: "maritime-backup-notturno-nuovo" });
+      }),
+    );
+
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Rigenera slug" }));
+    // La conferma dice cosa si rompe: i job che usano il vecchio slug.
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent(/smette di funzionare/);
+    expect(chiamate).toBe(0);
+
+    // Annullando non parte niente: e' l'azione che invalida gli script gia'
+    // distribuiti, non deve bastare un click di troppo.
+    await user.click(within(dialog).getByRole("button", { name: "Annulla" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(chiamate).toBe(0);
+
+    await user.click(screen.getByRole("button", { name: "Rigenera slug" }));
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Rigenera slug" }),
+    );
+
+    await waitFor(() => expect(chiamate).toBe(1));
+    // Riscontro esplicito: lo slug e' cambiato e i job vanno aggiornati.
+    expect(await screen.findByText(/Slug rigenerato/)).toBeInTheDocument();
+  });
+
+  it("disabilita e riattiva il receiver dalla sua pagina", async () => {
+    const user = userEvent.setup();
+    let inviato: Record<string, unknown> | null = null;
+    let stato = "active";
+    server.use(
+      http.get("/api/v1/receivers/r1", () =>
+        HttpResponse.json({ ...fixtureReceiver, status: stato }),
+      ),
+      http.patch("/api/v1/receivers/r1", async ({ request }) => {
+        inviato = (await request.json()) as Record<string, unknown>;
+        stato = String(inviato.status);
+        return HttpResponse.json({ ...fixtureReceiver, status: stato });
+      }),
+    );
+
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Disabilita receiver" }));
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Disabilita receiver" }),
+    );
+
+    await waitFor(() => expect(inviato).toMatchObject({ status: "disabled" }));
+    // Lo stato si legge nella pagina, non solo nel toast che sparisce.
+    expect(await screen.findByRole("button", { name: "Riattiva receiver" })).toBeInTheDocument();
+    await waitFor(() => expect(campo("Stato del receiver")).toContain("disabilitato"));
+
+    await user.click(screen.getByRole("button", { name: "Riattiva receiver" }));
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Riattiva receiver" }),
+    );
+    await waitFor(() => expect(inviato).toMatchObject({ status: "active" }));
+  });
+
+  it("conferma il salvataggio delle impostazioni con un riscontro a schermo", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.patch("/api/v1/receivers/r1", async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ ...fixtureReceiver, ...body });
+      }),
+    );
+
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+
+    const nome = screen.getByLabelText("Nome");
+    await user.clear(nome);
+    await user.type(nome, "Backup notturno bis");
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+
+    // Il modulo si chiude e l'esito e' scritto, non dedotto dal fatto che il
+    // modulo si sia chiuso.
+    expect(await screen.findByText(/Impostazioni del receiver salvate/)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Modifica receiver" })).toBeInTheDocument(),
+    );
+  });
+
+  it("rifiuta il salvataggio con il nome vuoto senza chiamare l'API", async () => {
+    const user = userEvent.setup();
+    let chiamate = 0;
+    server.use(
+      http.patch("/api/v1/receivers/r1", () => {
+        chiamate += 1;
+        return HttpResponse.json(fixtureReceiver);
+      }),
+    );
+
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+
+    // Solo spazi: `required` del browser lo lascia passare, il controllo del
+    // modulo no.
+    await user.clear(screen.getByLabelText("Nome"));
+    await user.type(screen.getByLabelText("Nome"), "   ");
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+
+    expect(await screen.findByText(/Il nome del receiver è obbligatorio/)).toBeInTheDocument();
+    expect(chiamate).toBe(0);
+    // L'errore e' legato al campo, non solo scritto in fondo al modulo.
+    expect(screen.getByLabelText("Nome")).toHaveAttribute("aria-invalid", "true");
   });
 
   it("T-UI14 test_rotate_slug_nascosto_al_member: con ruolo member il pulsante non è nel documento", async () => {
@@ -490,7 +623,7 @@ describe("ReceiverDetailPage", () => {
     renderReceiverDetail();
 
     await waitFor(() => {
-      expect(screen.getByText(/Slug:/)).toBeInTheDocument();
+      expect(screen.getByText("Slug")).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: "Rigenera slug" })).not.toBeInTheDocument();
   });

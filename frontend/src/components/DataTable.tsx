@@ -59,9 +59,11 @@ export default function DataTable<T>({
         </tbody>
       </table>
       {hasMore && (
-        <button onClick={onLoadMore} disabled={loadingMore} style={{ marginTop: "12px" }}>
-          {loadingMore ? "Caricamento…" : "Carica altri"}
-        </button>
+        <div className="table-more">
+          <button onClick={onLoadMore} disabled={loadingMore}>
+            {loadingMore ? "Caricamento…" : "Carica altri"}
+          </button>
+        </div>
       )}
     </div>
   );

@@ -43,12 +43,12 @@ export default function Layout() {
   return (
     <div className="app-shell">
       <aside className="app-sidebar">
-        <div className="card" style={{ marginBottom: "16px" }}>
+        <div className="app-brand">
           <strong>NotifyHub</strong>
           {user && (
-            <div style={{ fontSize: 13, color: "var(--color-text-muted)" }}>
+            <span className="app-brand-user">
               {user.email} · {user.tenant_name}
-            </div>
+            </span>
           )}
         </div>
         <nav ref={navigationRef} aria-label="Navigazione principale">
@@ -65,9 +65,9 @@ export default function Layout() {
           </ul>
         </nav>
         {user && (
-          <button style={{ marginTop: "16px" }} onClick={() => void logout()}>
-            Esci
-          </button>
+          <div className="app-sidebar-footer">
+            <button onClick={() => void logout()}>Esci</button>
+          </div>
         )}
       </aside>
       <main className="app-main">

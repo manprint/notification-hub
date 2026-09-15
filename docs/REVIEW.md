@@ -605,3 +605,115 @@ solo `text/plain` mentre l'endpoint accetta anche
 - Frontend: `fe-lint` a zero warning, **165 test** (da 163), `fe-build` pulito,
   soglie di copertura rispettate (87,6 / 80,1).
 - `scripts/smoke.sh` sullo stack containerizzato completo: vedi sotto.
+
+---
+
+## Verifica 5 — 2026-09-15 (receiver, crontab e attese non rispettate)
+
+Richiesta: verificare le impostazioni dei receiver rispetto ai crontab, ai
+ritardi tollerati e alla segnalazione quando la notifica non arriva entro il
+tempo previsto.
+
+### Difetti trovati
+
+| # | Dove | Difetto | Effetto |
+|---|---|---|---|
+| S1 | `app/services/surveillance.py` | La scadenza si calcolava sulle occorrenze cron **a partire da adesso**, non dall'ultimo invio | Con una tolleranza piu' lunga del periodo del cron (`0 * * * *` + 2 ore di grazia) la scadenza si spostava in avanti a ogni giro del job: un receiver fermo da tre giorni **non veniva mai segnalato**. Ora la scadenza e' la prima occorrenza **successiva** al riferimento, piu' la tolleranza |
+| S2 | `app/services/surveillance.py` | `validate_cron` accettava espressioni sintatticamente valide che non scattano mai (es. `0 0 30 2 *`) | Sorveglianza accesa e muta per sempre: il receiver risultava "sorvegliato" e nessuna assenza era segnalabile. Ora la validazione prova a calcolare la prima occorrenza e rifiuta l'espressione. Il frontend rifiuta esattamente le stesse espressioni |
+| S3 | `app/api/v1/receivers.py` | Riattivando un receiver disabilitato la finestra di attesa non ripartiva | Il tempo passato da spento contava come ritardo: **allarme immediato** alla riattivazione, prima ancora che il job avesse la possibilita' di inviare. Ora `expected_since` riparte da adesso e `missing_alerted_at` si azzera |
+
+Il riferimento da cui si conta e' ora uno solo e dichiarato:
+`max(last_notification_at, expected_since)`, documentato in
+`docs/notifyhub-spec.md` §4.2 insieme ai casi in cui la finestra riparte
+(sorveglianza accesa, spenta e riaccesa, receiver riattivato) e al
+comportamento sui cambi d'ora.
+
+### Test aggiunti
+
+21 test (`tests/unit/test_surveillance.py`, `tests/integration/test_surveillance_job.py`,
+`tests/e2e/test_expected_schedule_api.py`), fra cui il caso di S1 con tolleranza
+piu' lunga del periodo (una sola notifica di assenza, non zero e non una per
+occorrenza persa), il cron che non scatta mai (S2) e il ciclo
+disabilita→riattiva (S3). `docs/OPERAZIONI.md` (job 9) ha ora la diagnostica e
+il runbook SQL per i due casi.
+
+---
+
+## Verifica 6 — 2026-09-15 (deep review del frontend)
+
+Richiesta: stile non uniforme, spazio della pagina sfruttato male, corpi del
+testo incoerenti, nessun riscontro quando si salva, nessuna evidenza di quali
+campi siano obbligatori. Passata su **tutte** le sezioni.
+
+### Il problema di fondo
+
+Ogni pagina era stata scritta da sola: dimensioni del testo decise caso per
+caso (da 11px a 28px senza scala), `style={{ }}` in linea per le distanze,
+quattro modi di formattare una data, tre modi di dire "sto salvando". Non era
+un problema estetico: **dopo aver cambiato un valore non si sapeva se fosse
+stato salvato**, perche' l'unico segnale era che il campo tornava al valore del
+server — cioe' nessun segnale, se il valore era gia' quello.
+
+### Cosa e' stato introdotto
+
+| Pezzo | File | A cosa serve |
+|---|---|---|
+| Token di stile | `styles.css` | Una sola scala tipografica (`--text-xs` … `--text-2xl`), una sola scala di spaziature, larghezze massime dichiarate (`--content-max`, `--prose-max`). Nessuna dimensione decisa nella pagina |
+| Avvisi di esito | `hooks/useToast.tsx` | Riscontro immediato di ogni scrittura, `role="status"` in una regione `aria-live`, chiudibile, scade da solo |
+| `useAction` | `hooks/useAction.ts` | Il giro che fa ogni scrittura: "in corso", errore tipizzato che **resta in linea**, avviso di esito. Sostituisce il `try/catch` + `setError` copiato in ogni componente |
+| `SaveIndicator` | `components/SaveIndicator.tsx` | "Salvato ✓" accanto al controllo che si e' toccato, per le modifiche in riga (ruoli, soglie dei canali) dove l'avviso in basso e' lontano dal punto in cui si e' agito |
+| `Field` + `RequiredLegend` + `fieldAria` | `components/Field.tsx` | Etichetta, obbligatorio/facoltativo, suggerimento, errore: sempre nello stesso ordine e con gli stessi id. `aria-describedby`/`aria-invalid` collegati |
+| `Detail` | `components/Detail.tsx` | Coppia etichetta/valore nelle viste di sola lettura, dentro una griglia |
+| `Modal` | `components/Modal.tsx` | I moduli di modifica compaiono dove si e' premuto "Modifica", non in fondo alla pagina. Escape, fuoco al primo campo, Tab che gira dentro |
+| `lib/format.ts` | — | Una sola formattazione per date, ore, byte, ruoli, stati |
+
+L'asterisco dei campi obbligatori e il "(facoltativo)" li mette il **CSS**
+(`.is-required::after`, `.is-optional::after`): dentro l'etichetta finirebbero
+nel nome accessibile del campo, che diventerebbe "Email \*".
+
+### Difetti chiusi, per asse
+
+| Asse | Prima | Ora |
+|---|---|---|
+| Riscontro di persistenza | Nessuno, in nessuna sezione | Avviso su ogni scrittura + indicatore in riga dove la modifica e' in riga (utenze, canali, preset, regole) |
+| Obbligatorio / facoltativo | Nessuna indicazione: lo diceva il 422 del server | Marcato su ogni modulo principale, con legenda una volta per modulo |
+| Validazione lato client | Solo su cron e soglia di durata del receiver | Anche: nome del receiver e del preset, pattern delle regole, password dell'invito (lunghezza **e** ripetizione), con l'errore legato al campo |
+| Uso dello spazio | Una colonna stretta di `<p>Etichetta: valore</p>`, moduli in colonna singola su schermi larghi | `detail-grid` e `form-grid` che riempiono la larghezza disponibile, filtri in una barra sola, moduli di creazione richiudibili |
+| Tipografia | Dimensioni decise pagina per pagina | Scala unica; nessuna dimensione fuori dalla scala |
+| Azioni distruttive | "Rigenera slug" ed "Elimina regola" partivano al primo click | Conferma esplicita che dice **cosa si rompe** (i job che usano il vecchio slug, i receiver che usano il preset) |
+| Date | Quattro formattazioni diverse | Una, in `lib/format.ts`; un valore assente e' "—", non "Invalid Date" |
+| Stili in linea | 6 `style={{ }}` sparsi | Zero |
+
+### Funzioni mancanti trovate strada facendo
+
+- **Attiva/disabilita receiver**: l'API lo permette e la pagina mostrava
+  "disabilitato" con il conteggio delle richieste rifiutate, ma non c'era nessun
+  modo di riattivarlo dall'interfaccia. Aggiunto, con la conferma che spiega che
+  alla riattivazione la finestra di sorveglianza riparte da adesso (il
+  comportamento corretto dopo S3).
+- **Azzera i filtri** su notifiche e audit: con sei filtri nell'URL, un elenco
+  vuoto costringeva a ricontrollare una tendina alla volta.
+- **Ripeti la password** nell'accettazione dell'invito: una battitura sbagliata
+  chiudeva fuori dall'account appena attivato.
+
+### Test
+
+| File | Cosa dimostra |
+|---|---|
+| `components/__tests__/Field.test.tsx` | L'asterisco non entra nel nome accessibile; suggerimento ed errore sono legati al campo; l'errore e' annunciato |
+| `components/__tests__/Modal.test.tsx` | Fuoco al primo campo, Escape, click sullo sfondo, Tab che gira dentro |
+| `hooks/__tests__/useAction.test.tsx` | Esito riuscito (avviso + "Salvato"), fallito (avviso **e** banner che resta), errore vecchio che sparisce al tentativo riuscito |
+| `lib/__tests__/format.test.ts` | Valori assenti e date illeggibili diventano "—"; unita' di misura dei byte |
+| `pages/__tests__/acceptInvite.test.tsx` | Password corta, password diverse, token mancante: nessuna chiamata all'API |
+| `pages/__tests__/receiverDetail.test.tsx` | Conferma prima di rigenerare lo slug (annullare non chiama niente), disabilita/riattiva, riscontro del salvataggio, nome vuoto rifiutato con `aria-invalid` |
+
+Gli errori compaiono **due volte** di proposito — avviso che passa e banner che
+resta — e i test lo asseriscono esplicitamente, per non farlo "correggere" a
+una passata futura.
+
+### Gate
+
+- `make fe-lint`: zero warning. `make fe-build` (`tsc -b` + vite): pulito.
+- **222 test** frontend in 31 file, 30 dei quali aggiunti in questa passata.
+- `make fe-cov`: 87,9% righe / 82,2% rami, sopra le soglie di `vite.config.ts`
+  (85 / 78).

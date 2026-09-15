@@ -1,15 +1,15 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
 import { Link } from "react-router-dom";
 import { apiPatch, apiPost } from "../api/client";
 import type {
-  ApiError,
   NotificationListItemOut,
   NotificationListOut,
   NotificationStatus,
   ReceiverOut,
 } from "../api/types";
+import { useAction } from "../hooks/useAction";
 import { type NotificationFilters, useNotifications } from "../hooks/useNotifications";
+import { formatDate, formatTime } from "../lib/format";
 import { isSurveillanceSource, phaseLabel, severitySourceLabel } from "../lib/severitySource";
 import DataTable, { type DataTableColumn } from "./DataTable";
 import ErrorBanner from "./ErrorBanner";
@@ -36,52 +36,57 @@ export default function ReceiverNotificationsTable({
   filters: ReceiverTableFilters;
 }) {
   const queryClient = useQueryClient();
-  const [actionError, setActionError] = useState<ApiError | null>(null);
-  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const { busy: busyAction, error: actionError, run } = useAction();
 
   const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useNotifications({ ...filters, receiver_id: receiver.id });
 
   const rows = data?.pages.flatMap((page: NotificationListOut) => page.notifications) ?? [];
 
-  async function runAction(name: string, action: () => Promise<void>) {
-    setActionError(null);
-    setBusyAction(name);
-    try {
-      await action();
-    } catch (err) {
-      setActionError(err as ApiError);
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
   async function setStatus(id: string, status: NotificationStatus) {
-    await runAction(`status:${id}`, async () => {
-      await apiPatch(`/api/v1/notifications/${id}`, { status });
-      // Invalida le notifiche di tutte le tabelle: i conteggi e i filtri di
-      // stato delle altre dipendono dalla stessa collezione.
-      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
-    });
+    await run(
+      async () => {
+        await apiPatch(`/api/v1/notifications/${id}`, { status });
+        // Invalida le notifiche di tutte le tabelle: i conteggi e i filtri di
+        // stato delle altre dipendono dalla stessa collezione.
+        await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+      },
+      {
+        name: `status:${id}`,
+        success:
+          status === "read" ? "Notifica segnata come letta." : "Notifica riportata a non letta.",
+      },
+    );
   }
 
   async function setVerified(id: string, verified: boolean) {
-    await runAction(`verified:${id}`, async () => {
-      await apiPatch(`/api/v1/notifications/${id}`, { verified });
-      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
-    });
+    await run(
+      async () => {
+        await apiPatch(`/api/v1/notifications/${id}`, { verified });
+        await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+      },
+      {
+        name: `verified:${id}`,
+        success: verified
+          ? "Notifica segnata come verificata."
+          : "Verifica rimossa dalla notifica.",
+      },
+    );
   }
 
   async function bulkRead() {
-    await runAction("bulk", async () => {
-      await apiPost("/api/v1/notifications/bulk-read", {
-        ...filters,
-        // Gli stessi filtri della tabella piu' il suo receiver: il pulsante non
-        // deve toccare cio' che la tabella sta tenendo fuori dalla vista.
-        receiver_id: receiver.id,
-      });
-      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
-    });
+    await run(
+      async () => {
+        await apiPost("/api/v1/notifications/bulk-read", {
+          ...filters,
+          // Gli stessi filtri della tabella piu' il suo receiver: il pulsante non
+          // deve toccare cio' che la tabella sta tenendo fuori dalla vista.
+          receiver_id: receiver.id,
+        });
+        await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+      },
+      { name: "bulk", success: `Notifiche di ${receiver.name} segnate come lette.` },
+    );
   }
 
   const columns: DataTableColumn<NotificationListItemOut>[] = [
@@ -107,7 +112,7 @@ export default function ReceiverNotificationsTable({
       key: "source",
       header: "Origine",
       render: (n) => (
-        <>
+        <span className="status-cell">
           <span
             className="status-pill"
             title={
@@ -120,14 +125,13 @@ export default function ReceiverNotificationsTable({
           </span>
           {n.phase === "start" && (
             <span
-              className="status-pill"
-              style={{ marginLeft: 6 }}
+              className="status-pill info"
               title="Ping di avvio: l'esito arriva a fine esecuzione"
             >
               {phaseLabel(n.phase)}
             </span>
           )}
-        </>
+        </span>
       ),
     },
     {
@@ -145,15 +149,12 @@ export default function ReceiverNotificationsTable({
     {
       key: "received_at",
       header: "Ricevuta",
-      render: (n) => {
-        const d = new Date(n.received_at);
-        return (
-          <span className="received-at">
-            <span>{d.toLocaleDateString("it-IT")}</span>
-            <span>{d.toLocaleTimeString("it-IT")}</span>
-          </span>
-        );
-      },
+      render: (n) => (
+        <span className="received-at">
+          <span>{formatDate(n.received_at)}</span>
+          <span>{formatTime(n.received_at)}</span>
+        </span>
+      ),
     },
     {
       key: "actions",
@@ -179,11 +180,7 @@ export default function ReceiverNotificationsTable({
       <div className="receiver-table-header">
         <h3>
           <Link to={`/receivers/${receiver.id}`}>{receiver.name}</Link>
-          {receiver.status === "disabled" && (
-            <span className="status-pill" style={{ marginLeft: 8 }}>
-              disabilitato
-            </span>
-          )}
+          {receiver.status === "disabled" && <span className="status-pill warn">disabilitato</span>}
         </h3>
         {/* Il testo resta quello del pulsante di gruppo, ma il nome accessibile
             dice su quale receiver agisce: due pulsanti identici nella stessa

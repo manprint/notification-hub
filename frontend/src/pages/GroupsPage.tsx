@@ -6,6 +6,9 @@ import type { ApiError, DeleteImpactOut, GroupOut } from "../api/types";
 import ConfirmDialog from "../components/ConfirmDialog";
 import DataTable, { type DataTableColumn } from "../components/DataTable";
 import ErrorBanner from "../components/ErrorBanner";
+import Field, { RequiredLegend, fieldAria } from "../components/Field";
+import Modal from "../components/Modal";
+import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
 import { ADMIN_ROLES, hasRole } from "../lib/roles";
 
@@ -13,43 +16,63 @@ function EditGroupForm({ group, onDone }: { group: GroupOut; onDone: () => void 
   const queryClient = useQueryClient();
   const [name, setName] = useState(group.name);
   const [description, setDescription] = useState(group.description ?? "");
-  const [error, setError] = useState<ApiError | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
+  const { busy, error, run } = useAction();
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    setError(null);
-    try {
-      await apiPatch(`/api/v1/groups/${group.id}`, { name, description: description || null });
-      await queryClient.invalidateQueries({ queryKey: ["groups"] });
-      onDone();
-    } catch (err) {
-      setError(err as ApiError);
+    if (name.trim() === "") {
+      setNameError("Il nome del gruppo è obbligatorio.");
+      return;
     }
+    setNameError(null);
+    const ok = await run(
+      async () => {
+        await apiPatch(`/api/v1/groups/${group.id}`, {
+          name: name.trim(),
+          description: description.trim() || null,
+        });
+        await queryClient.invalidateQueries({ queryKey: ["groups"] });
+      },
+      { success: "Gruppo aggiornato." },
+    );
+    // Il modulo resta aperto se il salvataggio fallisce (nome duplicato → 409):
+    // chiuderlo comunque farebbe sparire il testo insieme all'errore.
+    if (ok) onDone();
   }
+
+  const nameId = `group-edit-name-${group.id}`;
+  const descriptionId = `group-edit-description-${group.id}`;
 
   return (
     <form onSubmit={(event) => void handleSubmit(event)}>
       {error && <ErrorBanner error={error} />}
-      <div className="form-row">
-        <label htmlFor={`group-edit-name-${group.id}`}>Nome</label>
+      <RequiredLegend />
+      <Field id={nameId} label="Nome" required error={nameError}>
         <input
-          id={`group-edit-name-${group.id}`}
+          {...fieldAria(nameId, { error: nameError })}
           required
+          maxLength={120}
           value={name}
           onChange={(event) => setName(event.target.value)}
         />
-      </div>
-      <div className="form-row">
-        <label htmlFor={`group-edit-description-${group.id}`}>Descrizione</label>
+      </Field>
+      <Field
+        id={descriptionId}
+        label="Descrizione"
+        optional
+        hint="Compare nell'elenco dei gruppi e aiuta chi non li ha creati."
+      >
         <input
-          id={`group-edit-description-${group.id}`}
+          {...fieldAria(descriptionId, { hint: true })}
+          maxLength={500}
           value={description}
           onChange={(event) => setDescription(event.target.value)}
         />
-      </div>
-      <div className="toolbar">
-        <button type="submit" className="primary">
-          Salva
+      </Field>
+      <div className="form-actions">
+        <button type="submit" className="primary" disabled={busy !== null}>
+          {busy !== null ? "Salvataggio…" : "Salva"}
         </button>
         <button type="button" onClick={onDone}>
           Annulla
@@ -64,6 +87,7 @@ function DeleteGroupButton({ group }: { group: GroupOut }) {
   const [impact, setImpact] = useState<DeleteImpactOut | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const queryClient = useQueryClient();
+  const { run } = useAction();
 
   async function openDialog() {
     setError(null);
@@ -77,22 +101,27 @@ function DeleteGroupButton({ group }: { group: GroupOut }) {
   }
 
   async function confirmDelete() {
-    try {
-      await apiDelete(`/api/v1/groups/${group.id}?confirm=${encodeURIComponent(group.name)}`);
-      setOpen(false);
-      await queryClient.invalidateQueries({ queryKey: ["groups"] });
-    } catch (err) {
-      setError(err as ApiError);
-    }
+    const ok = await run(
+      async () => {
+        await apiDelete(`/api/v1/groups/${group.id}?confirm=${encodeURIComponent(group.name)}`);
+        await queryClient.invalidateQueries({ queryKey: ["groups"] });
+      },
+      { success: `Gruppo "${group.name}" eliminato.` },
+    );
+    if (ok) setOpen(false);
   }
 
   return (
-    <div>
+    <>
       {error && <ErrorBanner error={error} />}
-      {open && impact ? (
+      <button className="danger" onClick={() => void openDialog()}>
+        Elimina gruppo
+      </button>
+      {open && impact && (
         <ConfirmDialog
           title={`Elimina gruppo "${group.name}"`}
           expectedText={group.name}
+          confirmLabel="Elimina gruppo"
           onConfirm={() => void confirmDelete()}
           onCancel={() => setOpen(false)}
         >
@@ -103,45 +132,87 @@ function DeleteGroupButton({ group }: { group: GroupOut }) {
             <li>{impact.deliveries} consegne</li>
           </ul>
         </ConfirmDialog>
-      ) : (
-        <button onClick={() => void openDialog()}>Elimina gruppo</button>
       )}
-    </div>
+    </>
+  );
+}
+
+function NewGroupForm() {
+  const queryClient = useQueryClient();
+  const [newName, setNewName] = useState("");
+  const [nameError, setNameError] = useState<string | null>(null);
+  const { busy, error, run } = useAction();
+
+  async function createGroup(event: React.FormEvent) {
+    event.preventDefault();
+    if (newName.trim() === "") {
+      setNameError("Il nome del gruppo è obbligatorio.");
+      return;
+    }
+    setNameError(null);
+    const ok = await run(
+      async () => {
+        await apiPost("/api/v1/groups", { name: newName.trim() });
+        await queryClient.invalidateQueries({ queryKey: ["groups"] });
+      },
+      { success: `Gruppo "${newName.trim()}" creato.` },
+    );
+    if (ok) setNewName("");
+  }
+
+  return (
+    // Chiuso di default: la pagina serve a leggere l'elenco, non a creare un
+    // gruppo ogni volta che la si apre.
+    <details className="card collapsible">
+      <summary>Nuovo gruppo</summary>
+      {error && <ErrorBanner error={error} />}
+      <form className="form-stacked" onSubmit={(event) => void createGroup(event)}>
+        <RequiredLegend />
+        <Field
+          id="group-name"
+          label="Nome"
+          required
+          error={nameError}
+          hint="Un gruppo raccoglie i receiver di uno stesso ambito (una macchina, un cliente, un servizio)."
+        >
+          <input
+            {...fieldAria("group-name", { hint: true, error: nameError })}
+            required
+            maxLength={120}
+            value={newName}
+            onChange={(event) => setNewName(event.target.value)}
+          />
+        </Field>
+        <div className="form-actions">
+          <button type="submit" className="primary" disabled={busy !== null}>
+            {busy !== null ? "Creazione…" : "Crea gruppo"}
+          </button>
+        </div>
+      </form>
+    </details>
   );
 }
 
 export default function GroupsPage() {
   const { role } = useSession();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const { data: groups, isLoading, error } = useQuery<GroupOut[], ApiError>({
+  const {
+    data: groups,
+    isLoading,
+    error,
+  } = useQuery<GroupOut[], ApiError>({
     queryKey: ["groups"],
     queryFn: () => apiGet<GroupOut[]>("/api/v1/groups"),
   });
 
   const [query, setQuery] = useState("");
-  const [newName, setNewName] = useState("");
-  const [createError, setCreateError] = useState<ApiError | null>(null);
   const [editingGroup, setEditingGroup] = useState<GroupOut | null>(null);
-
-  async function createGroup(event: React.FormEvent) {
-    event.preventDefault();
-    setCreateError(null);
-    try {
-      await apiPost("/api/v1/groups", { name: newName });
-      setNewName("");
-      await queryClient.invalidateQueries({ queryKey: ["groups"] });
-    } catch (err) {
-      setCreateError(err as ApiError);
-    }
-  }
 
   const q = query.trim().toLowerCase();
   const filtered = q
     ? (groups ?? []).filter(
         (g) =>
-          g.name.toLowerCase().includes(q) ||
-          (g.description ?? "").toLowerCase().includes(q),
+          g.name.toLowerCase().includes(q) || (g.description ?? "").toLowerCase().includes(q),
       )
     : (groups ?? []);
 
@@ -150,10 +221,10 @@ export default function GroupsPage() {
       key: "name",
       header: "Nome",
       render: (g) => (
-        <>
+        <div className="cell-preview">
           <span>{g.name}</span>
-          {g.description && <span className="card-hint"> — {g.description}</span>}
-        </>
+          {g.description && <div className="cell-diagnostics">{g.description}</div>}
+        </div>
       ),
     },
     {
@@ -180,29 +251,16 @@ export default function GroupsPage() {
 
   return (
     <div>
-      <h1>Gruppi</h1>
+      <div className="page-header">
+        <h1>Gruppi</h1>
+      </div>
+      <p className="page-subtitle">
+        Ogni gruppo raccoglie i receiver che condividono destinatari e soglie: è l'unità con cui si
+        danno i permessi e si collegano i canali.
+      </p>
       {error && <ErrorBanner error={error} />}
 
-      {hasRole(role, ADMIN_ROLES) && (
-        <div className="card">
-          <h3>Nuovo gruppo</h3>
-          {createError && <ErrorBanner error={createError} />}
-          <form onSubmit={(event) => void createGroup(event)}>
-            <div className="form-row">
-              <label htmlFor="group-name">Nome</label>
-              <input
-                id="group-name"
-                required
-                value={newName}
-                onChange={(event) => setNewName(event.target.value)}
-              />
-            </div>
-            <button type="submit" className="primary">
-              Crea gruppo
-            </button>
-          </form>
-        </div>
-      )}
+      {hasRole(role, ADMIN_ROLES) && <NewGroupForm />}
 
       <div className="group-search">
         <input
@@ -223,9 +281,9 @@ export default function GroupsPage() {
       />
 
       {editingGroup && (
-        <div className="card">
+        <Modal title={`Modifica "${editingGroup.name}"`} onClose={() => setEditingGroup(null)}>
           <EditGroupForm group={editingGroup} onDone={() => setEditingGroup(null)} />
-        </div>
+        </Modal>
       )}
     </div>
   );

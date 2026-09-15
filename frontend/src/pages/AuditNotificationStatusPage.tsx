@@ -6,6 +6,7 @@ import ErrorBanner from "../components/ErrorBanner";
 import SettingsTabs from "../components/SettingsTabs";
 import { type AuditFilters, useAuditEvents } from "../hooks/useAuditEvents";
 import { NOTIFICATION_STATUS_ACTIONS, actionLabel, affectedCount } from "../lib/audit";
+import { formatDateTime } from "../lib/format";
 
 /** Vista dedicata a "segna come letta" e "segna come verificata": la stessa
  * tabella dell'audit, filtrata sulle azioni che rispondono alla domanda
@@ -38,7 +39,7 @@ export default function AuditNotificationStatusPage() {
     {
       key: "occurred_at",
       header: "Quando",
-      render: (event) => new Date(event.occurred_at).toLocaleString("it-IT"),
+      render: (event) => formatDateTime(event.occurred_at),
     },
     {
       key: "actor",
@@ -78,9 +79,13 @@ export default function AuditNotificationStatusPage() {
     },
   ];
 
+  const attivi = Object.values(filters).filter(Boolean).length;
+
   return (
     <div>
-      <h1>Letture e verifiche</h1>
+      <div className="page-header">
+        <h1>Letture e verifiche</h1>
+      </div>
       <SettingsTabs />
       <p className="page-subtitle">
         Lo storico completo dei passaggi, ripristini compresi: lo stato attuale lo dice già la
@@ -88,51 +93,60 @@ export default function AuditNotificationStatusPage() {
       </p>
       {error && <ErrorBanner error={error} />}
 
-      <div className="card toolbar">
-        <div className="form-row">
-          <label htmlFor="audit-notification-id">ID notifica</label>
-          <input
-            id="audit-notification-id"
-            type="text"
-            placeholder="incolla l'id di una notifica"
-            value={filters.notification_id ?? ""}
-            onChange={(event) => setParam("notification_id", event.target.value)}
-          />
+      <div className="card">
+        <div className="filters">
+          <div className="form-row grow">
+            <label htmlFor="audit-notification-id">ID notifica</label>
+            <input
+              id="audit-notification-id"
+              type="text"
+              placeholder="incolla l'id di una notifica"
+              value={filters.notification_id ?? ""}
+              onChange={(event) => setParam("notification_id", event.target.value)}
+            />
+          </div>
+          <div className="form-row">
+            <label htmlFor="audit-action">Azione</label>
+            <select
+              id="audit-action"
+              value={filters.action ?? ""}
+              onChange={(event) => setParam("action", event.target.value)}
+            >
+              <option value="">Tutte</option>
+              {NOTIFICATION_STATUS_ACTIONS.map((action) => (
+                <option key={action} value={action}>
+                  {actionLabel(action)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="form-row">
+            <label htmlFor="audit-status-from">Da</label>
+            <input
+              id="audit-status-from"
+              type="date"
+              value={filters.from ?? ""}
+              onChange={(event) => setParam("from", event.target.value)}
+            />
+          </div>
+          <div className="form-row">
+            <label htmlFor="audit-status-to">A</label>
+            <input
+              id="audit-status-to"
+              type="date"
+              value={filters.to ?? ""}
+              onChange={(event) => setParam("to", event.target.value)}
+            />
+          </div>
+          <div className="filters-actions">
+            {attivi > 0 && (
+              <button onClick={() => setSearchParams(new URLSearchParams())}>
+                Azzera i filtri ({attivi})
+              </button>
+            )}
+            <AuditExportButton filters={filters} notificationStatusOnly />
+          </div>
         </div>
-        <div className="form-row">
-          <label htmlFor="audit-action">Azione</label>
-          <select
-            id="audit-action"
-            value={filters.action ?? ""}
-            onChange={(event) => setParam("action", event.target.value)}
-          >
-            <option value="">Tutte</option>
-            {NOTIFICATION_STATUS_ACTIONS.map((action) => (
-              <option key={action} value={action}>
-                {actionLabel(action)}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="form-row">
-          <label htmlFor="audit-status-from">Da</label>
-          <input
-            id="audit-status-from"
-            type="date"
-            value={filters.from ?? ""}
-            onChange={(event) => setParam("from", event.target.value)}
-          />
-        </div>
-        <div className="form-row">
-          <label htmlFor="audit-status-to">A</label>
-          <input
-            id="audit-status-to"
-            type="date"
-            value={filters.to ?? ""}
-            onChange={(event) => setParam("to", event.target.value)}
-          />
-        </div>
-        <AuditExportButton filters={filters} notificationStatusOnly />
       </div>
 
       <DataTable
