@@ -5,7 +5,7 @@ import type { ApiError, DeliveryChannelOut, DeliveryOut, DeliveryStatus } from "
 import DataTable, { type DataTableColumn } from "../components/DataTable";
 import ErrorBanner from "../components/ErrorBanner";
 import SeverityBadge from "../components/SeverityBadge";
-import StatusPill from "../components/StatusPill";
+import StatusPill, { statusLabel } from "../components/StatusPill";
 import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
 import { formatDateTime } from "../lib/format";
@@ -59,17 +59,25 @@ export default function DeliveriesPage() {
   }
 
   const canRetry = hasRole(role, MEMBER_ROLES);
+  const filtriAttivi = [status, channelId].filter(Boolean).length;
 
   const columns: DataTableColumn<DeliveryOut>[] = [
     {
       key: "notification",
       header: "Notifica inoltrata",
+      // Un link "Apri" e non il testo del messaggio, come nell'elenco delle
+      // notifiche: il corpo si legge nella sua pagina, e una preview lunga
+      // sfonda la riga e spinge fuori vista le colonne che dicono com'e'
+      // andata la consegna. Restano i segnali che servono a riconoscerla:
+      // severity, receiver di origine, quando e' stata ricevuta.
       render: (d) => (
         <div className="cell-preview">
-          <Link to={`/notifications/${d.notification_id}`}>{d.content_preview || "(vuota)"}</Link>
+          <div className="content-cell">
+            <Link to={`/notifications/${d.notification_id}`}>Apri</Link>
+            <SeverityBadge severity={d.severity} />
+          </div>
           <div className="cell-diagnostics">
-            <SeverityBadge severity={d.severity} /> da {d.receiver_name} ·{" "}
-            {formatDateTime(d.received_at)}
+            da {d.receiver_name} · {formatDateTime(d.received_at)}
           </div>
         </div>
       ),
@@ -79,7 +87,7 @@ export default function DeliveriesPage() {
       key: "status",
       header: "Stato",
       render: (d) => (
-        <div>
+        <div className="cell-preview">
           <StatusPill status={d.status} />
           <div className="cell-diagnostics">{STATUS_HELP[d.status]}</div>
         </div>
@@ -89,7 +97,7 @@ export default function DeliveriesPage() {
       key: "attempts",
       header: "Tentativi",
       render: (d) => (
-        <div>
+        <div className="cell-preview">
           {d.attempts}
           {d.sent_at && (
             <div className="cell-diagnostics">inviata: {formatDateTime(d.sent_at)}</div>
@@ -130,9 +138,10 @@ export default function DeliveriesPage() {
         <h1>Consegne</h1>
       </div>
       <p className="page-subtitle">
-        Storico degli inoltri verso Slack e Google Chat: una riga per ogni notifica spedita a un canale.
-        Serve a capire perché un messaggio non è arrivato — codice HTTP, errore e tentativi. Le consegne
-        in stato «morta» hanno esaurito i 5 tentativi e si ri-accodano a mano.
+        Storico degli inoltri verso Slack e Google Chat: una riga per ogni notifica spedita a un
+        canale. Serve a capire perché un messaggio non è arrivato — codice HTTP, errore e
+        tentativi. Le consegne in stato «morta» hanno esaurito i 5 tentativi e si ri-accodano a
+        mano.
       </p>
       {error && <ErrorBanner error={error} />}
       {actionError && <ErrorBanner error={actionError} />}
@@ -149,7 +158,7 @@ export default function DeliveriesPage() {
               <option value="">Tutti gli stati</option>
               {STATUSES.map((s) => (
                 <option key={s} value={s}>
-                  {s}
+                  {statusLabel(s)}
                 </option>
               ))}
             </select>
@@ -170,6 +179,14 @@ export default function DeliveriesPage() {
               ))}
             </select>
           </div>
+
+          {filtriAttivi > 0 && (
+            <div className="filters-actions">
+              <button onClick={() => setSearchParams(new URLSearchParams())}>
+                Azzera i filtri ({filtriAttivi})
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

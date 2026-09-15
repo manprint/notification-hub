@@ -717,3 +717,19 @@ una passata futura.
 - **222 test** frontend in 31 file, 30 dei quali aggiunti in questa passata.
 - `make fe-cov`: 87,9% righe / 82,2% rami, sopra le soglie di `vite.config.ts`
   (85 / 78).
+
+### Coda della passata — consegne (2026-09-15)
+
+La colonna "Notifica inoltrata" stampava l'anteprima del corpo come testo del
+link: una riga di log lunga spingeva fuori vista le colonne che dicono com'e'
+andata la consegna (stato, tentativi, codice HTTP). Ora e' un link **Apri**
+come nell'elenco delle notifiche, con accanto i segnali che servono a
+riconoscere la riga senza leggerne il testo: severity, receiver di origine,
+data di ricezione.
+
+Nella stessa sezione: la tendina degli stati elencava gli identificativi
+dell'API (`dead`, `sent`) mentre la tabella diceva "Morta" e "Inviata"
+(`statusLabel` ora e' una sola), e mancava l'azzeramento dei filtri presente
+nelle altre sezioni. 4 test aggiunti (226 in totale): il corpo che non compare,
+la riga che resta riconoscibile, le parole della tendina, il filtro che si
+azzera.

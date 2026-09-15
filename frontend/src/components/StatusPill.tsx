@@ -25,6 +25,12 @@ const TONES: Record<Status, string> = {
   dead: "danger",
 };
 
+/** L'etichetta da sola: la usano le tendine dei filtri, che devono elencare
+ *  gli stessi stati con le stesse parole della tabella. */
+export function statusLabel(status: Status): string {
+  return LABELS[status] ?? status;
+}
+
 export default function StatusPill({ status }: { status: Status }) {
   const tone = TONES[status];
   return <span className={tone ? `status-pill ${tone}` : "status-pill"}>{LABELS[status]}</span>;
