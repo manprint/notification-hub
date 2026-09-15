@@ -127,6 +127,9 @@ async def test_il_job_salta_il_receiver_rotto_e_avvisa_sugli_altri(
     rotto = await _receiver(api_client, headers, SORVEGLIATO)
     sano = await _receiver(api_client, headers, SORVEGLIATO)
     scaduto = datetime.now(UTC) - timedelta(days=3)
+    # `expected_since` indietro insieme all'ultimo invio: l'attesa si conta dal
+    # piu' recente dei due (services/surveillance.reference_instant).
+    acceso = datetime.now(UTC) - timedelta(days=10)
     await _scrivi_in_colonna(
         tenant_id,
         rotto["id"],
@@ -134,8 +137,11 @@ async def test_il_job_salta_il_receiver_rotto_e_avvisa_sugli_altri(
         expected_cron="99 99 * * *",
         expected_timezone="UTC",
         last_notification_at=scaduto,
+        expected_since=acceso,
     )
-    await _scrivi_in_colonna(tenant_id, sano["id"], last_notification_at=scaduto)
+    await _scrivi_in_colonna(
+        tenant_id, sano["id"], last_notification_at=scaduto, expected_since=acceso
+    )
 
     check_expected_schedules()
 
@@ -309,7 +315,10 @@ async def test_lallarme_passa_anche_a_quota_esaurita(api_client, two_tenants, ow
 
     receiver = await _receiver(api_client, headers, SORVEGLIATO)
     await _scrivi_in_colonna(
-        tenant_id, receiver["id"], last_notification_at=datetime.now(UTC) - timedelta(days=3)
+        tenant_id,
+        receiver["id"],
+        last_notification_at=datetime.now(UTC) - timedelta(days=3),
+        expected_since=datetime.now(UTC) - timedelta(days=10),
     )
 
     async with tenant_session(tenant_id) as session:

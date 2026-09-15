@@ -214,6 +214,32 @@ Il prefisso è una fotografia dei nomi al momento della creazione, non un riferi
 > Le notifiche sintetiche non aggiornano `last_notification_at`: se lo facessero,
 > l'assenza si riarmerebbe da sola. Receiver `disabled` e tenant `suspended` non
 > vengono sorvegliati, perché sarebbero in assenza per definizione.
+>
+> **Da dove si conta.** Il riferimento è il più recente fra `last_notification_at`
+> e `expected_since`: il primo è l'ultimo invio vero, il secondo l'istante in cui
+> la sorveglianza è entrata in vigore su questo receiver. La scadenza è la **prima
+> occorrenza attesa dopo il riferimento**, più la tolleranza — non la prossima
+> occorrenza a partire da adesso. La differenza si vede quando la tolleranza è
+> lunga quanto o più del periodo (`0 * * * *` con 2 ore di tolleranza): ancorando
+> la scadenza ad adesso resterebbe sempre nel futuro e l'allarme non scatterebbe
+> mai. Da qui discende anche che, dopo giorni di silenzio, la data mostrata è la
+> prima scadenza saltata — l'istante in cui il guasto è iniziato — e non quella di
+> stanotte.
+>
+> `expected_since` viene riscritto a "adesso" in tre casi, tutti perché il
+> silenzio precedente non è un guasto: quando la sorveglianza si accende su un
+> receiver che prima non ce l'aveva, quando viene spenta e riaccesa, e quando un
+> receiver `disabled` torna `active` (il suo silenzio era voluto — l'ingestion gli
+> rispondeva 404). Ogni volta `missing_alerted_at` viene azzerato. Una PATCH che
+> non tocca né lo stato né la politica non sposta la finestra, altrimenti
+> basterebbe rinominare un receiver per far sparire un allarme in corso.
+>
+> L'espressione cron viene rifiutata in validazione anche quando è sintatticamente
+> valida ma non scatta mai (`0 0 30 2 *`): accettarla vorrebbe dire una
+> sorveglianza che non allarmerà mai, cioè il contrario di quanto richiesto. Il
+> calcolo avviene nel fuso dichiarato, quindi nei giorni di cambio dell'ora
+> l'occorrenza segue l'ora locale (un `0 2 * * *` nel giorno in cui le 2 non
+> esistono scivola al primo istante valido).
 
 #### `severity_rules`
 | Campo | Tipo | Note |

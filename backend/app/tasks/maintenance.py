@@ -36,6 +36,7 @@ from app.services.surveillance import (
     alert_deadline,
     missing_content,
     recovered_content,
+    reference_instant,
     schedule_from_receiver,
 )
 from app.tasks.celery_app import celery_app
@@ -409,15 +410,6 @@ def _synthetic_notification(
     )
 
 
-def _reference_instant(receiver: Receiver) -> datetime | None:
-    """Da quando si conta l'attesa: l'ultimo invio vero, oppure il momento in cui
-    la politica e' entrata in vigore per un receiver che non ha mai ricevuto
-    niente. Senza nessuno dei due non si puo' decidere e si lascia stare."""
-    if receiver.last_notification_at is not None:
-        return receiver.last_notification_at
-    return receiver.expected_since
-
-
 @celery_app.task(name="app.tasks.maintenance.check_expected_schedules")
 def check_expected_schedules() -> None:
     """Dead man's switch dei receiver sorvegliati (spec 11, job 8).
@@ -514,12 +506,12 @@ def check_expected_schedules() -> None:
                 if receiver.missing_alerted_at is not None:
                     continue
 
-                reference = _reference_instant(receiver)
+                reference = reference_instant(receiver)
                 if reference is None:
                     continue
 
                 try:
-                    deadline = alert_deadline(schedule, reference=reference, now=now)
+                    deadline = alert_deadline(schedule, reference=reference)
                 except InvalidScheduleError as exc:
                     # Senza questa protezione un solo receiver con cron o fuso non
                     # calcolabile faceva morire il job a ogni giro, spegnendo la

@@ -237,6 +237,40 @@ Se un receiver allarma ogni giorno senza motivo, i sospetti sono due: il job usa
 `--only-on-failure` (i successi non inviano niente, quindi sono assenze), oppure
 la tolleranza non copre la durata del job, che invia solo a fine esecuzione.
 
+Se invece un receiver **non** allarma quando dovrebbe, si guarda da cosa conta il
+job: il riferimento e' il piu' recente fra `last_notification_at` e
+`expected_since`, e la scadenza e' la prima occorrenza attesa *dopo* quel
+riferimento piu' la tolleranza.
+
+```sql
+SELECT slug, status, expected_every_seconds, expected_cron, expected_timezone,
+       expected_grace_seconds, last_notification_at, expected_since, missing_alerted_at
+FROM receivers WHERE slug = '<slug>';
+```
+
+- `expected_since` di pochi minuti fa su un receiver che tace da giorni: la
+  finestra e' ripartita. Succede accendendo la sorveglianza, spegnendola e
+  riaccendendola, o riportando `active` un receiver `disabled` - tutti casi in cui
+  il silenzio precedente non era un guasto. E' voluto: il primo allarme arrivera'
+  alla prima scadenza dopo la riaccensione.
+- `missing_alerted_at` valorizzato: l'assenza e' gia' stata segnalata e non si
+  ripete. Si riarma da sola al primo invio vero (che produce la `recovered`).
+- entrambi NULL insieme a `last_notification_at`: non c'e' da cosa misurare e il
+  job non decide. E' una riga scritta a mano o migrata; basta una PATCH sulla
+  politica per rimettere `expected_since`.
+
+**Riattivare un tenant sospeso.** La sospensione non passa dall'API (`tenants.status`
+si cambia in SQL) e il job salta i tenant sospesi: alla riattivazione tutti i loro
+receiver sorvegliati risultano in silenzio da quanto e' durata la sospensione e
+allarmano al primo giro. Se la sospensione e' durata piu' della finestra piu'
+corta, si fa ripartire l'attesa insieme allo `status`:
+
+```sql
+UPDATE tenants SET status = 'active' WHERE id = '<tenant_id>';
+UPDATE receivers SET expected_since = now(), missing_alerted_at = NULL
+WHERE tenant_id = '<tenant_id>' AND missing_severity IS NOT NULL;
+```
+
 ## Quote per Tenant
 
 L'enforcement delle quote (`app/services/quota.py`) e sincrono, dentro la richiesta di ingestion:

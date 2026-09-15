@@ -443,3 +443,92 @@ async def test_notifica_sintetica_non_conta_come_battito(two_tenants):
     assert receiver.last_notification_at == ultimo
     notifiche = await _notifiche(tenant_id, receiver_id)
     assert [n.severity_source for n in notifiche] == [SeveritySource.MISSING]
+
+
+@pytest.mark.integration
+async def test_cron_con_tolleranza_piu_lunga_del_periodo_allarma_comunque(two_tenants):
+    """Regressione: la scadenza si ancora alla prima occorrenza DOPO l'ultimo
+    invio, non alla prossima da adesso. Ancorandola ad adesso, una tolleranza
+    lunga quanto o piu' del periodo (qui 2h su un cron orario) spostava la
+    scadenza sempre nel futuro e l'allarme non scattava mai."""
+    tenant_id, _ = two_tenants
+    receiver_id = await create_receiver(tenant_id, uuid.uuid4().hex[:22])
+    await _sorveglia(
+        tenant_id,
+        receiver_id,
+        every_seconds=None,
+        cron="0 * * * *",
+        timezone="UTC",
+        grace_seconds=7200,
+        last_notification_at=datetime.now(UTC) - timedelta(days=3),
+    )
+
+    _esegui_job()
+
+    notifiche = await _notifiche(tenant_id, receiver_id)
+    assert len(notifiche) == 1
+    assert notifiche[0].severity_source == SeveritySource.MISSING
+
+
+@pytest.mark.integration
+async def test_cron_dentro_la_tolleranza_non_allarma(two_tenants):
+    """Controprova del test precedente: con l'invio appena arrivato la scadenza
+    resta di la' da venire e il job non deve scrivere niente."""
+    tenant_id, _ = two_tenants
+    receiver_id = await create_receiver(tenant_id, uuid.uuid4().hex[:22])
+    await _sorveglia(
+        tenant_id,
+        receiver_id,
+        every_seconds=None,
+        cron="0 * * * *",
+        timezone="UTC",
+        grace_seconds=7200,
+        last_notification_at=datetime.now(UTC) - timedelta(minutes=10),
+    )
+
+    _esegui_job()
+
+    assert await _notifiche(tenant_id, receiver_id) == []
+    assert (await _receiver(tenant_id, receiver_id)).missing_alerted_at is None
+
+
+@pytest.mark.integration
+async def test_cron_mai_ricevuto_niente_si_conta_da_expected_since(two_tenants):
+    """Anche in forma cron il receiver che non ha mai inviato ha un riferimento:
+    l'istante in cui la sorveglianza e' stata accesa."""
+    tenant_id, _ = two_tenants
+    receiver_id = await create_receiver(tenant_id, uuid.uuid4().hex[:22])
+    await _sorveglia(
+        tenant_id,
+        receiver_id,
+        every_seconds=None,
+        cron="0 3 * * *",
+        timezone="Europe/Rome",
+        last_notification_at=None,
+        expected_since=datetime.now(UTC) - timedelta(days=3),
+    )
+
+    _esegui_job()
+
+    notifiche = await _notifiche(tenant_id, receiver_id)
+    assert len(notifiche) == 1
+    assert "mai" in notifiche[0].content
+
+
+@pytest.mark.integration
+async def test_riaccensione_recente_batte_un_invio_piu_vecchio(two_tenants):
+    """expected_since aggiornato dopo la riattivazione del receiver deve avere la
+    meglio su un last_notification_at di una settimana fa: e' il caso del
+    receiver riacceso, che non deve allarmare al primo giro del job."""
+    tenant_id, _ = two_tenants
+    receiver_id = await create_receiver(tenant_id, uuid.uuid4().hex[:22])
+    await _sorveglia(
+        tenant_id,
+        receiver_id,
+        last_notification_at=datetime.now(UTC) - timedelta(days=7),
+        expected_since=datetime.now(UTC) - timedelta(minutes=1),
+    )
+
+    _esegui_job()
+
+    assert await _notifiche(tenant_id, receiver_id) == []

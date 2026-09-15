@@ -18,8 +18,9 @@ Due modi di dichiarare l'attesa, mai insieme:
     darebbe un falso allarme ogni sabato.
 
 In entrambi i casi la funzione pubblica e' una sola, `alert_deadline`: l'istante
-oltre il quale l'assenza diventa un allarme. "E' in ritardo" e' `now > deadline`,
-e la stessa data si mostra in dashboard come "allarme se non arriva entro...".
+oltre il quale l'assenza diventa un allarme, contato dall'ultimo invio vero.
+"E' in ritardo" e' `now > deadline`, e la stessa data si mostra in dashboard come
+"allarme se non arriva entro...".
 """
 
 from dataclasses import dataclass
@@ -94,6 +95,15 @@ def validate_cron(expression: str) -> str:
         )
     if not croniter.is_valid(candidate):
         raise InvalidScheduleError(f"espressione cron non valida: {candidate!r}")
+    try:
+        # `0 0 30 2 *` (30 febbraio) e `0 0 31 4 *` (31 aprile) passano is_valid
+        # ma non scattano mai: accettarli vorrebbe dire salvare una sorveglianza
+        # che non sorveglia, e accorgersene solo leggendo i log del job.
+        croniter(candidate, datetime.now(UTC)).get_next(datetime)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise InvalidScheduleError(
+            f"l'espressione cron non scatta mai: {candidate!r} ({exc})"
+        ) from exc
     return candidate
 
 
@@ -112,8 +122,8 @@ def _zone(schedule: ExpectedSchedule) -> ZoneInfo:
     return ZoneInfo(schedule.timezone or DEFAULT_TIMEZONE)
 
 
-def _cron_fire_times(schedule: ExpectedSchedule, now: datetime) -> tuple[datetime, datetime]:
-    """Occorrenza precedente e successiva rispetto a `now`, in UTC.
+def next_fire_after(schedule: ExpectedSchedule, moment: datetime) -> datetime:
+    """Prima occorrenza del cron successiva a `moment`, in UTC.
 
     Il conto si fa nel fuso dichiarato e non in UTC: "0 3 * * *" a Roma vuol dire
     le 3 di notte anche il giorno in cui l'ora legale sposta l'orologio.
@@ -128,46 +138,61 @@ def _cron_fire_times(schedule: ExpectedSchedule, now: datetime) -> tuple[datetim
     assert schedule.cron is not None  # garantito da is_cron
     try:
         zone = _zone(schedule)
-        base = now.astimezone(zone)
-        iterator = croniter(schedule.cron, base)
-        previous = iterator.get_prev(datetime)
+        iterator = croniter(schedule.cron, moment.astimezone(zone))
         following = iterator.get_next(datetime)
     except (ZoneInfoNotFoundError, ValueError, KeyError, TypeError) as exc:
         raise InvalidScheduleError(
             f"attesa non calcolabile (cron={schedule.cron!r}, "
             f"fuso={schedule.timezone or DEFAULT_TIMEZONE!r}): {exc}"
         ) from exc
-    return previous.astimezone(UTC), following.astimezone(UTC)
+    return following.astimezone(UTC)
 
 
-def alert_deadline(
-    schedule: ExpectedSchedule,
-    *,
-    reference: datetime,
-    now: datetime,
-) -> datetime:
+def alert_deadline(schedule: ExpectedSchedule, *, reference: datetime) -> datetime:
     """Istante oltre il quale l'assenza e' un allarme.
 
     `reference` e' l'ultimo invio vero, oppure il momento in cui la politica e'
-    entrata in vigore per un receiver che non ha mai ricevuto niente.
+    entrata in vigore (vedi `reference_instant`).
 
-    Col cron non basta "ultima occorrenza + tolleranza": se l'invio dell'ultima
-    occorrenza e' arrivato, la scadenza da mostrare (e da attendere) e' quella
-    della prossima. Cosi' la stessa funzione risponde sia a "e' in ritardo?" sia
-    a "entro quando lo aspetto?".
+    Col cron la scadenza e' la PRIMA occorrenza successiva all'ultimo invio, piu'
+    la tolleranza: e' l'esecuzione che sarebbe dovuta arrivare e non e' arrivata.
+    Ancorare il conto a "adesso" invece che all'ultimo invio sembra equivalente e
+    non lo e': con una tolleranza pari o superiore al periodo (`*/5 * * * *` con
+    15 minuti di tolleranza) l'ultima occorrenza *rispetto ad adesso* si sposta
+    in avanti a ogni giro insieme alla scadenza, che resta percio' sempre nel
+    futuro e non scatta mai. Cosi' invece la scadenza sta ferma dove l'ha
+    lasciata l'ultimo invio, e la stessa funzione risponde sia a "e' in ritardo?"
+    sia a "entro quando lo aspetto?".
     """
     grace = timedelta(seconds=schedule.grace_seconds)
     if not schedule.is_cron:
         assert schedule.every_seconds is not None
         return reference + timedelta(seconds=schedule.every_seconds) + grace
 
-    previous, following = _cron_fire_times(schedule, now)
-    fire = previous if reference < previous else following
-    return fire + grace
+    return next_fire_after(schedule, reference) + grace
 
 
 def is_missing(schedule: ExpectedSchedule, *, reference: datetime, now: datetime) -> bool:
-    return now > alert_deadline(schedule, reference=reference, now=now)
+    return now > alert_deadline(schedule, reference=reference)
+
+
+def reference_instant(receiver: "Receiver") -> datetime | None:
+    """Da quando si conta l'attesa.
+
+    Il piu' recente fra l'ultimo invio vero e il momento in cui la sorveglianza
+    ha iniziato a guardare (`expected_since`, riscritto quando la politica viene
+    accesa o quando un receiver disabilitato torna attivo). Il massimo dei due e
+    non il solo `last_notification_at`: un receiver spento per un mese, o appena
+    messo sotto sorveglianza, ha alle spalle un silenzio che nessuno gli ha
+    chiesto di riempire, e conterebbe come ritardo gia' al primo giro del job.
+    Senza nessuno dei due non si puo' decidere e si lascia stare.
+    """
+    candidates = [
+        moment
+        for moment in (receiver.last_notification_at, receiver.expected_since)
+        if moment is not None
+    ]
+    return max(candidates) if candidates else None
 
 
 # --- testi ------------------------------------------------------------------

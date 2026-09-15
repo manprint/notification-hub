@@ -195,6 +195,11 @@ async def test_avvio_senza_conclusione_finisce_nella_notifica_di_assenza(
             .values(
                 last_notification_at=now - timedelta(days=3),
                 last_start_at=now - timedelta(days=2),
+                # La sorveglianza conta dal piu' recente fra l'ultimo invio e
+                # `expected_since` (services/surveillance.reference_instant):
+                # per simulare un receiver muto da tre giorni vanno indietro
+                # entrambi, altrimenti la politica risulta accesa un istante fa.
+                expected_since=now - timedelta(days=10),
             )
         )
 
@@ -229,7 +234,10 @@ async def test_senza_ping_di_avvio_lassenza_dichiara_di_non_sapere(
         await session.execute(
             update(Receiver)
             .where(Receiver.id == uuid.UUID(receiver["id"]))
-            .values(last_notification_at=datetime.now(UTC) - timedelta(days=3))
+            .values(
+                last_notification_at=datetime.now(UTC) - timedelta(days=3),
+                expected_since=datetime.now(UTC) - timedelta(days=10),
+            )
         )
 
     check_expected_schedules()

@@ -12,7 +12,7 @@ from app.core.errors import PROBLEM_TYPES, Problem
 from app.core.logging import get_logger
 from app.core.security import AccessClaims
 from app.core.urls import ingest_url, public_base_url
-from app.db.types import NotificationPhase, SeveritySource
+from app.db.types import NotificationPhase, ReceiverStatus, SeveritySource
 from app.models.group import Group
 from app.models.receiver import Receiver
 from app.models.severity_preset import (
@@ -50,6 +50,7 @@ from app.services.slug import build_receiver_slug
 from app.services.surveillance import (
     InvalidScheduleError,
     alert_deadline,
+    reference_instant,
     schedule_from_receiver,
 )
 from app.services.wrapper_script import (
@@ -75,11 +76,14 @@ def _receiver_out(receiver: Receiver, request: Request) -> ReceiverOut:
     # fa nel browser, e la dashboard deve mostrare la stessa data che usa il job.
     schedule = schedule_from_receiver(receiver)
     if schedule is not None:
-        reference = receiver.last_notification_at or receiver.expected_since
+        # Stessa regola del job (services/surveillance.reference_instant): la
+        # scadenza mostrata in dashboard e quella su cui scatta l'allarme devono
+        # essere lo stesso numero, altrimenti la UI mente.
+        reference = reference_instant(receiver)
         if reference is not None:
             now = datetime.now(UTC)
             try:
-                deadline = alert_deadline(schedule, reference=reference, now=now)
+                deadline = alert_deadline(schedule, reference=reference)
             except InvalidScheduleError:
                 # Un'attesa non calcolabile (cron o fuso arrivati in colonna per
                 # altre strade) resta senza scadenza: un solo receiver malformato
@@ -325,6 +329,7 @@ async def update_receiver(
 
     if body.name is not None:
         receiver.name = body.name
+    was_disabled = receiver.status == ReceiverStatus.DISABLED
     if body.status is not None:
         receiver.status = body.status
     if body.max_body_bytes is not None:
@@ -362,6 +367,19 @@ async def update_receiver(
     receiver.duration_severity = duration_severity
 
     _apply_expected_policy(receiver, body)
+
+    # Riaccendere un receiver fa ripartire l'attesa da adesso. Il silenzio di un
+    # receiver disabilitato e' voluto - l'ingestion gli risponde 404 - e contarlo
+    # come ritardo vorrebbe dire un allarme entro un minuto dalla riattivazione,
+    # per un job che magari gira alle 3 di notte. Stesso ragionamento (e stesse
+    # due righe) di quando la sorveglianza viene accesa da zero.
+    if (
+        was_disabled
+        and receiver.status == ReceiverStatus.ACTIVE
+        and receiver.missing_severity is not None
+    ):
+        receiver.expected_since = datetime.now(UTC)
+        receiver.missing_alerted_at = None
 
     # Il rename NON riscrive lo slug: e' la credenziale con cui gli script in
     # produzione stanno inviando, cambiarla di nascosto li spegnerebbe. Per
