@@ -3,13 +3,12 @@
 import base64
 import binascii
 import uuid
-from collections.abc import AsyncIterator
-from datetime import datetime
-from typing import Any, cast
+from collections.abc import AsyncIterator, Sequence
+from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select, update
-from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 from starlette.responses import StreamingResponse
@@ -21,6 +20,7 @@ from app.core.urls import public_base_url
 from app.db.types import NotificationStatus, Severity, SeveritySource
 from app.models.notification import Notification
 from app.models.receiver import Receiver
+from app.models.user import User
 from app.schemas.notification import (
     LIST_PREVIEW_CHARS,
     BulkReadIn,
@@ -29,6 +29,11 @@ from app.schemas.notification import (
     NotificationDetailOut,
     NotificationListItemOut,
     NotificationListOut,
+)
+from app.services.audit import (
+    ACTION_BULK_MARKED_READ,
+    BULK_IDS_CAP,
+    record_context_event,
 )
 from app.services.authz import accessible_group_ids, assert_group_access
 
@@ -139,6 +144,27 @@ async def _apply_filters(
     return True
 
 
+async def _handler_emails(
+    session: AsyncSession, notifications: Sequence[Notification]
+) -> dict[uuid.UUID, str]:
+    """Email di chi ha letto o verificato, risolte in una query sola.
+
+    Denormalizzare l'id sulla notifica e risolvere l'email al momento della
+    lettura tiene la riga leggibile anche dopo un cambio di indirizzo, senza
+    duplicare l'email su ogni notifica.
+    """
+    ids = {
+        actor_id
+        for n in notifications
+        for actor_id in (n.read_by, n.verified_by)
+        if actor_id is not None
+    }
+    if not ids:
+        return {}
+    rows = await session.execute(select(User.id, User.email).where(User.id.in_(ids)))
+    return {row[0]: row[1] for row in rows}
+
+
 @router.get("", response_model=NotificationListOut)
 async def list_notifications(
     group_id: uuid.UUID | None = Query(default=None),  # noqa: B008
@@ -215,6 +241,8 @@ async def list_notifications(
     )
     unread_count = unread_result.scalar_one()
 
+    emails = await _handler_emails(session, rows)
+
     return NotificationListOut(
         notifications=[
             NotificationListItemOut(
@@ -231,6 +259,10 @@ async def list_notifications(
                 exit_code=n.exit_code,
                 status=n.status,
                 verified=n.verified,
+                read_by_email=emails.get(n.read_by) if n.read_by else None,
+                read_at=n.read_at,
+                verified_by_email=emails.get(n.verified_by) if n.verified_by else None,
+                verified_at=n.verified_at,
                 received_at=n.received_at,
             )
             for n in rows
@@ -274,6 +306,7 @@ async def get_notification(
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> NotificationDetailOut:
     notification = await _get_notification_or_404(session, claims, notification_id)
+    emails = await _handler_emails(session, [notification])
     content_url = None
     if notification.storage_backend == "object":
         # Origine risolta sulla richiesta: dietro reverse proxy il link deve
@@ -296,6 +329,12 @@ async def get_notification(
         exit_code=notification.exit_code,
         status=notification.status,
         verified=notification.verified,
+        read_by_email=emails.get(notification.read_by) if notification.read_by else None,
+        read_at=notification.read_at,
+        verified_by_email=emails.get(notification.verified_by)
+        if notification.verified_by
+        else None,
+        verified_at=notification.verified_at,
         received_at=notification.received_at,
         source_ip=notification.source_ip,
     )
@@ -348,11 +387,22 @@ async def mark_notification_status(
     accesso in sola lettura (spec 3, ruoli) e prima poteva invece marcare come
     letta o verificata qualunque notifica dei gruppi che gli sono visibili."""
     notification = await _get_notification_or_404(session, claims, notification_id, write=True)
-    if body.status is not None:
+    actor_id = uuid.UUID(claims.sub)
+    now = datetime.now(UTC)
+    # Assegnazioni solo sui cambiamenti reali: una PATCH che riafferma lo stato
+    # gia presente non deve riscrivere l'attore (ne' produrre un evento di
+    # audit, che nasce proprio dal diff dei campi cambiati).
+    if body.status is not None and body.status != notification.status:
         notification.status = body.status
-    if body.verified is not None:
+        read = body.status == NotificationStatus.READ
+        notification.read_by = actor_id if read else None
+        notification.read_at = now if read else None
+    if body.verified is not None and body.verified != notification.verified:
         notification.verified = body.verified
+        notification.verified_by = actor_id if body.verified else None
+        notification.verified_at = now if body.verified else None
     await session.flush()
+    emails = await _handler_emails(session, [notification])
 
     content_url = None
     if notification.storage_backend == "object":
@@ -374,6 +424,12 @@ async def mark_notification_status(
         exit_code=notification.exit_code,
         status=notification.status,
         verified=notification.verified,
+        read_by_email=emails.get(notification.read_by) if notification.read_by else None,
+        read_at=notification.read_at,
+        verified_by_email=emails.get(notification.verified_by)
+        if notification.verified_by
+        else None,
+        verified_at=notification.verified_at,
         received_at=notification.received_at,
         source_ip=notification.source_ip,
     )
@@ -405,13 +461,44 @@ async def bulk_mark_read(
         return BulkReadOut(marked_read=0)
     conditions.append(Notification.status == NotificationStatus.UNREAD)
 
-    result = cast(
-        CursorResult[Any],
-        await session.execute(
-            update(Notification).where(*conditions).values(status=NotificationStatus.READ)
-        ),
+    # RETURNING invece di un secondo SELECT: gli id servono all'audit (un solo
+    # evento per l'intera operazione, decisione D10 del piano) e prenderli
+    # dalla stessa UPDATE evita sia la query in piu' sia la finestra in cui le
+    # righe potrebbero cambiare fra le due.
+    result = await session.execute(
+        update(Notification)
+        .where(*conditions)
+        .values(
+            status=NotificationStatus.READ,
+            read_by=uuid.UUID(claims.sub),
+            read_at=datetime.now(UTC),
+        )
+        .returning(Notification.id)
     )
-    return BulkReadOut(marked_read=result.rowcount or 0)
+    marked_ids = [row[0] for row in result]
+
+    if marked_ids:
+        # L'UPDATE di massa non passa dall'ORM: l'hook di audit non la vede e
+        # l'evento va scritto a mano.
+        context: dict[str, Any] = {
+            "filters": body.model_dump(mode="json", by_alias=True, exclude_none=True),
+            "count": len(marked_ids),
+        }
+        if len(marked_ids) <= BULK_IDS_CAP:
+            context["notification_ids"] = [str(notification_id) for notification_id in marked_ids]
+        else:
+            # Oltre il tetto l'elenco diventa una fotografia della coda dentro
+            # una colonna jsonb: restano filtri e conteggio, che dicono cosa e'
+            # successo senza gonfiare la riga.
+            context["notification_ids_truncated"] = True
+        await record_context_event(
+            session,
+            action=ACTION_BULK_MARKED_READ,
+            resource_type="notification",
+            context=context,
+        )
+
+    return BulkReadOut(marked_read=len(marked_ids))
 
 
 @router.delete("/{notification_id}", status_code=204)

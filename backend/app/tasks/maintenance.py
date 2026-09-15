@@ -4,8 +4,10 @@ iterano i tenant e impostano app.tenant_id per ciascuno (spec 5.3)."""
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
@@ -19,6 +21,7 @@ from app.db.types import (
     SeveritySource,
     TenantStatus,
 )
+from app.models.audit_event import AuditEvent
 from app.models.delivery import Delivery
 from app.models.group import Group
 from app.models.invitation import Invitation
@@ -83,6 +86,54 @@ def purge_notifications() -> None:
                 break
         logger.info("purge_notifications_done", tenant_id=str(tenant_id), deleted=deleted_total)
     maintenance_job_runs_total.labels(job="purge_notifications", outcome="success").inc()
+
+
+@celery_app.task(name="app.tasks.maintenance.purge_audit_events")
+def purge_audit_events() -> None:
+    """Ritenzione dell'audit, separata da quella delle notifiche (spec 9.6).
+
+    `audit_retention_days` e' di default 365 contro i 90 di `retention_days`:
+    l'audit deve poter raccontare chi ha gestito una notifica anche quando
+    quella notifica e' gia stata cancellata. NULL = conservazione illimitata,
+    e questi tenant non vengono nemmeno letti dalla query qui sotto.
+    """
+    with sync_session_factory() as session:
+        tenants = session.execute(
+            select(Tenant.id, Tenant.audit_retention_days).where(
+                Tenant.audit_retention_days.isnot(None)
+            )
+        ).all()
+
+    for tenant_id, retention_days in tenants:
+        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+        deleted_total = 0
+        while True:
+            with tenant_session_sync(tenant_id) as session:
+                # Niente SELECT ... FOR UPDATE SKIP LOCKED come nelle altre
+                # purge: bloccare una riga richiede il privilegio di UPDATE,
+                # che su audit_events e' revocato apposta (migrazione 0016).
+                # Il lock di riga della DELETE basta: questo job e' l'unico
+                # scrittore che cancella, e gira una volta al giorno.
+                oldest = (
+                    select(AuditEvent.id)
+                    .where(
+                        AuditEvent.tenant_id == tenant_id,
+                        AuditEvent.occurred_at < cutoff,
+                    )
+                    .order_by(AuditEvent.occurred_at.asc(), AuditEvent.id.asc())
+                    .limit(PURGE_BATCH_SIZE)
+                    .scalar_subquery()
+                )
+                result = cast(
+                    CursorResult[Any],
+                    session.execute(delete(AuditEvent).where(AuditEvent.id.in_(oldest))),
+                )
+                batch_size = result.rowcount or 0
+            deleted_total += batch_size
+            if batch_size < PURGE_BATCH_SIZE:
+                break
+        logger.info("purge_audit_events_done", tenant_id=str(tenant_id), deleted=deleted_total)
+    maintenance_job_runs_total.labels(job="purge_audit_events", outcome="success").inc()
 
 
 @celery_app.task(name="app.tasks.maintenance.purge_deliveries")

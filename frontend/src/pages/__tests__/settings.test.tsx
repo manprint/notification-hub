@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { describe, expect, it } from "vitest";
 import SettingsPage from "../SettingsPage";
+import { setRefreshToken } from "../../api/client";
+import { fixtureMe } from "../../api/mocks/handlers";
 import { server } from "../../api/mocks/server";
 import { renderWithProviders } from "./testUtils";
 
@@ -40,5 +42,47 @@ describe("SettingsPage", () => {
       expect(screen.getByText(/Backup notturno/)).toBeInTheDocument();
     });
     expect(screen.getByText(/API pubblica/)).toBeInTheDocument();
+  });
+
+  it("un admin vede le schede dell'audit ma non il modulo delle quote", async () => {
+    // La sessione si carica solo con un refresh token presente: senza, il
+    // ruolo resta null e la pagina non saprebbe di avere davanti un admin.
+    setRefreshToken("refresh-token-fixture");
+    server.use(
+      http.get("/api/v1/auth/me", () => HttpResponse.json({ ...fixtureMe, role: "admin" })),
+    );
+
+    renderWithProviders(<SettingsPage />);
+
+    expect(
+      await screen.findByText(/Le impostazioni generali sono riservate all'owner/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Audit" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Letture e verifiche" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Generali" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/cap corpo/i)).not.toBeInTheDocument();
+  });
+
+  it("l'owner puo' impostare la retention dell'audit", async () => {
+    const bodies: unknown[] = [];
+    server.use(
+      http.patch("/api/v1/tenant", async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({});
+      }),
+    );
+
+    const user = userEvent.setup();
+    renderWithProviders(<SettingsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/retention audit/i)).toBeInTheDocument();
+    });
+    await user.type(screen.getByLabelText(/retention audit/i), "730");
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+
+    await waitFor(() => {
+      expect(bodies).toEqual([{ audit_retention_days: 730 }]);
+    });
   });
 });

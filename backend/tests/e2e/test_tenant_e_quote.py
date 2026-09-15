@@ -56,6 +56,7 @@ async def test_lettura_delle_impostazioni(api_client, two_tenants, owner_token):
         "max_notifications_per_day",
         "max_storage_bytes",
         "retention_days",
+        "audit_retention_days",
         "status",
     }
 

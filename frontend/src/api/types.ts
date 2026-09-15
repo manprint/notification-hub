@@ -306,6 +306,12 @@ export interface NotificationListItemOut {
   exit_code: number | null;
   status: NotificationStatus;
   verified: boolean;
+  // Chi ha gestito la notifica: visibile a chiunque la veda, mentre lo storico
+  // completo dei passaggi sta nell'audit (owner e admin).
+  read_by_email: string | null;
+  read_at: string | null;
+  verified_by_email: string | null;
+  verified_at: string | null;
   received_at: string;
 }
 
@@ -331,6 +337,10 @@ export interface NotificationDetailOut {
   exit_code: number | null;
   status: NotificationStatus;
   verified: boolean;
+  read_by_email: string | null;
+  read_at: string | null;
+  verified_by_email: string | null;
+  verified_at: string | null;
   received_at: string;
   source_ip: string | null;
 }
@@ -370,5 +380,38 @@ export interface TenantOut {
   max_notifications_per_day: number | null;
   max_storage_bytes: number | null;
   retention_days: number | null;
+  audit_retention_days: number | null;
   status: TenantStatus;
+}
+
+export type AuditOutcome = "success" | "failure";
+
+export interface AuditChange {
+  before: unknown;
+  after: unknown;
+}
+
+export interface AuditEventOut {
+  id: string;
+  occurred_at: string;
+  // null quando l'utente e' stato cancellato: email e ruolo restano quelli
+  // congelati al momento del fatto.
+  actor_user_id: string | null;
+  actor_email: string;
+  actor_role: UserRole;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  resource_label: string | null;
+  outcome: AuditOutcome;
+  ip: string | null;
+  user_agent: string | null;
+  request_id: string | null;
+  changes: Record<string, AuditChange> | null;
+  context: Record<string, unknown> | null;
+}
+
+export interface AuditEventListOut {
+  events: AuditEventOut[];
+  next_cursor: string | null;
 }

@@ -10,6 +10,12 @@ from app.core.errors import PROBLEM_TYPES, Problem
 from app.core.security import AccessClaims, decode_access_token
 from app.db.session import tenant_session
 from app.db.types import UserRole
+from app.services.audit import (
+    AuditContext,
+    current_request_id,
+    reset_audit_context,
+    set_audit_context,
+)
 
 
 def client_ip(request: Request) -> str:
@@ -48,7 +54,36 @@ async def current_claims(authorization: str | None = Header(default=None)) -> Ac
     return decode_access_token(token)
 
 
-async def db(claims: AccessClaims = Depends(current_claims)) -> AsyncIterator[AsyncSession]:  # noqa: B008
+async def audit_scope(  # noqa: B008
+    request: Request,
+    claims: AccessClaims = Depends(current_claims),  # noqa: B008
+) -> AsyncIterator[None]:
+    """Attore della richiesta, visibile all'hook di audit (services/audit.py).
+
+    Sta qui e non in un middleware perche' l'attore lo dicono i claims del
+    token, che il middleware non ha ancora decodificato. Essendo agganciato a
+    `db`, copre per costruzione ogni endpoint autenticato: uno nuovo e'
+    tracciato senza che nessuno se ne debba ricordare.
+    """
+    context = AuditContext(
+        tenant_id=uuid.UUID(claims.tid),
+        actor_user_id=uuid.UUID(claims.sub),
+        actor_role=UserRole(claims.role),
+        ip=client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        request_id=current_request_id(),
+    )
+    token = set_audit_context(context)
+    try:
+        yield
+    finally:
+        reset_audit_context(token)
+
+
+async def db(  # noqa: B008
+    claims: AccessClaims = Depends(current_claims),  # noqa: B008
+    _audit: None = Depends(audit_scope),  # noqa: B008
+) -> AsyncIterator[AsyncSession]:
     async with tenant_session(uuid.UUID(claims.tid)) as session:
         yield session
 

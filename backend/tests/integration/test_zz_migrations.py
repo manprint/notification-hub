@@ -48,6 +48,7 @@ def test_upgrade_e_downgrade(migrated_db):
         "deliveries",
         "pending_object_deletions",
         "user_group_memberships",
+        "audit_events",
         "alembic_version",  # bookkeeping di alembic stesso, non della spec
     }
 

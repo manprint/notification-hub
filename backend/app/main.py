@@ -106,6 +106,7 @@ def create_app() -> FastAPI:
 
     from app.api import ingest
     from app.api.v1 import (
+        audit,
         auth,
         channels,
         groups,
@@ -128,6 +129,7 @@ def create_app() -> FastAPI:
     app.include_router(tenant.router, prefix="/api/v1")
     app.include_router(notifications.router, prefix="/api/v1")
     app.include_router(stats.router, prefix="/api/v1")
+    app.include_router(audit.router, prefix="/api/v1")
 
     # ROUTERS: i router delle fasi successive si registrano qui sopra
 

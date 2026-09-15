@@ -102,6 +102,19 @@ class Notification(Base, UUIDPrimaryKeyMixin):
     # Flag di revisione manuale: l'operatore puo' contrassegnare una notifica
     # come verificata. Indipendente da status (unread/read). Default false.
     verified: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="false")
+    # Chi ha gestito la notifica, denormalizzato: risponde a "chi l'ha letta /
+    # verificata" a chiunque veda la notifica, senza aprire l'audit (riservato a
+    # owner e admin). Lo STORICO dei passaggi, ripristini compresi, resta in
+    # audit_events. ON DELETE SET NULL perche' cancellare un utente non deve
+    # cancellare la notifica.
+    read_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source_ip: Mapped[str | None] = mapped_column(nullable=True)
     meta: Mapped[dict[str, Any]] = mapped_column(

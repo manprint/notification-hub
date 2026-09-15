@@ -348,6 +348,30 @@ dead → pending    (solo via POST /deliveries/{id}/retry, che azzera attempts, 
 
 ---
 
+### 4.4 Audit
+
+#### `audit_events`
+| Campo | Tipo | Note |
+|---|---|---|
+| id | UUID PK | |
+| tenant_id | FK | RLS forzata come ogni tabella di tenant |
+| occurred_at | timestamptz | default `now()` |
+| actor_user_id | FK users, `ON DELETE SET NULL` | cancellare un utente non cancella la sua storia |
+| actor_email, actor_role | text, enum(user_role) | fotografia dell'attore al momento del fatto |
+| action | varchar(64) | `notification.marked_verified`, `receiver.updated`, `auth.login_failed`, … |
+| resource_type, resource_id | varchar(64), UUID nullable | **nessuna FK**: l'audit vive più a lungo di ciò che descrive |
+| resource_label | varchar(255) | etichetta leggibile congelata (nome del receiver, preview della notifica) |
+| outcome | enum(success, failure) | `failure` esiste per il solo login rifiutato |
+| ip, user_agent, request_id | — | provenienza della richiesta |
+| changes | jsonb | `{"campo": {"before": …, "after": …}}` dei soli campi cambiati, segreti mascherati |
+| context | jsonb | ciò che non è un diff: filtri e id di un bulk-read, motivo di un login fallito |
+
+Indici: `(tenant_id, occurred_at, id)` per la lista, `(tenant_id, resource_type, resource_id, occurred_at)` per la storia di una risorsa, `(tenant_id, actor_user_id, occurred_at)` e `(tenant_id, action, occurred_at)` per i filtri, più un GIN `jsonb_path_ops` su `(context -> 'notification_ids')` per ritrovare una singola notifica dentro un bulk-read.
+
+Le colonne **denormalizzate** `notifications.read_by/read_at/verified_by/verified_at` rispondono a "chi ha gestito questa notifica" a chiunque veda la notifica; lo **storico** dei passaggi, ripristini compresi, resta qui ed è riservato a owner e admin (§9.6).
+
+---
+
 ## 5. Multi-tenancy con Row Level Security
 
 ### 5.1 Policy
@@ -371,7 +395,7 @@ Nessun ruolo del sistema ha `BYPASSRLS` e nessuno è owner delle tabelle: una qu
 
 | Ruolo | Usato da | Privilegi |
 |---|---|---|
-| `notifyhub_app` | API autenticata, worker Celery, job per-tenant | CRUD su tutte le tabelle di dominio, sempre sotto `app.tenant_id` |
+| `notifyhub_app` | API autenticata, worker Celery, job per-tenant | CRUD su tutte le tabelle di dominio, sempre sotto `app.tenant_id`. Unica eccezione: su `audit_events` l'`UPDATE` è revocato, la tabella è append-only per l'applicazione |
 | `notifyhub_ingest` | Risoluzione dello slug su `/ingest/{slug}` | `SELECT` sulla sola `receivers`, policy dedicata per slug, senza contesto di tenant |
 | `notifyhub_auth` | Lookup pre-autenticazione | `SELECT` su `users`, `refresh_tokens`, `invitations`, policy dedicata, senza contesto di tenant |
 
@@ -690,8 +714,8 @@ Le sotto-risorse sono identificate da `channel_id`: `PUT`/`DELETE` su una collez
 | GET | `/api/v1/notifications` | Filtri: `group_id`, `receiver_id`, `status`, `verified`, `severity_min`, `source`, `q` (full-text), `from`, `to`. `status` (letta/non letta) e `verified` (revisione manuale) sono **due dimensioni indipendenti** e si combinano. Paginazione **a cursore** su `(received_at, id)` |
 | GET | `/api/v1/notifications/{id}` | Dettaglio. `content` inline se ≤1MB, altrimenti `content_url` |
 | GET | `/api/v1/notifications/{id}/content` | Streaming del corpo completo (proxy MinIO se offloaded) |
-| PATCH | `/api/v1/notifications/{id}` | Segna letta / non letta e verificata / non verificata. Body: almeno uno fra `status` e `verified`; body vuoto → 422 |
-| POST | `/api/v1/notifications/bulk-read` | Segna in blocco (per filtro, gli stessi della lista) |
+| PATCH | `/api/v1/notifications/{id}` | Segna letta / non letta e verificata / non verificata. Body: almeno uno fra `status` e `verified`; body vuoto → 422. Registra chi ha gestito la notifica (`read_by`/`read_at`, `verified_by`/`verified_at`, esposti come `read_by_email`/`verified_by_email`) e lascia un evento di audit (§9.6) |
+| POST | `/api/v1/notifications/bulk-read` | Segna in blocco (per filtro, gli stessi della lista). Un solo evento di audit per l'intera operazione, con filtri, conteggio e id delle notifiche toccate |
 | DELETE | `/api/v1/notifications/{id}` | Elimina |
 | GET | `/api/v1/stats/summary` | Conteggi per severity / non lette e albero gruppo → receiver (`by_group[].receivers[]`, con `total` e `unread_count` per receiver, compresi quelli a zero), per la home della dashboard |
 
@@ -707,6 +731,33 @@ Il filtro `q` è una **ricerca per sottostringa case-insensitive su `COALESCE(co
 I metacaratteri LIKE (`%`, `_`, `\`) digitati dall'utente sono neutralizzati: cercare `50%` cerca il testo `50%`, non un jolly. La semantica è per sottostringa e non per parola intera (`err` trova `error`), a differenza del `plainto_tsquery` usato fino alla migrazione 0014.
 
 *v2: `GET /api/v1/notifications/stream` (SSE) alimentato da Redis pub/sub.*
+
+---
+
+### 9.6 Audit
+
+Registro di **chi ha fatto cosa**, riservato a **owner e admin** (`require_admin`): un member o un viewer riceve 403 anche sui propri eventi. Cio' che serve a lavorare — chi ha letto o verificato una notifica — sta invece sulla notifica stessa ed e' visibile a chiunque la veda.
+
+| Metodo | Path | Descrizione |
+|---|---|---|
+| GET | `/api/v1/audit/events` | Tutti gli eventi. Filtri: `actor_user_id`, `action`, `resource_type`, `resource_id`, `outcome`, `from`, `to`. Paginazione a cursore su `(occurred_at, id)` DESC |
+| GET | `/api/v1/audit/notification-status` | Vista filtrata sulle sole letture e verifiche. Filtro `notification_id`: trova sia la PATCH singola (`resource_id`) sia i bulk-read, che portano gli id dentro `context` |
+| GET | `/api/v1/audit/export` | Gli stessi filtri, in CSV (`format=csv`, default) o JSON. Oltre 50.000 righe risponde 422: l'export e' un file da scaricare adesso, non un dump storico |
+
+Come nasce un evento:
+
+- **per costruzione**, da un hook `before_flush` di SQLAlchemy: ogni INSERT/UPDATE/DELETE passato dall'ORM durante una richiesta autenticata diventa un evento, con il diff dei soli campi cambiati. Un endpoint nuovo e' tracciato senza scrivere una riga nel router;
+- **esplicitamente**, per i fatti che l'ORM non vede: login riuscito, login fallito, logout, `bulk-read` (una sola UPDATE per N notifiche).
+
+Invarianti:
+
+- **Stessa transazione del fatto**. Se l'audit non si scrive, la modifica non si scrive.
+- **Nessun attore umano, nessun evento**. L'ingestion e i job Celery non ne producono: la notifica e' gia il proprio registro, e un secondo giornale del traffico di macchina non serve a nessuno.
+- **Segreti mascherati**. `webhook_url`, `password_hash`, `token_hash` e i corpi delle notifiche non finiscono nel diff: al loro posto `[redacted]`.
+- **Righe autosufficienti**. `actor_email`, `actor_role` e `resource_label` sono fotografie del momento del fatto; `actor_user_id` va a NULL se l'utente viene cancellato, e `resource_id` non ha alcuna FK verso `notifications`, che vivono meno dell'audit.
+- **Append-only per l'applicazione**: `REVOKE UPDATE ON audit_events FROM notifyhub_app` (migrazione 0016). Il `DELETE` resta per la sola purge di ritenzione.
+- **Login falliti**: registrati quando l'email corrisponde a un utente esistente. Con un'email sconosciuta non esiste il tenant a cui attribuire la riga (RLS): quel caso resta nei log strutturati.
+- **Richieste rifiutate** (403/422): nessun evento. Nulla e' cambiato, e il rifiuto sta nei log. Fa eccezione il login fallito, che e' il segnale di sicurezza per cui l'audit esiste.
 
 ---
 
@@ -764,6 +815,7 @@ Job Celery Beat. Tutti girano con il ruolo `notifyhub_app`, senza alcun privileg
 | Job | Frequenza | Azione |
 |---|---|---|
 | `purge_notifications` | ogni notte 03:00 | Per ogni tenant con `retention_days` non NULL, elimina le notifiche più vecchie. A batch di 10.000 righe per non bloccare la tabella |
+| `purge_audit_events` | ogni notte 05:00 | Per ogni tenant con `audit_retention_days` non NULL (default 365), elimina gli eventi di audit più vecchi, a batch di 10.000 righe. Ritenzione separata da quella delle notifiche, che di default è 90 giorni: l'audit deve sopravvivere a ciò che descrive. Non usa `SELECT … FOR UPDATE SKIP LOCKED` come le altre purge, perché bloccare una riga richiederebbe il privilegio di UPDATE, revocato apposta su questa tabella |
 | `purge_deliveries` | ogni notte 03:30 | Elimina le delivery `sent` più vecchie di 30 giorni; le `dead` restano finché non archiviate manualmente |
 | `cleanup_tokens` | ogni ora | Elimina refresh token scaduti/revocati e inviti scaduti |
 | `reconcile_deliveries` | ogni 5 min | Ripesca le delivery `pending`/`failed` con `next_attempt_at` scaduto e le `sending` con `locked_at` più vecchio di 10 minuti |

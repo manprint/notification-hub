@@ -757,3 +757,40 @@ details[open] > .group-summary::before {
   gap: var(--space-2);
   flex-wrap: wrap;
 }
+
+/* Schede di Impostazioni: stessa grammatica visiva del menu laterale, in
+   orizzontale, cosi' owner e admin riconoscono subito dove sono. */
+.tabs ul {
+  list-style: none;
+  display: flex;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  flex-wrap: wrap;
+}
+
+.tabs a {
+  display: block;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius);
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.tabs a:hover,
+.tabs a.active {
+  background: var(--color-surface-alt);
+}
+
+/* Il diff dei campi cambiati: una riga per campo, senza pallini, dentro la
+   cella della tabella. */
+.audit-changes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+}
+
+.audit-changes li + li {
+  margin-top: 2px;
+}

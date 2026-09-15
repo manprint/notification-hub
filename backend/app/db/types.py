@@ -88,6 +88,18 @@ class OverrideMode(StrEnum):
     MUTE = "mute"
 
 
+class AuditOutcome(StrEnum):
+    """Esito dell'operazione registrata nell'audit.
+
+    `failure` esiste per il solo caso in cui un rifiuto e' esso stesso il fatto
+    da registrare — un login sbagliato. Una mutazione rifiutata non lascia
+    evento: non ha cambiato nulla, e il rifiuto sta nei log strutturati.
+    """
+
+    SUCCESS = "success"
+    FAILURE = "failure"
+
+
 class DeliveryStatus(StrEnum):
     PENDING = "pending"
     SENDING = "sending"
@@ -135,6 +147,9 @@ override_mode_type = ENUM(
 )
 delivery_status_type = ENUM(
     DeliveryStatus, name="delivery_status", create_type=False, values_callable=_values
+)
+audit_outcome_type = ENUM(
+    AuditOutcome, name="audit_outcome", create_type=False, values_callable=_values
 )
 notification_phase_type = ENUM(
     NotificationPhase, name="notification_phase", create_type=False, values_callable=_values

@@ -1,3 +1,4 @@
+from app.models.audit_event import AuditEvent
 from app.models.binding import GroupChannelBinding, ReceiverChannelOverride
 from app.models.channel import DeliveryChannel
 from app.models.delivery import Delivery
@@ -35,4 +36,5 @@ __all__ = [
     "Delivery",
     "PendingObjectDeletion",
     "UserGroupMembership",
+    "AuditEvent",
 ]

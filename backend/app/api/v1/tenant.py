@@ -66,6 +66,8 @@ async def update_tenant(
         tenant.max_storage_bytes = body.max_storage_bytes
     if body.retention_days is not None:
         tenant.retention_days = body.retention_days
+    if body.audit_retention_days is not None:
+        tenant.audit_retention_days = body.audit_retention_days
 
     await session.flush()
     return TenantOut.model_validate(tenant)

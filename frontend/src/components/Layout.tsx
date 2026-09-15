@@ -17,7 +17,9 @@ const MENU_ITEMS: MenuItem[] = [
   { to: "/channels", label: "Canali", allowed: ["owner", "admin", "member"] },
   { to: "/deliveries", label: "Consegne", allowed: ["owner", "admin", "member", "viewer"] },
   { to: "/users", label: "Utenti", allowed: ["owner", "admin"] },
-  { to: "/settings", label: "Impostazioni", allowed: ["owner"] },
+  // owner + admin: l'audit vive sotto Impostazioni e serve a entrambi i
+  // ruoli; la scheda "Generali" resta riservata all'owner (SettingsTabs).
+  { to: "/settings", label: "Impostazioni", allowed: ["owner", "admin"] },
 ];
 
 export default function Layout() {

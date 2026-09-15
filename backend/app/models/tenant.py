@@ -19,6 +19,9 @@ class Tenant(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     max_notifications_per_day: Mapped[int | None] = mapped_column(nullable=True)
     max_storage_bytes: Mapped[int | None] = mapped_column(nullable=True)
     retention_days: Mapped[int | None] = mapped_column(nullable=True, default=90)
+    # Ritenzione dell'audit, separata da quella delle notifiche: l'audit deve
+    # sopravvivere a cio che descrive. NULL = conservazione illimitata.
+    audit_retention_days: Mapped[int | None] = mapped_column(nullable=True, default=365)
     status: Mapped[TenantStatus] = mapped_column(tenant_status_type, nullable=False)
 
     users: Mapped[list["User"]] = relationship(back_populates="tenant", lazy="raise")

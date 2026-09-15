@@ -27,6 +27,10 @@ celery_app.conf.update(
             "task": "app.tasks.maintenance.purge_notifications",
             "schedule": crontab(hour=3, minute=0),
         },
+        "purge-audit-events": {
+            "task": "app.tasks.maintenance.purge_audit_events",
+            "schedule": crontab(hour=5, minute=0),
+        },
         "purge-deliveries": {
             "task": "app.tasks.maintenance.purge_deliveries",
             "schedule": crontab(hour=3, minute=30),

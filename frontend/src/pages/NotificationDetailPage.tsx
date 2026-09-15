@@ -122,6 +122,21 @@ export default function NotificationDetailPage() {
         )}
         <p>Ricevuta: {new Date(data.received_at).toLocaleString("it-IT")}</p>
         {data.source_ip && <p>Sorgente: {data.source_ip}</p>}
+        {/* Chi ha gestito la notifica: la domanda ricorrente, a cui qui
+            risponde il solo stato corrente. Lo storico dei passaggi (e dei
+            ripristini) vive nell'audit, riservato a owner e admin. */}
+        {data.read_by_email && (
+          <p>
+            Letta da <strong>{data.read_by_email}</strong>
+            {data.read_at && ` il ${new Date(data.read_at).toLocaleString("it-IT")}`}
+          </p>
+        )}
+        {data.verified_by_email && (
+          <p>
+            Verificata da <strong>{data.verified_by_email}</strong>
+            {data.verified_at && ` il ${new Date(data.verified_at).toLocaleString("it-IT")}`}
+          </p>
+        )}
       </div>
 
       <div className="card">

@@ -100,7 +100,7 @@ Elenco completo in `.env.example`. Le principali:
 
 ## Job di Manutenzione
 
-Otto job Celery Beat, definiti in `app/tasks/maintenance.py` e schedulati in
+Nove job Celery Beat, definiti in `app/tasks/maintenance.py` e schedulati in
 `app/tasks/celery_app.py` (spec sezione 11). Il worker che li esegue e il servizio `worker`/`beat`
 del compose di produzione (profilo di default, non serve attivare nulla).
 
@@ -114,7 +114,22 @@ retention, a batch di 10.000 righe.
 **Importanza:** MEDIA. Se non gira, i tenant con retention configurata accumulano dati oltre il
 limite dichiarato.
 
-### 2. `purge_deliveries`
+### 2. `purge_audit_events`
+
+**Cosa fa:** per ogni tenant con `audit_retention_days` non NULL (default 365), elimina gli eventi
+di audit piu vecchi della retention, a batch di 10.000 righe.
+
+**Quando:** ogni notte alle 05:00.
+
+**Importanza:** BASSA. Se non gira, la tabella `audit_events` cresce oltre la ritenzione
+dichiarata; nessuna funzione si degrada.
+
+**Nota:** la ritenzione dell'audit e separata da quella delle notifiche (`retention_days`, default
+90) apposta: l'audit deve poter dire chi ha gestito una notifica anche dopo che la notifica e stata
+cancellata. Si imposta da Impostazioni → Generali (solo owner) o con
+`PATCH /api/v1/tenant {"audit_retention_days": N}`. NULL = conservazione illimitata.
+
+### 3. `purge_deliveries`
 
 **Cosa fa:** elimina le delivery `sent` piu vecchie di 30 giorni. Le `dead` restano finche non
 archiviate manualmente.
@@ -123,7 +138,7 @@ archiviate manualmente.
 
 **Importanza:** BASSA. Pulizia della tabella outbox.
 
-### 3. `cleanup_tokens`
+### 4. `cleanup_tokens`
 
 **Cosa fa:** elimina refresh token scaduti/revocati e inviti scaduti.
 
@@ -131,7 +146,7 @@ archiviate manualmente.
 
 **Importanza:** BASSA. Housekeeping.
 
-### 4. `reconcile_deliveries`
+### 5. `reconcile_deliveries`
 
 **Cosa fa:** ripesca le delivery `pending`/`failed` con `next_attempt_at` scaduto (copre un
 messaggio Celery perso dal broker) e le `sending` con `locked_at` piu vecchio di 10 minuti (copre
@@ -149,7 +164,7 @@ docker compose logs beat | grep reconcile-deliveries
 docker compose exec worker celery -A app.tasks.celery_app inspect active
 ```
 
-### 5. `drain_object_deletions`
+### 6. `drain_object_deletions`
 
 **Cosa fa:** svuota `pending_object_deletions` cancellando gli oggetti da MinIO. Dopo 10 tentativi
 falliti la riga resta e alimenta la metrica `notifyhub_maintenance_job_runs_total{job="drain_object_deletions",outcome="error"}`.
@@ -158,7 +173,7 @@ falliti la riga resta e alimenta la metrica `notifyhub_maintenance_job_runs_tota
 
 **Importanza:** MEDIA. Se non gira, gli oggetti cancellati lato applicativo restano su MinIO.
 
-### 6. `purge_orphan_objects`
+### 7. `purge_orphan_objects`
 
 **Cosa fa:** elimina gli oggetti del bucket piu vecchi di 24h senza riga corrispondente in
 `notifications.storage_key`. Recupera i PUT riusciti con commit Postgres fallito.
@@ -183,7 +198,7 @@ ancora in elenco, dichiarandosi riuscito. E' stato un difetto reale: vedi
 docker compose run --rm worker celery -A app.tasks.celery_app call app.tasks.maintenance.purge_orphan_objects
 ```
 
-### 7. `recompute_tenant_usage`
+### 8. `recompute_tenant_usage`
 
 **Cosa fa:** ricalcola lo spazio occupato per tenant (inline + oggetti MinIO), alimenta la gauge
 `notifyhub_tenant_storage_bytes` usata dall'enforcement di `max_storage_bytes` (spec 4.1, F7).
@@ -193,7 +208,7 @@ docker compose run --rm worker celery -A app.tasks.celery_app call app.tasks.mai
 **Importanza:** MEDIA. Se non gira, l'enforcement di `max_storage_bytes` lavora su dati non
 aggiornati fino al giorno successivo.
 
-### 8. `check_expected_schedules`
+### 9. `check_expected_schedules`
 
 **Ogni 60 secondi.** Sorveglianza dell'attesa dei receiver (dead man's switch):
 l'unico job che reagisce a cio' che *non* e' arrivato.
@@ -229,6 +244,27 @@ supera `max_notifications_per_day` o `max_storage_bytes` (entrambi NULL = illimi
 e `429` con `type: /problems/quota-exceeded`, nessuna sospensione automatica del tenant. Il campo
 `tenants.status` (`active`/`suspended`) e amministrativo: va cambiato esplicitamente via
 `PATCH /api/v1/tenant` o direttamente in database, non da un job.
+
+## Audit
+
+Chi ha fatto cosa: `audit_events`, consultabile da **owner e admin** in Impostazioni → Audit e
+Impostazioni → Letture e verifiche, o via `GET /api/v1/audit/events`,
+`/api/v1/audit/notification-status` e `/api/v1/audit/export` (CSV o JSON, massimo 50.000 righe per
+export). Member e viewer ricevono 403.
+
+Cosa aspettarsi:
+
+- **c'e** ogni modifica fatta da una persona autenticata (comprese letture e verifiche delle
+  notifiche, singole e in blocco), piu login riusciti, login rifiutati di utenti esistenti e
+  logout;
+- **non c'e** l'ingestion, ne i job Celery: non hanno un attore umano. Non ci sono nemmeno le
+  richieste rifiutate con 403/422, che restano nei log strutturati;
+- **non ci sono segreti**: `webhook_url`, hash di password e token, corpi delle notifiche sono
+  sostituiti da `[redacted]` nel diff.
+
+La tabella e append-only per l'applicazione (`REVOKE UPDATE`, migrazione 0016): un evento scritto
+non si corregge dall'API. Un DBA con accesso diretto al database resta fidato — non c'e firma ne
+catena di hash sulle righe.
 
 ## Backup e Ripristino
 

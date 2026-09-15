@@ -420,8 +420,46 @@ export const fixtureTenant = {
   max_notifications_per_day: null,
   max_storage_bytes: null,
   retention_days: 90,
+  audit_retention_days: 365,
   status: "active",
 };
+
+export const fixtureAuditEvents = [
+  {
+    id: "ae1",
+    occurred_at: "2026-09-15T10:00:00Z",
+    actor_user_id: "u2",
+    actor_email: "mario@acme.test",
+    actor_role: "member",
+    action: "notification.marked_verified",
+    resource_type: "notification",
+    resource_id: "n1",
+    resource_label: "Backup notturno fallito",
+    outcome: "success",
+    ip: "10.0.0.7",
+    user_agent: "Mozilla/5.0",
+    request_id: "req-1",
+    changes: { verified: { before: false, after: true } },
+    context: null,
+  },
+  {
+    id: "ae2",
+    occurred_at: "2026-09-15T09:30:00Z",
+    actor_user_id: "u1",
+    actor_email: "owner@acme.test",
+    actor_role: "owner",
+    action: "notification.bulk_marked_read",
+    resource_type: "notification",
+    resource_id: null,
+    resource_label: null,
+    outcome: "success",
+    ip: "10.0.0.1",
+    user_agent: "Mozilla/5.0",
+    request_id: "req-2",
+    changes: null,
+    context: { count: 12, notification_ids: ["n1", "n2"], filters: { receiver_id: "r1" } },
+  },
+];
 
 export const fixtureDeleteImpact = {
   receivers: 3,
@@ -481,6 +519,12 @@ export const handlers = [
   http.get("/api/v1/deliveries", () => HttpResponse.json(fixtureDeliveries)),
   http.get("/api/v1/users", () => HttpResponse.json(fixtureUsers)),
   http.get("/api/v1/tenant", () => HttpResponse.json(fixtureTenant)),
+  http.get("/api/v1/audit/events", () =>
+    HttpResponse.json({ events: fixtureAuditEvents, next_cursor: null }),
+  ),
+  http.get("/api/v1/audit/notification-status", () =>
+    HttpResponse.json({ events: fixtureAuditEvents, next_cursor: null }),
+  ),
   http.get("/api/v1/invitations", () => HttpResponse.json(fixtureInvitations)),
   http.get("/api/v1/receivers/:receiverId/channels", () => HttpResponse.json([])),
   http.get("/api/v1/severity-presets", () => HttpResponse.json(fixturePresets)),

@@ -28,6 +28,12 @@ class NotificationListItemOut(BaseModel):
     exit_code: int | None = None
     status: NotificationStatus
     verified: bool
+    # Chi ha gestito la notifica, visibile a chiunque la veda: lo storico
+    # completo dei passaggi sta nell'audit, riservato a owner e admin (spec 9.6).
+    read_by_email: str | None = None
+    read_at: datetime | None = None
+    verified_by_email: str | None = None
+    verified_at: datetime | None = None
     received_at: datetime
 
 
@@ -53,6 +59,12 @@ class NotificationDetailOut(BaseModel):
     exit_code: int | None = None
     status: NotificationStatus
     verified: bool
+    # Chi ha gestito la notifica, visibile a chiunque la veda: lo storico
+    # completo dei passaggi sta nell'audit, riservato a owner e admin (spec 9.6).
+    read_by_email: str | None = None
+    read_at: datetime | None = None
+    verified_by_email: str | None = None
+    verified_at: datetime | None = None
     received_at: datetime
     source_ip: str | None
 

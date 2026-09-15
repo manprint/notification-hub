@@ -19,7 +19,7 @@ from app.core.security import (
 )
 from app.core.urls import public_base_url
 from app.db.session import tenant_session
-from app.db.types import TenantStatus, UserRole, UserStatus
+from app.db.types import AuditOutcome, TenantStatus, UserRole, UserStatus
 from app.models.invitation import Invitation
 from app.models.refresh_token import RefreshToken
 from app.models.tenant import Tenant
@@ -36,7 +36,20 @@ from app.schemas.auth import (
     RegisterIn,
     TokenPairOut,
 )
-from app.services.identity import find_invitation, find_refresh_token, find_user_by_email
+from app.services.audit import (
+    ACTION_LOGIN,
+    ACTION_LOGIN_FAILED,
+    ACTION_LOGOUT,
+    current_request_id,
+    record_context_event,
+    record_event,
+)
+from app.services.identity import (
+    UserIdentity,
+    find_invitation,
+    find_refresh_token,
+    find_user_by_email,
+)
 from app.services.ratelimit import sliding_window_hit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -105,6 +118,40 @@ async def register(body: RegisterIn) -> dict:
     return {"tenant_id": str(tenant_id), "user_id": str(user_id)}
 
 
+async def _record_login_failure(
+    user_identity: UserIdentity,
+    request: Request,
+    reason: str,
+) -> None:
+    """Login rifiutato di un utente che esiste.
+
+    Un'email sconosciuta non lascia evento: la tabella e tenant-scoped sotto
+    RLS e senza utente non c'e tenant a cui attribuire la riga. Quel caso resta
+    nei log strutturati (decisione D9 del piano).
+
+    Transazione propria, chiusa prima del 401: l'evento deve sopravvivere al
+    rifiuto che sta per essere sollevato.
+    """
+    tenant_id = uuid.UUID(user_identity.tenant_id)
+    async with tenant_session(tenant_id) as session:
+        record_event(
+            session,
+            tenant_id=tenant_id,
+            actor_user_id=uuid.UUID(user_identity.id),
+            actor_email=user_identity.email,
+            actor_role=UserRole(user_identity.role),
+            action=ACTION_LOGIN_FAILED,
+            resource_type="session",
+            resource_id=uuid.UUID(user_identity.id),
+            resource_label=user_identity.email,
+            outcome=AuditOutcome.FAILURE,
+            context={"reason": reason},
+            ip=client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+            request_id=current_request_id(),
+        )
+
+
 @router.post("/login", response_model=TokenPairOut, status_code=200)
 async def login(body: LoginIn, request: Request) -> TokenPairOut:
     # Chiave su (email, IP): sulla sola email chiunque conosca un indirizzo
@@ -135,6 +182,8 @@ async def login(body: LoginIn, request: Request) -> TokenPairOut:
         and await asyncio.to_thread(verify_password, body.password, user_identity.password_hash)
     )
     if not password_matches or user_identity is None:
+        if user_identity is not None:
+            await _record_login_failure(user_identity, request, "invalid_password")
         raise Problem(
             status=401,
             type=PROBLEM_TYPES["unauthorized"],
@@ -143,6 +192,7 @@ async def login(body: LoginIn, request: Request) -> TokenPairOut:
         )
 
     if user_identity.status != "active":
+        await _record_login_failure(user_identity, request, "user_disabled")
         raise Problem(
             status=401,
             type=PROBLEM_TYPES["unauthorized"],
@@ -156,6 +206,7 @@ async def login(body: LoginIn, request: Request) -> TokenPairOut:
         tenant = tenant_result.scalar_one()
 
         if tenant.status != "active":
+            await _record_login_failure(user_identity, request, "tenant_suspended")
             raise Problem(
                 status=401,
                 type=PROBLEM_TYPES["unauthorized"],
@@ -190,6 +241,21 @@ async def login(body: LoginIn, request: Request) -> TokenPairOut:
         )
         session.add(refresh_token_row)
         await session.flush()
+
+        record_event(
+            session,
+            tenant_id=tenant_id,
+            actor_user_id=user.id,
+            actor_email=user.email,
+            actor_role=user.role,
+            action=ACTION_LOGIN,
+            resource_type="session",
+            resource_id=user.id,
+            resource_label=user.email,
+            ip=client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+            request_id=current_request_id(),
+        )
 
         access_token, expires_in = create_access_token(str(user.id), str(tenant_id), user.role)
 
@@ -328,6 +394,13 @@ async def logout(
         if refresh_row is not None:
             refresh_row.revoked_at = datetime.now(UTC)
 
+    await record_context_event(
+        session,
+        action=ACTION_LOGOUT,
+        resource_type="session",
+        resource_id=uuid.UUID(claims.sub),
+        context={"revoke_all": body.revoke_all},
+    )
     await session.flush()
 
 

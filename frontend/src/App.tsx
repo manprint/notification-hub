@@ -5,6 +5,8 @@ import RequireRole from "./components/RequireRole";
 import { SessionProvider, useSession } from "./hooks/useSession";
 
 const AcceptInvitePage = lazy(() => import("./pages/AcceptInvitePage"));
+const AuditNotificationStatusPage = lazy(() => import("./pages/AuditNotificationStatusPage"));
+const AuditPage = lazy(() => import("./pages/AuditPage"));
 const ChannelsPage = lazy(() => import("./pages/ChannelsPage"));
 const DeliveriesPage = lazy(() => import("./pages/DeliveriesPage"));
 const GroupDetailPage = lazy(() => import("./pages/GroupDetailPage"));
@@ -88,8 +90,24 @@ export default function App() {
           <Route
             path="/settings"
             element={
-              <RequireRole allowed={["owner"]}>
+              <RequireRole allowed={["owner", "admin"]}>
                 <SettingsPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/settings/audit"
+            element={
+              <RequireRole allowed={["owner", "admin"]}>
+                <AuditPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/settings/letture-e-verifiche"
+            element={
+              <RequireRole allowed={["owner", "admin"]}>
+                <AuditNotificationStatusPage />
               </RequireRole>
             }
           />
