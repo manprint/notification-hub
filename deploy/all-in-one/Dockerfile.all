@@ -68,9 +68,9 @@ RUN set -eux; \
         *) echo "architettura non supportata: $(dpkg --print-architecture)" >&2; exit 1 ;; \
     esac; \
     curl -fsSL -o /usr/local/bin/minio \
-        "https://dl.min.io/server/minio/release/${march}/archive/minio.${MINIO_RELEASE}"; \
+        "https://github.com/minio/minio/releases/download/${MINIO_RELEASE}/minio.${march}.${MINIO_RELEASE}"; \
     curl -fsSL -o /usr/local/bin/mc \
-        "https://dl.min.io/client/mc/release/${march}/archive/mc.${MC_RELEASE}"; \
+        "https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.${march}.${MC_RELEASE}"; \
     chmod 0755 /usr/local/bin/minio /usr/local/bin/mc; \
     /usr/local/bin/minio --version; \
     /usr/local/bin/mc --version
