@@ -230,6 +230,23 @@ Cosa fa il container quando trova in `/data/state/version` una versione diversa 
 Passare da 1.0.0 a 1.1.0 o direttamente da 1.0.0 a 2.0.0 e' la stessa procedura: le migrazioni
 Alembic vengono applicate in sequenza a partire dalla revisione registrata nel database.
 
+Il confronto fra la versione registrata e quella dell'immagine ignora il prefisso `v`: le immagini
+pubblicate nascono da un tag git (`APP_VERSION=v0.0.3`), quelle costruite in locale col Makefile no
+(`0.0.3`), e senza questa normalizzazione un aggiornamento `v0.0.2 -> 0.0.3` verrebbe letto come un
+downgrade, fermando l'avvio di un'installazione sana.
+
+L'intera procedura e' verificabile prima di pubblicare, su volumi usa e getta:
+
+```bash
+make all-in-one-build ALL_IN_ONE_VERSION=0.0.3
+make all-in-one-upgrade ALL_IN_ONE_VERSION=0.0.3   # da ALL_IN_ONE_UPGRADE_FROM (default: v0.0.2)
+```
+
+Il test popola un'installazione con l'immagine gia' pubblicata, cambia il tag sullo stesso `/data` e
+verifica che i dati di prima siano ancora leggibili, che lo schema sia salito, che il backup
+pre-aggiornamento ci sia e che le funzioni nuove valgano anche sulle righe scritte dalla versione
+precedente.
+
 **Downgrade**: bloccato. Se `/data/state/version` e' piu' recente della versione dell'immagine il
 container si rifiuta di partire, perche' uno schema piu' nuovo puo' contenere oggetti che il codice
 piu' vecchio non conosce. Per forzarlo, dopo aver ripristinato un backup coerente:

@@ -257,7 +257,7 @@ check_version_transition() {
     if [ -z "${PREVIOUS_VERSION}" ]; then
         VERSION_CHANGED=1
         log_info "prima installazione, versione ${IMAGE_VERSION}"
-    elif [ "${PREVIOUS_VERSION}" = "${IMAGE_VERSION}" ]; then
+    elif version_eq "${PREVIOUS_VERSION}" "${IMAGE_VERSION}"; then
         VERSION_CHANGED=0
         log_info "versione invariata: ${IMAGE_VERSION}"
     elif version_lt "${IMAGE_VERSION}" "${PREVIOUS_VERSION}"; then

@@ -395,6 +395,34 @@ code {
   color: var(--color-text-muted);
 }
 
+/* Form di inserimento dati impilato: i campi occupano tutta la larghezza della
+   card invece di stare in fila dentro .toolbar, dove un input alla larghezza di
+   default del browser (~170px) troncava email e password mentre si scrivono. */
+.form-stacked {
+  max-width: 520px;
+}
+
+.form-stacked .form-row input,
+.form-stacked .form-row select,
+.form-stacked .form-row textarea {
+  width: 100%;
+}
+
+.form-stacked .group-picker {
+  max-width: 100%;
+}
+
+.form-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.field-hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
 .toolbar {
   display: flex;
   gap: var(--space-2);
@@ -659,4 +687,46 @@ details[open] > .group-summary::before {
   td {
     padding-inline: var(--space-2);
   }
+}
+
+/* Titolo di pagina con il contesto in cui ci si trova: "Notifiche / Nome del
+   gruppo". Il contesto e' l'informazione che manca leggendo la sola pagina, non
+   la query string, quindi ha lo stesso peso visivo del titolo. */
+.title-separator {
+  color: var(--color-text-muted);
+  font-weight: 400;
+}
+
+.title-context {
+  color: var(--color-accent);
+}
+
+/* Riepilogo per gruppo/receiver: la colonna della freccia resta stretta, le
+   righe dei receiver rientrano sotto il proprio gruppo. */
+.stats-toggle-col {
+  width: 28px;
+  padding-right: 0;
+}
+
+.stats-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  width: 20px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.stats-toggle:hover {
+  color: var(--color-text);
+  background: none;
+}
+
+.stats-receiver-row td {
+  background: var(--color-surface-alt);
+}
+
+.stats-receiver-row td:nth-child(2) {
+  padding-left: var(--space-4);
 }

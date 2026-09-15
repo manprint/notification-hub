@@ -152,7 +152,7 @@ COMPOSE_ALL_IN_ONE = NOTIFYHUB_IMAGE=$(ALL_IN_ONE_IMAGE) NOTIFYHUB_VERSION=$(ALL
 
 .PHONY: all-in-one-build all-in-one-env all-in-one-up all-in-one-build-up all-in-one-down \
 	all-in-one-restart all-in-one-logs all-in-one-ps all-in-one-health all-in-one-shell \
-	all-in-one-smoke all-in-one-backup all-in-one-clean
+	all-in-one-smoke all-in-one-upgrade all-in-one-backup all-in-one-clean
 
 all-in-one-build: ## Costruisce l'immagine all-in-one
 	docker build \
@@ -193,6 +193,14 @@ all-in-one-shell: ## Apre una shell bash nel container notifyhub
 
 all-in-one-smoke: ## Smoke test end-to-end dell'immagine all-in-one
 	SMOKE_IMAGE=$(ALL_IN_ONE_IMAGE):$(ALL_IN_ONE_VERSION) $(ALL_IN_ONE_DIR)/smoke-all-in-one.sh
+
+##= Immagine gia' installata da cui parte il test di aggiornamento
+ALL_IN_ONE_UPGRADE_FROM ?= ghcr.io/manprint/notification-hub:v0.0.2
+
+all-in-one-upgrade: ## Verifica l'aggiornamento da ALL_IN_ONE_UPGRADE_FROM sullo stesso /data
+	UPGRADE_FROM_IMAGE=$(ALL_IN_ONE_UPGRADE_FROM) \
+	UPGRADE_TO_IMAGE=$(ALL_IN_ONE_IMAGE):$(ALL_IN_ONE_VERSION) \
+	$(ALL_IN_ONE_DIR)/upgrade-all-in-one.sh
 
 all-in-one-backup: ## Esegue un backup manuale etichettato
 	$(COMPOSE_ALL_IN_ONE) exec notifyhub notifyhub-backup --label manual

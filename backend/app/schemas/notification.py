@@ -95,9 +95,35 @@ class BulkReadOut(BaseModel):
     marked_read: int
 
 
+class ReceiverStatsOut(BaseModel):
+    """Riga per receiver dentro un gruppo del riepilogo.
+
+    Compare anche con total=0: "questo job non ha mai scritto" e' esattamente
+    l'informazione che si cerca in una pagina di riepilogo.
+    """
+
+    receiver_id: str
+    receiver_name: str
+    status: str
+    total: int
+    unread_count: int
+
+
+class GroupStatsOut(BaseModel):
+    """I quattro campi storici restano dove e come erano: una SPA vecchia
+    rimasta aperta nel browser continua a leggere il riepilogo per gruppo
+    ignorando `receivers`, che e' additivo."""
+
+    group_id: str
+    group_name: str
+    total: int
+    unread_count: int
+    receivers: list[ReceiverStatsOut] = []
+
+
 class StatsSummaryOut(BaseModel):
     total_unread: int
     by_severity: dict[str, int]
-    by_group: list[dict]
+    by_group: list[GroupStatsOut]
     notifications_last_24h: int
     deliveries_dead: int

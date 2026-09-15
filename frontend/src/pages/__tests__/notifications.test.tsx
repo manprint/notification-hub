@@ -84,16 +84,103 @@ describe("NotificationsPage", () => {
     expect(screen.getAllByText(/Backup FALLITO/)).toHaveLength(1);
   });
 
-  it("T-UI8 test_nota_sulla_ricerca_presente: mostra la nota sui 4096 caratteri", async () => {
+  it("T-UI8 test_nota_sulla_ricerca_presente: la nota dichiara la ricerca sull'intero contenuto", async () => {
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
 
     await waitFor(() => {
       expect(screen.getByText(/Backup FALLITO/)).toBeInTheDocument();
     });
 
-    expect(
-      screen.getByText("La ricerca esamina i primi 4096 caratteri del contenuto."),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/La ricerca esamina l'intero contenuto del messaggio/)).toBeInTheDocument();
+    expect(screen.getByText(/object storage esamina i primi 4096 caratteri/)).toBeInTheDocument();
+  });
+
+  it("T-GRP5 test_evidenza_gruppo_nel_titolo: dentro un gruppo il titolo dice quale", async () => {
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Backup FALLITO/)).toBeInTheDocument();
+    });
+
+    const titolo = screen.getByRole("heading", { level: 1 });
+    expect(titolo).toHaveTextContent("Notifiche");
+    expect(titolo).toHaveTextContent("Server Produzione");
+    expect(screen.getByText("Ambiente di produzione")).toBeInTheDocument();
+  });
+
+  it("T-GRP6 test_filtro_receiver: il select dei receiver del gruppo filtra la lista", async () => {
+    let capturedUrl: URL | null = null;
+    server.use(
+      http.get("/api/v1/notifications", ({ request }) => {
+        capturedUrl = new URL(request.url);
+        return HttpResponse.json(fixtureNotificationsPage1);
+      }),
+    );
+
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+    const user = userEvent.setup();
+
+    const select = await screen.findByLabelText("Receiver del gruppo");
+    await waitFor(() => {
+      expect(within(select).getByRole("option", { name: /backup notturno/i })).toBeInTheDocument();
+    });
+
+    await user.selectOptions(select, "r1");
+
+    await waitFor(() => {
+      expect(capturedUrl?.searchParams.get("receiver_id")).toBe("r1");
+      expect(capturedUrl?.searchParams.get("group_id")).toBe("g1");
+    });
+  });
+
+  it("T-GRP7 test_bulk_read_rispetta_il_receiver: 'segna tutte come lette' passa il receiver filtrato", async () => {
+    let body: Record<string, unknown> | null = null;
+    server.use(
+      http.post("/api/v1/notifications/bulk-read", async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ marked_read: 3 });
+      }),
+    );
+
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1&receiver_id=r1"]);
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Backup FALLITO/)).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Segna tutte come lette" }));
+
+    await waitFor(() => {
+      expect(body).not.toBeNull();
+    });
+    expect(body).toMatchObject({ group_id: "g1", receiver_id: "r1" });
+  });
+
+  it("T-GRP8 test_scelta_gruppo_azzera_receiver: un receiver_id orfano non sopravvive alla scelta del gruppo", async () => {
+    const urls: string[] = [];
+    server.use(
+      http.get("/api/v1/notifications", ({ request }) => {
+        urls.push(request.url);
+        return HttpResponse.json(fixtureNotificationsPage1);
+      }),
+    );
+
+    // receiver_id senza group_id: la pagina mostra la griglia dei gruppi, e il
+    // receiver appartiene a un gruppo che non e' ancora stato scelto.
+    renderWithProviders(<NotificationsPage />, ["/notifications?receiver_id=r1"]);
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /backup/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /backup/i }));
+
+    await waitFor(() => {
+      expect(urls.length).toBeGreaterThan(0);
+    });
+    const ultima = new URL(urls[urls.length - 1]);
+    expect(ultima.searchParams.get("group_id")).toBe("g2");
+    expect(ultima.searchParams.get("receiver_id")).toBeNull();
   });
 
   it("T-GRP4 test_filtri_group_scoped: filtri severity restano scoped al gruppo", async () => {

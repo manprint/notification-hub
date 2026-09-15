@@ -247,7 +247,7 @@ CREATE INDEX ON severity_rules (tenant_id, receiver_id, priority) WHERE enabled;
 | storage_backend | enum(inline, object) | default `inline`. Dove vive il corpo |
 | content | text NULL | corpo raw. Valorizzato **solo** se `storage_backend = inline` |
 | storage_key | text NULL | chiave dell'oggetto MinIO. Valorizzata **solo** se `storage_backend = object` |
-| content_preview | text NOT NULL | primi 4096 caratteri del corpo, sempre presente. Alimenta lista, ricerca e formatter outbound senza toccare MinIO |
+| content_preview | text NOT NULL | primi 4096 caratteri del corpo, sempre presente. Alimenta lista e formatter outbound senza toccare MinIO, ed è la sola parte cercabile dei payload offloaded |
 | content_size | int | byte del corpo **originale**, prima di qualunque normalizzazione |
 | content_normalized | bool | default false. `true` se il body non era UTF-8 valido o conteneva byte NUL, vedi §6.2 |
 | severity | enum(debug…critical) | risolta all'ingestion |
@@ -274,7 +274,7 @@ ALTER TABLE notifications ADD CONSTRAINT ck_notifications_body CHECK (
 CREATE INDEX ON notifications (tenant_id, received_at DESC, id DESC);              -- paginazione a cursore
 CREATE INDEX ON notifications (tenant_id, receiver_id, received_at DESC, id DESC);
 CREATE INDEX ON notifications (tenant_id, status) WHERE status = 'unread';
-CREATE INDEX ON notifications USING gin (to_tsvector('simple', content_preview));  -- filtro q
+CREATE INDEX ON notifications USING gin ((COALESCE(content, content_preview)) gin_trgm_ops);  -- filtro q
 CREATE INDEX ON notifications (storage_key) WHERE storage_backend = 'object';      -- riconciliazione orfani
 ```
 > Il purge è per-tenant e usa il primo indice: nessun indice globale su `received_at`.
@@ -693,11 +693,16 @@ Le sotto-risorse sono identificate da `channel_id`: `PUT`/`DELETE` su una collez
 | PATCH | `/api/v1/notifications/{id}` | Segna letta / non letta e verificata / non verificata. Body: almeno uno fra `status` e `verified`; body vuoto → 422 |
 | POST | `/api/v1/notifications/bulk-read` | Segna in blocco (per filtro, gli stessi della lista) |
 | DELETE | `/api/v1/notifications/{id}` | Elimina |
-| GET | `/api/v1/stats/summary` | Conteggi per gruppo / severity / non lette, per la home della dashboard |
+| GET | `/api/v1/stats/summary` | Conteggi per severity / non lette e albero gruppo → receiver (`by_group[].receivers[]`, con `total` e `unread_count` per receiver, compresi quelli a zero), per la home della dashboard |
 
 La lista **non** restituisce il `content` completo ma i primi 500 caratteri di `content_preview` + `content_size`.
 
-⚠️ Il filtro `q` opera **solo su `content_preview`** — i primi 4096 caratteri. Cercare dentro un payload da 20MB richiederebbe un motore di indicizzazione esterno: fuori scope v1, e la UI lo dichiara accanto al campo di ricerca.
+Il filtro `q` è una **ricerca per sottostringa case-insensitive su `COALESCE(content, content_preview)`**, servita da un indice GIN `pg_trgm` sulla stessa espressione:
+
+- **payload inline** (≤ `NOTIFYHUB_INLINE_MAX_BYTES`, default 1MB): la ricerca copre il **contenuto intero**;
+- **payload offloaded su MinIO**: `content` è NULL per vincolo, quindi la ricerca ricade sui 4096 caratteri di `content_preview`. La UI lo dichiara accanto al campo di ricerca.
+
+I metacaratteri LIKE (`%`, `_`, `\`) digitati dall'utente sono neutralizzati: cercare `50%` cerca il testo `50%`, non un jolly. La semantica è per sottostringa e non per parola intera (`err` trova `error`), a differenza del `plainto_tsquery` usato fino alla migrazione 0014.
 
 *v2: `GET /api/v1/notifications/stream` (SSE) alimentato da Redis pub/sub.*
 
@@ -848,7 +853,7 @@ Osservabilità: log strutturati JSON con `request_id` e `tenant_id`; metriche Pr
 **Dominio e dati**
 - ✅ Un Group contiene più Receiver (1:N)
 - ✅ Ingestion v1: solo testo semplice nel body, normalizzato in UTF-8 senza mai fallire
-- ✅ Payload oltre 1MB su **MinIO**, in tabella `storage_key` + `content_preview` da 4096 caratteri
+- ✅ Payload oltre 1MB su **MinIO**, in tabella `storage_key` + `content_preview` da 4096 caratteri (unica parte cercabile di quelle righe)
 - ✅ Severity da header/param espliciti → regole RE2 → default del receiver
 - ✅ Confronto delle severity con l'ordinamento nativo dell'enum Postgres, nessuna funzione di mapping
 - ✅ `updated_at` sulle sole tabelle di configurazione
@@ -886,6 +891,6 @@ Osservabilità: log strutturati JSON con `request_id` e `tenant_id`; metriche Pr
 
 Nessuna decisione architetturale resta aperta. Restano tre limiti dichiarati, da rivedere quando i numeri reali li renderanno stretti:
 
-1. **Ricerca limitata ai primi 4096 caratteri.** Il filtro `q` non entra nei payload offloaded. Se la ricerca profonda diventa un requisito, la strada è un indice esterno (OpenSearch/Meilisearch) alimentato dal worker, non un `LIKE` su MinIO.
+1. **Ricerca cieca dentro i payload offloaded.** Dalla migrazione 0015 il filtro `q` copre il contenuto intero dei payload inline, ma sopra `NOTIFYHUB_INLINE_MAX_BYTES` il corpo vive su MinIO e Postgres vede solo i 4096 caratteri di `content_preview`. Se la ricerca profonda anche lì diventa un requisito, la strada è un indice esterno (OpenSearch/Meilisearch) alimentato dal worker, non un `LIKE` su MinIO.
 2. **Nessun partitioning di `notifications`.** Con volumi alti il purge notturno a batch da 10.000 righe diventerà il collo di bottiglia. Il passaggio a partizioni mensili è in F8, con l'accortezza sul trigger di cancellazione oggetti descritta in §11.
 3. **Access token valido fino a 15 minuti dopo il logout.** Accettabile per un self-hosted; la denylist dei `jti` su Redis è la mitigazione già identificata.

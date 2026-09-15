@@ -155,22 +155,33 @@ function InviteForm() {
     <div className="card">
       <h3>Invita un membro</h3>
       {error && <ErrorBanner error={error} />}
-      <form onSubmit={(event) => void handleSubmit(event)}>
-        <div className="toolbar">
+      <form className="form-stacked" onSubmit={(event) => void handleSubmit(event)}>
+        <div className="form-row">
+          <label htmlFor="invite-email">Email</label>
           <input
+            id="invite-email"
             type="email"
             placeholder="email@esempio.it"
             required
             value={email}
             onChange={(event) => setEmail(event.target.value)}
           />
-          <select value={role} onChange={(event) => setRole(event.target.value as UserRole)}>
+        </div>
+        <div className="form-row">
+          <label htmlFor="invite-role">Ruolo</label>
+          <select
+            id="invite-role"
+            value={role}
+            onChange={(event) => setRole(event.target.value as UserRole)}
+          >
             {ROLES.map((r) => (
               <option key={r} value={r}>
                 {r}
               </option>
             ))}
           </select>
+        </div>
+        <div className="form-actions">
           <button type="submit" className="primary">
             Invita
           </button>
@@ -212,16 +223,22 @@ function CreateUserForm({ groups }: { groups: GroupOut[] }) {
     <div className="card">
       <h3>Crea utenza</h3>
       {error && <ErrorBanner error={error} />}
-      <form onSubmit={(event) => void handleSubmit(event)}>
-        <div className="toolbar">
+      <form className="form-stacked" onSubmit={(event) => void handleSubmit(event)}>
+        <div className="form-row">
+          <label htmlFor="create-user-email">Email</label>
           <input
+            id="create-user-email"
             type="email"
             placeholder="nuova-utenza@esempio.it"
             required
             value={email}
             onChange={(event) => setEmail(event.target.value)}
           />
+        </div>
+        <div className="form-row">
+          <label htmlFor="create-user-password">Password</label>
           <input
+            id="create-user-password"
             type="password"
             placeholder="Password"
             required
@@ -229,20 +246,30 @@ function CreateUserForm({ groups }: { groups: GroupOut[] }) {
             value={password}
             onChange={(event) => setPassword(event.target.value)}
           />
-          <select value={role} onChange={(event) => setRole(event.target.value as UserRole)}>
+          <span className="field-hint">Almeno 12 caratteri.</span>
+        </div>
+        <div className="form-row">
+          <label htmlFor="create-user-role">Ruolo</label>
+          <select
+            id="create-user-role"
+            value={role}
+            onChange={(event) => setRole(event.target.value as UserRole)}
+          >
             {ROLES.map((r) => (
               <option key={r} value={r}>
                 {r}
               </option>
             ))}
           </select>
-          <button type="submit" className="primary">
-            Crea
-          </button>
         </div>
         <div className="form-row">
           <label>Gruppi di receiver da gestire</label>
           <GroupPicker groups={groups} value={groupIds} onChange={setGroupIds} />
+        </div>
+        <div className="form-actions">
+          <button type="submit" className="primary">
+            Crea
+          </button>
         </div>
       </form>
     </div>

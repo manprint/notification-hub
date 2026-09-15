@@ -22,8 +22,29 @@ export const fixtureStatsSummary = {
   total_unread: 7,
   by_severity: { critical: 1, error: 2, warning: 1, info: 3, debug: 0 },
   by_group: [
-    { group_id: "g1", group_name: "Server Produzione", total: 10, unread_count: 5 },
-    { group_id: "g2", group_name: "Backup", total: 4, unread_count: 2 },
+    {
+      group_id: "g1",
+      group_name: "Server Produzione",
+      total: 10,
+      unread_count: 5,
+      receivers: [
+        {
+          receiver_id: "r1",
+          receiver_name: "Backup notturno",
+          status: "active",
+          total: 10,
+          unread_count: 5,
+        },
+        {
+          receiver_id: "r9",
+          receiver_name: "Job mai partito",
+          status: "disabled",
+          total: 0,
+          unread_count: 0,
+        },
+      ],
+    },
+    { group_id: "g2", group_name: "Backup", total: 4, unread_count: 2, receivers: [] },
   ],
   notifications_last_24h: 12,
   deliveries_dead: 3,

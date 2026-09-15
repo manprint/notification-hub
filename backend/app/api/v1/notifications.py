@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 from starlette.responses import StreamingResponse
 
 from app.api.deps import current_claims, db, require_member
@@ -53,6 +54,28 @@ def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
         ) from exc
 
 
+def search_condition(q: str) -> ColumnElement[bool]:
+    """Filtro `q`: sottostringa case-insensitive sull'intero contenuto.
+
+    `COALESCE(content, content_preview)` e non `content_preview`: per i payload
+    inline (la stragrande maggioranza, fino a notifyhub_inline_max_bytes) la
+    ricerca copre il messaggio intero, non i primi 4096 caratteri. Per i payload
+    offloaded su object storage `content` e' NULL per vincolo e il corpo vive su
+    MinIO: quelle righe ricadono sulla preview, che e' quanto Postgres puo'
+    vedere di loro.
+
+    L'espressione e' identica a quella indicizzata dalla migrazione 0015
+    (GIN pg_trgm): scriverla diversamente qui costerebbe un sequential scan.
+
+    I metacaratteri di LIKE nel testo cercato vanno neutralizzati, altrimenti un
+    `%` digitato dall'utente diventerebbe un jolly e un `_` un carattere
+    qualsiasi: chi cerca `50%` vuole le notifiche che contengono `50%`.
+    """
+    escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    searchable = func.coalesce(Notification.content, Notification.content_preview)
+    return searchable.ilike(f"%{escaped}%", escape="\\")
+
+
 async def _apply_filters(
     conditions: list,
     session: AsyncSession,
@@ -92,11 +115,7 @@ async def _apply_filters(
         # allarmi della sorveglianza dai messaggi inviati davvero.
         conditions.append(Notification.severity_source == source)
     if q is not None:
-        conditions.append(
-            func.to_tsvector("simple", Notification.content_preview).op("@@")(
-                func.plainto_tsquery("simple", q)
-            )
-        )
+        conditions.append(search_condition(q))
     if from_ is not None:
         conditions.append(Notification.received_at >= from_)
     if to is not None:

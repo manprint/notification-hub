@@ -109,9 +109,26 @@ sql_lit() {
     printf "'%s'" "${1//\'/\'\'}"
 }
 
+# Versione senza il prefisso 'v' dei tag git. Le immagini pubblicate nascono da
+# un tag e portano APP_VERSION=v0.0.3; quelle costruite in locale col Makefile
+# portano 0.0.3. Confrontando le due alla lettera, `sort -V` mette le cifre
+# prima delle lettere e l'aggiornamento v0.0.2 -> 0.0.3 verrebbe letto come un
+# downgrade: l'avvio si fermerebbe su un'installazione perfettamente sana.
+version_normalize() {
+    printf '%s' "${1#v}"
+}
+
+# Uguaglianza di versione, indipendente dal prefisso.
+version_eq() {
+    [ "$(version_normalize "$1")" = "$(version_normalize "$2")" ]
+}
+
 # Confronto semantico di versione: ritorna 0 se $1 < $2.
 version_lt() {
-    [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" = "$1" ]
+    local a b
+    a="$(version_normalize "$1")"
+    b="$(version_normalize "$2")"
+    [ "$a" != "$b" ] && [ "$(printf '%s\n%s\n' "$a" "$b" | sort -V | head -n1)" = "$a" ]
 }
 
 # chown ricorsivo solo se serve davvero: su /data grosso e' l'unica differenza

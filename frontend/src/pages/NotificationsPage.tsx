@@ -8,6 +8,7 @@ import type {
   NotificationListItemOut,
   NotificationListOut,
   NotificationStatus,
+  ReceiverOut,
   Severity,
   SeveritySource,
 } from "../api/types";
@@ -47,6 +48,7 @@ export default function NotificationsPage() {
   const queryClient = useQueryClient();
 
   const groupId = searchParams.get("group_id") ?? undefined;
+  const receiverId = searchParams.get("receiver_id") ?? undefined;
   const severityMin = (searchParams.get("severity_min") as Severity | null) ?? undefined;
   const status = (searchParams.get("status") as NotificationStatus | null) ?? undefined;
   const source = (searchParams.get("source") as SeveritySource | null) ?? undefined;
@@ -74,10 +76,19 @@ export default function NotificationsPage() {
     queryFn: () => apiGet<GroupOut[]>("/api/v1/groups"),
   });
 
+  // I receiver del gruppo aperto alimentano il filtro per receiver: dentro un
+  // gruppo si guarda quasi sempre un job solo alla volta.
+  const { data: receivers } = useQuery<ReceiverOut[], ApiError>({
+    queryKey: ["group-receivers", groupId],
+    queryFn: () => apiGet<ReceiverOut[]>(`/api/v1/groups/${groupId}/receivers`),
+    enabled: !!groupId,
+  });
+
   const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useNotifications(
       {
         group_id: groupId,
+        receiver_id: receiverId,
         severity_min: severityMin,
         status,
         source,
@@ -86,6 +97,8 @@ export default function NotificationsPage() {
       },
       { enabled: !!groupId },
     );
+
+  const currentGroup = groups?.find((g) => g.id === groupId);
 
   const rows = data?.pages.flatMap((page: NotificationListOut) => page.notifications) ?? [];
 
@@ -107,6 +120,7 @@ export default function NotificationsPage() {
     await runAction("bulk", async () => {
       await apiPost("/api/v1/notifications/bulk-read", {
         group_id: groupId,
+        receiver_id: receiverId,
         severity_min: severityMin,
         // Lo stesso filtro della lista: "segna tutte come lette" non deve toccare
         // cio' che i filtri stanno tenendo fuori dalla vista.
@@ -133,6 +147,9 @@ export default function NotificationsPage() {
   function selectGroup(groupId: string) {
     const next = new URLSearchParams(searchParams);
     next.set("group_id", groupId);
+    // Il receiver appartiene al gruppo che si sta lasciando: tenerlo darebbe
+    // una lista vuota senza spiegare perche'.
+    next.delete("receiver_id");
     setSearchParams(next);
   }
 
@@ -240,11 +257,31 @@ export default function NotificationsPage() {
       <Link to="/notifications" style={{ marginRight: 8, fontSize: 13 }}>
         ← Torna ai gruppi
       </Link>
-      <h1>Notifiche</h1>
+      {/* Il nome del gruppo sta nel titolo, non solo nella query string: dentro
+          la pagina si deve sapere in che gruppo si e' senza leggere l'URL. */}
+      <h1>
+        Notifiche <span className="title-separator">/</span>{" "}
+        <span className="title-context">{currentGroup?.name ?? "Gruppo"}</span>
+      </h1>
+      {currentGroup?.description && <p className="page-subtitle">{currentGroup.description}</p>}
       {error && <ErrorBanner error={error} />}
       {actionError && <ErrorBanner error={actionError} />}
 
       <div className="toolbar">
+        <select
+          aria-label="Receiver del gruppo"
+          value={receiverId ?? ""}
+          onChange={(event) => setFilter("receiver_id", event.target.value)}
+        >
+          <option value="">Tutti i receiver</option>
+          {(receivers ?? []).map((receiver) => (
+            <option key={receiver.id} value={receiver.id}>
+              {receiver.name}
+              {receiver.status === "disabled" ? " (disabilitato)" : ""}
+            </option>
+          ))}
+        </select>
+
         <select
           value={severityMin ?? ""}
           onChange={(event) => setFilter("severity_min", event.target.value)}
@@ -302,7 +339,8 @@ export default function NotificationsPage() {
       </div>
 
       <p style={{ fontSize: 13, color: "var(--color-text-muted)" }}>
-        La ricerca esamina i primi 4096 caratteri del contenuto.
+        La ricerca esamina l'intero contenuto del messaggio. Per i payload archiviati su object
+        storage esamina i primi 4096 caratteri.
       </p>
 
       <DataTable

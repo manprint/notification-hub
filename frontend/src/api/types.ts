@@ -335,15 +335,29 @@ export interface NotificationDetailOut {
   source_ip: string | null;
 }
 
+export interface ReceiverStatsOut {
+  receiver_id: string;
+  receiver_name: string;
+  status: ReceiverStatus;
+  total: number;
+  unread_count: number;
+}
+
+export interface GroupStatsOut {
+  group_id: string;
+  group_name: string;
+  total: number;
+  unread_count: number;
+  // Righe per receiver del gruppo, compresi quelli che non hanno mai scritto
+  // (total 0). Opzionale: un backend precedente alla granularita' per receiver
+  // non la manda.
+  receivers?: ReceiverStatsOut[];
+}
+
 export interface StatsSummaryOut {
   total_unread: number;
   by_severity: Record<string, number>;
-  by_group: Array<{
-    group_id: string;
-    group_name: string;
-    total: number;
-    unread_count: number;
-  }>;
+  by_group: GroupStatsOut[];
   notifications_last_24h: number;
   deliveries_dead: number;
 }

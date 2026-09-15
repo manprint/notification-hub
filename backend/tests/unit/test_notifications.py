@@ -59,3 +59,32 @@ def test_bulk_read_schema_accepts_from_alias():
     )
     assert body.group_id is not None
     assert body.from_ is not None
+
+
+@pytest.mark.unit
+def test_search_condition_usa_l_espressione_indicizzata():
+    """La query deve scrivere l'espressione esattamente come la indicizza la
+    migrazione 0015: una forma diversa costerebbe un sequential scan."""
+    from sqlalchemy.dialects import postgresql
+
+    from app.api.v1.notifications import search_condition
+
+    sql = str(search_condition("errore").compile(dialect=postgresql.dialect())).lower()
+    assert "coalesce(notifications.content, notifications.content_preview)" in sql
+    assert "ilike" in sql
+
+
+@pytest.mark.unit
+def test_search_condition_neutralizza_i_metacaratteri_like():
+    """`%` e `_` digitati nella casella di ricerca sono testo, non jolly."""
+    from sqlalchemy.dialects import postgresql
+
+    from app.api.v1.notifications import search_condition
+
+    compiled = search_condition("50%_a\\b").compile(dialect=postgresql.dialect())
+    pattern = next(
+        value
+        for value in compiled.params.values()
+        if isinstance(value, str) and value.startswith("%") and len(value) > 1
+    )
+    assert pattern == "%50\\%\\_a\\\\b%"
