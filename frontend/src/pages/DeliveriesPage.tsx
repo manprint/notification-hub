@@ -8,7 +8,7 @@ import SeverityBadge from "../components/SeverityBadge";
 import StatusPill, { statusLabel } from "../components/StatusPill";
 import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
-import { formatDateTime } from "../lib/format";
+import { formatDate, formatDateTime, formatTime } from "../lib/format";
 import { MEMBER_ROLES, hasRole } from "../lib/roles";
 
 const STATUSES: DeliveryStatus[] = ["pending", "sending", "sent", "failed", "dead"];
@@ -62,23 +62,23 @@ export default function DeliveriesPage() {
   const filtriAttivi = [status, channelId].filter(Boolean).length;
 
   const columns: DataTableColumn<DeliveryOut>[] = [
+    // Stesse colonne dell'elenco delle notifiche, nello stesso ordine: la
+    // severity ha la sua colonna e si scorre in verticale, invece di stare in
+    // mezzo al testo di un'altra cella.
+    { key: "severity", header: "Severity", render: (d) => <SeverityBadge severity={d.severity} /> },
     {
       key: "notification",
       header: "Notifica inoltrata",
       // Un link "Apri" e non il testo del messaggio, come nell'elenco delle
       // notifiche: il corpo si legge nella sua pagina, e una preview lunga
       // sfonda la riga e spinge fuori vista le colonne che dicono com'e'
-      // andata la consegna. Restano i segnali che servono a riconoscerla:
-      // severity, receiver di origine, quando e' stata ricevuta.
+      // andata la consegna.
       render: (d) => (
         <div className="cell-preview">
           <div className="content-cell">
             <Link to={`/notifications/${d.notification_id}`}>Apri</Link>
-            <SeverityBadge severity={d.severity} />
           </div>
-          <div className="cell-diagnostics">
-            da {d.receiver_name} · {formatDateTime(d.received_at)}
-          </div>
+          <div className="cell-diagnostics">da {d.receiver_name}</div>
         </div>
       ),
     },
@@ -118,6 +118,16 @@ export default function DeliveriesPage() {
           {d.response_code ? `HTTP ${d.response_code}` : "—"}
           {d.last_error && <div>{d.last_error}</div>}
         </div>
+      ),
+    },
+    {
+      key: "received_at",
+      header: "Ricevuta",
+      render: (d) => (
+        <span className="received-at">
+          <span>{formatDate(d.received_at)}</span>
+          <span>{formatTime(d.received_at)}</span>
+        </span>
       ),
     },
     {

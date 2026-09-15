@@ -81,10 +81,41 @@ describe("DeliveriesPage leggibilità", () => {
 
     const riga = screen.getAllByRole("row")[1];
     expect(within(riga).getByText("Errore")).toBeInTheDocument();
-    expect(within(riga).getByText(/da Backup notturno/)).toBeInTheDocument();
-    // La data formattata come nel resto dell'applicazione, non l'ISO grezzo
-    // (compare anche nella colonna dei tentativi: qui conta quella di origine).
-    expect(within(riga).getByText(/da Backup notturno · 01\/08\/2026/)).toBeInTheDocument();
+    expect(within(riga).getByText("da Backup notturno")).toBeInTheDocument();
+    // La data formattata come nel resto dell'applicazione, non l'ISO grezzo.
+    expect(within(riga).getByText("01/08/2026")).toBeInTheDocument();
+  });
+
+  it("la severity sta in una colonna sua, come nell'elenco delle notifiche", async () => {
+    renderWithProviders(<DeliveriesPage />);
+    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+
+    const intestazioni = within(screen.getAllByRole("row")[0])
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent);
+    expect(intestazioni.slice(0, 2)).toEqual(["Severity", "Notifica inoltrata"]);
+
+    const celle = within(screen.getAllByRole("row")[1]).getAllByRole("cell");
+    // Il badge sta nella prima cella e non dentro il testo di un'altra: le
+    // severity si scorrono in verticale.
+    expect(within(celle[0]).getByText("Errore")).toBeInTheDocument();
+    expect(within(celle[1]).queryByText("Errore")).not.toBeInTheDocument();
+    expect(within(celle[1]).getByRole("link", { name: "Apri" })).toBeInTheDocument();
+  });
+
+  it("la data di ricezione ha la colonna «Ricevuta», con giorno e ora su due righe", async () => {
+    renderWithProviders(<DeliveriesPage />);
+    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+
+    const intestazioni = within(screen.getAllByRole("row")[0])
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent);
+    const colonna = intestazioni.indexOf("Ricevuta");
+    expect(colonna).toBeGreaterThan(-1);
+
+    const cella = within(screen.getAllByRole("row")[1]).getAllByRole("cell")[colonna];
+    expect(within(cella).getByText("01/08/2026")).toBeInTheDocument();
+    expect(within(cella).getByText(/^0\d:00:00$/)).toBeInTheDocument();
   });
 });
 

@@ -733,3 +733,11 @@ dell'API (`dead`, `sent`) mentre la tabella diceva "Morta" e "Inviata"
 nelle altre sezioni. 4 test aggiunti (226 in totale): il corpo che non compare,
 la riga che resta riconoscibile, le parole della tendina, il filtro che si
 azzera.
+
+Seconda passata sulla stessa tabella: la severity stava dentro la cella della
+notifica, in mezzo al testo. Ora ha la sua colonna ed e' la prima, come
+nell'elenco delle notifiche — le severity si scorrono in verticale invece di
+cercarle dentro una riga di testo — e la data di ricezione ha la colonna
+"Ricevuta" con giorno e ora su due righe, sempre come nell'elenco. 2 test: la
+posizione del badge (prima cella, non dentro la seconda) e la colonna della
+data.
