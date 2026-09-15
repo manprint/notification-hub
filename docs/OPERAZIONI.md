@@ -294,7 +294,12 @@ Cosa aspettarsi:
 - **non c'e** l'ingestion, ne i job Celery: non hanno un attore umano. Non ci sono nemmeno le
   richieste rifiutate con 403/422, che restano nei log strutturati;
 - **non ci sono segreti**: `webhook_url`, hash di password e token, corpi delle notifiche sono
-  sostituiti da `[redacted]` nel diff.
+  sostituiti da `[redacted]` nel diff;
+- **c'e la posizione**: la colonna «Gruppo / Receiver» dice dove e avvenuto il fatto, risolta in
+  lettura dalle chiavi esterne. Su una risorsa nel frattempo cancellata resta un trattino: la riga
+  di audit le sopravvive e il nome congelato in `resource_label` e tutto cio che ne rimane;
+- **lo storico di una notifica** si apre dal suo dettaglio, con «Chi l'ha letta o verificata»:
+  l'interfaccia non espone gli uuid e non si cerca incollandoli.
 
 La tabella e append-only per l'applicazione (`REVOKE UPDATE`, migrazione 0016): un evento scritto
 non si corregge dall'API. Un DBA con accesso diretto al database resta fidato — non c'e firma ne

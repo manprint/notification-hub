@@ -196,6 +196,26 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* Un collegamento che sta in fila con i pulsanti di un'intestazione: e' una
+   navigazione, quindi resta un <a> (apribile in una scheda nuova), ma non deve
+   sembrare un'altra cosa rispetto ai pulsanti che ha accanto. */
+.button-link {
+  display: inline-block;
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  line-height: 1.2;
+  text-decoration: none;
+}
+
+.button-link:hover {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+  text-decoration: none;
+}
+
 button.primary {
   background: var(--color-accent);
   border-color: var(--color-accent);
@@ -916,6 +936,17 @@ tbody tr:last-child td {
 
 .form-row.narrow {
   max-width: 320px;
+}
+
+/* Avviso di una vista gia' filtrata da chi ci ha portato qui (lo storico di
+   una sola notifica): dice cosa si sta guardando e come uscirne. */
+.filter-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
 }
 
 /* "Carica altri" sotto la tabella: lo stile stava in un style={{}} in linea. */

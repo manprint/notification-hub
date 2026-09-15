@@ -767,7 +767,7 @@ Registro di **chi ha fatto cosa**, riservato a **owner e admin** (`require_admin
 | Metodo | Path | Descrizione |
 |---|---|---|
 | GET | `/api/v1/audit/events` | Tutti gli eventi. Filtri: `actor_user_id`, `action`, `resource_type`, `resource_id`, `outcome`, `from`, `to`. Paginazione a cursore su `(occurred_at, id)` DESC |
-| GET | `/api/v1/audit/notification-status` | Vista filtrata sulle sole letture e verifiche. Filtro `notification_id`: trova sia la PATCH singola (`resource_id`) sia i bulk-read, che portano gli id dentro `context` |
+| GET | `/api/v1/audit/notification-status` | Vista filtrata sulle sole letture e verifiche. Filtro `notification_id`: trova sia la PATCH singola (`resource_id`) sia i bulk-read, che portano gli id dentro `context`. Nella dashboard non si digita — ci si arriva da «Chi l'ha letta o verificata» sul dettaglio della notifica, perche' gli uuid non sono esposti da nessuna parte nell'interfaccia |
 | GET | `/api/v1/audit/export` | Gli stessi filtri, in CSV (`format=csv`, default) o JSON. Oltre 50.000 righe risponde 422: l'export e' un file da scaricare adesso, non un dump storico |
 
 Come nasce un evento:
@@ -781,6 +781,7 @@ Invarianti:
 - **Nessun attore umano, nessun evento**. L'ingestion e i job Celery non ne producono: la notifica e' gia il proprio registro, e un secondo giornale del traffico di macchina non serve a nessuno.
 - **Segreti mascherati**. `webhook_url`, `password_hash`, `token_hash` e i corpi delle notifiche non finiscono nel diff: al loro posto `[redacted]`.
 - **Righe autosufficienti**. `actor_email`, `actor_role` e `resource_label` sono fotografie del momento del fatto; `actor_user_id` va a NULL se l'utente viene cancellato, e `resource_id` non ha alcuna FK verso `notifications`, che vivono meno dell'audit.
+- **Posizione risolta in lettura**. `group_id`, `group_name`, `receiver_id` e `receiver_name` non stanno nella tabella: gli endpoint di lettura e l'export li ricavano seguendo le chiavi esterne da `resource_id` (`notification`, `severity_rule`, `receiver_severity_preset` e `receiver_channel_override` passano dal proprio receiver; `group_channel_binding` dal proprio gruppo; il `bulk-read`, che non ha una risorsa singola, dall'ambito dei filtri in `context`). Cosi' vale anche per gli eventi gia' scritti; per una risorsa cancellata i quattro campi sono `null`, perche' la riga di audit le sopravvive e non ha senso indovinarne la posizione.
 - **Append-only per l'applicazione**: `REVOKE UPDATE ON audit_events FROM notifyhub_app` (migrazione 0016). Il `DELETE` resta per la sola purge di ritenzione.
 - **Login falliti**: registrati quando l'email corrisponde a un utente esistente. Con un'email sconosciuta non esiste il tenant a cui attribuire la riga (RLS): quel caso resta nei log strutturati.
 - **Richieste rifiutate** (403/422): nessun evento. Nulla e' cambiato, e il rifiuto sta nei log. Fa eccezione il login fallito, che e' il segnale di sicurezza per cui l'audit esiste.

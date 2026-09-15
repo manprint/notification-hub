@@ -403,6 +403,13 @@ export interface AuditEventOut {
   resource_type: string;
   resource_id: string | null;
   resource_label: string | null;
+  // Dove sta la risorsa: il backend lo risolve in lettura seguendo le chiavi
+  // esterne. Nullo se non vive sotto un gruppo/receiver o se e' stata
+  // cancellata (la riga di audit le sopravvive).
+  group_id: string | null;
+  group_name: string | null;
+  receiver_id: string | null;
+  receiver_name: string | null;
   outcome: AuditOutcome;
   ip: string | null;
   user_agent: string | null;

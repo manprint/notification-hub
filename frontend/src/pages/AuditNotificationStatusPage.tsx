@@ -3,6 +3,7 @@ import type { AuditEventOut } from "../api/types";
 import AuditExportButton from "../components/AuditExportButton";
 import DataTable, { type DataTableColumn } from "../components/DataTable";
 import ErrorBanner from "../components/ErrorBanner";
+import ResourceLocation from "../components/ResourceLocation";
 import SettingsTabs from "../components/SettingsTabs";
 import { type AuditFilters, useAuditEvents } from "../hooks/useAuditEvents";
 import { NOTIFICATION_STATUS_ACTIONS, actionLabel, affectedCount } from "../lib/audit";
@@ -58,6 +59,8 @@ export default function AuditNotificationStatusPage() {
     {
       key: "notification",
       header: "Notifica",
+      // Un link "Apri", non il testo del messaggio: il corpo si legge nella
+      // notifica, come nell'elenco delle notifiche e nelle consegne.
       render: (event) => {
         if (event.action === "notification.bulk_marked_read") {
           return (
@@ -70,12 +73,15 @@ export default function AuditNotificationStatusPage() {
         if (!event.resource_id) return "—";
         return (
           <div className="cell-preview">
-            <Link to={`/notifications/${event.resource_id}`}>
-              {event.resource_label || "(vuota)"}
-            </Link>
+            <Link to={`/notifications/${event.resource_id}`}>Apri</Link>
           </div>
         );
       },
+    },
+    {
+      key: "location",
+      header: "Gruppo / Receiver",
+      render: (event) => <ResourceLocation event={event} />,
     },
   ];
 
@@ -93,18 +99,21 @@ export default function AuditNotificationStatusPage() {
       </p>
       {error && <ErrorBanner error={error} />}
 
+      {/* Il filtro su una notifica sola non si digita: ci si arriva dal suo
+          dettaglio, con "Chi l'ha letta o verificata". Qui si vede che c'e' e
+          si toglie, invece di restare un elenco corto senza spiegazione. */}
+      {filters.notification_id && (
+        <div className="card filter-notice">
+          <span>Storico di una sola notifica.</span>
+          <div className="row-actions">
+            <Link to={`/notifications/${filters.notification_id}`}>Apri la notifica</Link>
+            <button onClick={() => setParam("notification_id", "")}>Mostrale tutte</button>
+          </div>
+        </div>
+      )}
+
       <div className="card">
         <div className="filters">
-          <div className="form-row grow">
-            <label htmlFor="audit-notification-id">ID notifica</label>
-            <input
-              id="audit-notification-id"
-              type="text"
-              placeholder="incolla l'id di una notifica"
-              value={filters.notification_id ?? ""}
-              onChange={(event) => setParam("notification_id", event.target.value)}
-            />
-          </div>
           <div className="form-row">
             <label htmlFor="audit-action">Azione</label>
             <select

@@ -16,6 +16,9 @@ import { formatDurationMs } from "../lib/duration";
 import { isSurveillanceSource, phaseLabel, severitySourceLabel } from "../lib/severitySource";
 
 const DELETE_ALLOWED_ROLES = ["owner", "admin", "member"];
+// L'audit e' di owner e admin (backend: require_admin): agli altri il
+// collegamento non si mostra, prenderebbero 403.
+const AUDIT_ROLES = ["owner", "admin"];
 
 export default function NotificationDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -95,6 +98,7 @@ export default function NotificationDetailPage() {
   }
 
   const canDelete = role !== null && DELETE_ALLOWED_ROLES.includes(role);
+  const canSeeAudit = role !== null && AUDIT_ROLES.includes(role);
 
   return (
     <div>
@@ -113,6 +117,13 @@ export default function NotificationDetailPage() {
           <button disabled={busyAction !== null} onClick={() => void setVerified(!data.verified)}>
             {data.verified ? "Segna come non verificata" : "Segna come verificata"}
           </button>
+          {/* L'id della notifica non e' esposto da nessuna parte, e non deve
+              esserlo: il filtro dell'audit si riempie da qui. */}
+          {canSeeAudit && (
+            <Link className="button-link" to={`/settings/letture-e-verifiche?notification_id=${id}`}>
+              Chi l'ha letta o verificata
+            </Link>
+          )}
           {canDelete && (
             <button
               className="danger"

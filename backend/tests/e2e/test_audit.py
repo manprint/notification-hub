@@ -443,3 +443,228 @@ async def test_cursore_non_valido_e_422(api_client, two_tenants, owner_token):
         "/api/v1/audit/events", params={"cursor": "non-un-cursore"}, headers=owner
     )
     assert resp.status_code == 422
+
+
+@pytest.mark.e2e
+async def test_l_evento_di_un_receiver_dice_in_quale_gruppo_sta(
+    api_client, two_tenants, owner_token
+):
+    """Senza il gruppo, "receiver / Backup notturno" non identifica niente: lo
+    stesso nome puo' stare in tre gruppi diversi."""
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    group_id = await create_group(tenant_id, "Server Produzione")
+    receiver_id = await create_receiver(
+        tenant_id, uuid.uuid4().hex[:22], group_id=group_id, name="Backup notturno"
+    )
+
+    resp = await api_client.patch(
+        f"/api/v1/receivers/{receiver_id}", json={"name": "Backup notturno"}, headers=owner
+    )
+    assert resp.status_code == 200
+    await api_client.patch(
+        f"/api/v1/receivers/{receiver_id}", json={"rate_limit_per_min": 30}, headers=owner
+    )
+
+    audit = await api_client.get(
+        "/api/v1/audit/events",
+        params={"resource_type": "receiver", "resource_id": str(receiver_id)},
+        headers=owner,
+    )
+    evento = audit.json()["events"][0]
+    assert evento["group_name"] == "Server Produzione"
+    assert evento["receiver_name"] == "Backup notturno"
+    # Gli id ci sono: l'interfaccia ci mette sopra il collegamento.
+    assert evento["receiver_id"] == str(receiver_id)
+    assert evento["group_id"] == str(group_id)
+
+
+@pytest.mark.e2e
+async def test_anche_una_regola_di_severity_dice_su_quale_receiver_sta(
+    api_client, two_tenants, owner_token
+):
+    """Una regola si racconta con il suo pattern: senza il receiver non si sa
+    dove e' stata aggiunta."""
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    group_id = await create_group(tenant_id, "Server Produzione")
+    receiver_id = await create_receiver(
+        tenant_id, uuid.uuid4().hex[:22], group_id=group_id, name="Backup notturno"
+    )
+
+    resp = await api_client.post(
+        f"/api/v1/receivers/{receiver_id}/severity-rules",
+        json={"pattern": "disco pieno", "severity": "critical", "priority": 1},
+        headers=owner,
+    )
+    assert resp.status_code == 201, resp.text
+
+    audit = await api_client.get(
+        "/api/v1/audit/events", params={"resource_type": "severity_rule"}, headers=owner
+    )
+    evento = audit.json()["events"][0]
+    assert evento["resource_label"] == "disco pieno"
+    assert evento["receiver_name"] == "Backup notturno"
+    assert evento["group_name"] == "Server Produzione"
+
+
+@pytest.mark.e2e
+async def test_lettura_di_una_notifica_dice_da_quale_receiver_arriva(
+    api_client, two_tenants, owner_token
+):
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    group_id = await create_group(tenant_id, "Server Produzione")
+    slug = uuid.uuid4().hex[:22]
+    await create_receiver(tenant_id, slug, group_id=group_id, name="Backup notturno")
+    ingest = await api_client.post(f"/ingest/{slug}", content="disco pieno")
+    notification_id = ingest.json()["id"]
+
+    resp = await api_client.patch(
+        f"/api/v1/notifications/{notification_id}", json={"status": "read"}, headers=owner
+    )
+    assert resp.status_code == 200
+
+    audit = await api_client.get("/api/v1/audit/notification-status", headers=owner)
+    evento = audit.json()["events"][0]
+    assert evento["receiver_name"] == "Backup notturno"
+    assert evento["group_name"] == "Server Produzione"
+
+
+@pytest.mark.e2e
+async def test_il_bulk_read_dice_su_quale_ambito_ha_agito(api_client, two_tenants, owner_token):
+    """Il bulk-read non ha una risorsa singola: l'ambito sta nei filtri con cui
+    e' stato lanciato, ed e' cio' che serve sapere."""
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    group_id = await create_group(tenant_id, "Server Produzione")
+    slug = uuid.uuid4().hex[:22]
+    receiver_id = await create_receiver(tenant_id, slug, group_id=group_id, name="Backup notturno")
+    await api_client.post(f"/ingest/{slug}", content="prima")
+    await api_client.post(f"/ingest/{slug}", content="seconda")
+
+    resp = await api_client.post(
+        "/api/v1/notifications/bulk-read", json={"receiver_id": str(receiver_id)}, headers=owner
+    )
+    assert resp.status_code == 200, resp.text
+
+    audit = await api_client.get(
+        "/api/v1/audit/notification-status",
+        params={"action": "notification.bulk_marked_read"},
+        headers=owner,
+    )
+    evento = audit.json()["events"][0]
+    assert evento["receiver_name"] == "Backup notturno"
+    assert evento["group_name"] == "Server Produzione"
+
+
+@pytest.mark.e2e
+async def test_la_posizione_resta_vuota_se_la_risorsa_e_stata_cancellata(
+    api_client, two_tenants, owner_token
+):
+    """La riga di audit sopravvive alla risorsa: la posizione si risolve in
+    lettura, quindi sparisce con essa invece di mentire."""
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    receiver_id = await create_receiver(tenant_id, uuid.uuid4().hex[:22], name="Effimero")
+    await api_client.patch(
+        f"/api/v1/receivers/{receiver_id}", json={"rate_limit_per_min": 30}, headers=owner
+    )
+    assert (
+        await api_client.delete(f"/api/v1/receivers/{receiver_id}", headers=owner)
+    ).status_code == 204
+
+    audit = await api_client.get(
+        "/api/v1/audit/events",
+        params={"resource_type": "receiver", "resource_id": str(receiver_id)},
+        headers=owner,
+    )
+    eventi = audit.json()["events"]
+    assert eventi, "gli eventi del receiver cancellato restano"
+    assert all(e["group_name"] is None and e["receiver_name"] is None for e in eventi)
+    # Il nome congelato nell'evento resta: e' l'unica cosa che sopravvive.
+    assert eventi[0]["resource_label"] == "Effimero"
+
+
+@pytest.mark.e2e
+async def test_export_csv_porta_gruppo_e_receiver(api_client, two_tenants, owner_token):
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    group_id = await create_group(tenant_id, "Server Produzione")
+    receiver_id = await create_receiver(
+        tenant_id, uuid.uuid4().hex[:22], group_id=group_id, name="Backup notturno"
+    )
+    await api_client.patch(
+        f"/api/v1/receivers/{receiver_id}", json={"rate_limit_per_min": 30}, headers=owner
+    )
+
+    resp = await api_client.get(
+        "/api/v1/audit/export",
+        params={"format": "csv", "resource_type": "receiver"},
+        headers=owner,
+    )
+    assert resp.status_code == 200
+    righe = resp.text.splitlines()
+    assert "group_name" in righe[0] and "receiver_name" in righe[0]
+    assert any("Server Produzione" in riga and "Backup notturno" in riga for riga in righe[1:])
+
+
+@pytest.mark.e2e
+async def test_l_evento_di_un_gruppo_porta_il_solo_gruppo(api_client, two_tenants, owner_token):
+    """Un gruppo non sta dentro un receiver: la colonna porta il gruppo e basta,
+    non un receiver inventato."""
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    group_id = await create_group(tenant_id, "Server Produzione")
+
+    resp = await api_client.patch(
+        f"/api/v1/groups/{group_id}", json={"description": "i server che contano"}, headers=owner
+    )
+    assert resp.status_code == 200, resp.text
+
+    audit = await api_client.get(
+        "/api/v1/audit/events",
+        params={"resource_type": "group", "resource_id": str(group_id)},
+        headers=owner,
+    )
+    evento = audit.json()["events"][0]
+    assert evento["group_name"] == "Server Produzione"
+    assert evento["group_id"] == str(group_id)
+    assert evento["receiver_name"] is None
+    assert evento["receiver_id"] is None
+
+
+@pytest.mark.e2e
+async def test_il_legame_gruppo_canale_dice_di_quale_gruppo_parla(
+    api_client, two_tenants, owner_token
+):
+    """Un legame gruppo-canale si racconta con due uuid: senza il nome del
+    gruppo la riga e' illeggibile."""
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    group_id = await create_group(tenant_id, "Server Produzione")
+    canale = await api_client.post(
+        "/api/v1/channels",
+        json={
+            "name": f"Slack {uuid.uuid4().hex[:6]}",
+            "type": "slack",
+            "webhook_url": "https://hooks.slack.com/services/T000/B000/XXX",
+            "enabled": True,
+        },
+        headers=owner,
+    )
+    assert canale.status_code == 201, canale.text
+
+    legame = await api_client.post(
+        f"/api/v1/groups/{group_id}/channels",
+        json={"channel_id": canale.json()["id"], "min_severity": "error", "enabled": True},
+        headers=owner,
+    )
+    assert legame.status_code == 201, legame.text
+
+    audit = await api_client.get(
+        "/api/v1/audit/events", params={"resource_type": "group_channel_binding"}, headers=owner
+    )
+    evento = audit.json()["events"][0]
+    assert evento["group_name"] == "Server Produzione"
+    assert evento["receiver_name"] is None

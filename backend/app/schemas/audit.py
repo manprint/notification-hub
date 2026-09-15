@@ -18,6 +18,13 @@ class AuditEventOut(BaseModel):
     resource_type: str
     resource_id: str | None
     resource_label: str | None
+    # Dove sta la risorsa, risolto in lettura seguendo le chiavi esterne: vale
+    # anche per gli eventi gia' scritti. Nullo se la risorsa non vive sotto un
+    # gruppo/receiver, o se e' stata cancellata (l'audit le sopravvive).
+    group_id: str | None = None
+    group_name: str | None = None
+    receiver_id: str | None = None
+    receiver_name: str | None = None
     outcome: AuditOutcome
     ip: str | None
     user_agent: str | None

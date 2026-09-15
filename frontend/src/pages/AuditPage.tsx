@@ -3,6 +3,7 @@ import type { AuditEventOut, AuditOutcome } from "../api/types";
 import AuditExportButton from "../components/AuditExportButton";
 import DataTable, { type DataTableColumn } from "../components/DataTable";
 import ErrorBanner from "../components/ErrorBanner";
+import ResourceLocation from "../components/ResourceLocation";
 import SettingsTabs from "../components/SettingsTabs";
 import { type AuditFilters, useAuditEvents } from "../hooks/useAuditEvents";
 import { actionLabel, describeChanges, resourceLabel } from "../lib/audit";
@@ -84,6 +85,14 @@ export default function AuditPage() {
           <div className="cell-diagnostics">{event.resource_label ?? event.resource_id ?? "—"}</div>
         </div>
       ),
+    },
+    {
+      key: "location",
+      header: "Gruppo / Receiver",
+      // Il nome della risorsa da solo non la identifica: "Backup notturno" puo'
+      // essere il receiver di tre gruppi diversi, e una regola di severity si
+      // racconta col suo pattern senza dire dove e' stata aggiunta.
+      render: (event) => <ResourceLocation event={event} />,
     },
     {
       key: "changes",

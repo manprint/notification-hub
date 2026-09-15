@@ -741,3 +741,41 @@ cercarle dentro una riga di testo — e la data di ricezione ha la colonna
 "Ricevuta" con giorno e ora su due righe, sempre come nell'elenco. 2 test: la
 posizione del badge (prima cella, non dentro la seconda) e la colonna della
 data.
+
+### Audit: dove è avvenuto il fatto (2026-09-15)
+
+Le due tabelle dell'audit dicevano *cosa* e *chi*, non *dove*: "receiver /
+Backup notturno" non identifica niente se tre gruppi hanno un receiver con
+quel nome, e "severity_rule / disco pieno" non dice su quale receiver la
+regola sia stata aggiunta. Aggiunta la colonna **Gruppo / Receiver**, con il
+receiver che e' un collegamento alla sua pagina.
+
+La posizione **non** viene congelata nell'evento: `app/services/audit_location.py`
+la risolve in lettura seguendo le chiavi esterne da `resource_id`, quindi vale
+anche per gli eventi gia' in tabella. Copre tutto cio' che vive sotto un
+receiver (`receiver`, `notification`, `severity_rule`,
+`receiver_severity_preset`, `receiver_channel_override`), i gruppi
+(`group`, `group_channel_binding`) e il `bulk-read`, che non ha una risorsa
+singola e porta il proprio ambito nei filtri dentro `context`. Query in blocco
+(una per tipo di risorsa, piu' due), a chunk di mille id per reggere anche
+l'export da 50.000 righe, che ora ha le stesse due colonne. Se la risorsa e'
+stata cancellata i campi restano nulli e la tabella mostra un trattino: la riga
+di audit sopravvive alla risorsa e inventarne la posizione sarebbe peggio che
+non dirla.
+
+In «Letture e verifiche», due altre correzioni:
+
+- la colonna "Notifica" stampava l'anteprima del corpo come testo del link →
+  ora e' **Apri**, come nell'elenco delle notifiche e nelle consegne;
+- la **ricerca per id notifica** era un campo senza sorgente: nessuna schermata
+  espone gli uuid, quindi non c'era modo di riempirlo. Rimossa. Allo storico di
+  una singola notifica si arriva dal suo dettaglio, con «Chi l'ha letta o
+  verificata» (owner e admin: agli altri l'audit risponde 403); la vista
+  filtrata si dichiara in cima e si lascia con «Mostrale tutte».
+
+8 test backend (722 in totale) e 6 frontend (234): gruppo del receiver, regola
+di severity, notifica letta, bulk-read, risorsa cancellata, export CSV, evento
+di gruppo, legame gruppo-canale; lato UI la colonna e i suoi collegamenti, il
+trattino, il link "Apri", il filtro che arriva dall'URL e si toglie, il
+collegamento assente per il member.
+

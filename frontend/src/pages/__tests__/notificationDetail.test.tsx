@@ -299,4 +299,34 @@ describe("NotificationDetailPage", () => {
 
     expect(await screen.findByText(/Notification not found/)).toBeInTheDocument();
   });
+
+  it("porta allo storico di chi l'ha letta o verificata, senza esporre l'id", async () => {
+    renderDetail("n1");
+    await screen.findByText(/Dettaglio notifica/);
+
+    // L'uuid non compare a video: il filtro dell'audit si riempie da questo
+    // collegamento, non incollando un id preso chissà dove.
+    const link = screen.getByRole("link", { name: /Chi l'ha letta o verificata/ });
+    expect(link).toHaveAttribute("href", "/settings/letture-e-verifiche?notification_id=n1");
+    expect(screen.queryByText("n1")).not.toBeInTheDocument();
+  });
+
+  it("al member il collegamento all'audit non compare: l'audit è di owner e admin", async () => {
+    server.use(
+      http.get("/api/v1/auth/me", () =>
+        HttpResponse.json({
+          id: "u2",
+          email: "member@acme.test",
+          role: "member",
+          tenant_id: "t1",
+          tenant_name: "ACME",
+        }),
+      ),
+    );
+
+    renderDetail("n1");
+    await screen.findByText(/Dettaglio notifica/);
+
+    expect(screen.queryByRole("link", { name: /Chi l'ha letta o verificata/ })).not.toBeInTheDocument();
+  });
 });

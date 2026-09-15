@@ -29,6 +29,7 @@ from app.db.types import AuditOutcome
 from app.models.audit_event import AuditEvent
 from app.schemas.audit import AuditEventListOut, AuditEventOut
 from app.services.audit import NOTIFICATION_STATUS_ACTIONS
+from app.services.audit_location import EMPTY, Location, resolve_locations
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -44,6 +45,8 @@ EXPORT_COLUMNS = [
     "resource_type",
     "resource_id",
     "resource_label",
+    "group_name",
+    "receiver_name",
     "outcome",
     "ip",
     "request_id",
@@ -118,7 +121,7 @@ def _base_query(
     return select(AuditEvent).where(*conditions)
 
 
-def _to_out(event: AuditEvent) -> AuditEventOut:
+def _to_out(event: AuditEvent, location: Location = EMPTY) -> AuditEventOut:
     return AuditEventOut(
         id=str(event.id),
         occurred_at=event.occurred_at,
@@ -129,6 +132,10 @@ def _to_out(event: AuditEvent) -> AuditEventOut:
         resource_type=event.resource_type,
         resource_id=str(event.resource_id) if event.resource_id else None,
         resource_label=event.resource_label,
+        group_id=location.group_id,
+        group_name=location.group_name,
+        receiver_id=location.receiver_id,
+        receiver_name=location.receiver_name,
         outcome=event.outcome,
         ip=event.ip,
         user_agent=event.user_agent,
@@ -158,7 +165,11 @@ async def _paginated(
     has_more = len(rows) > limit
     rows = rows[:limit]
     next_cursor = _encode_cursor(rows[-1].occurred_at, rows[-1].id) if has_more and rows else None
-    return AuditEventListOut(events=[_to_out(row) for row in rows], next_cursor=next_cursor)
+    posizioni = await resolve_locations(session, rows)
+    return AuditEventListOut(
+        events=[_to_out(row, posizioni.get(row.id, EMPTY)) for row in rows],
+        next_cursor=next_cursor,
+    )
 
 
 @router.get("/events", response_model=AuditEventListOut)
@@ -264,10 +275,15 @@ async def export_audit_events(
             extra={"max_rows": EXPORT_MAX_ROWS},
         )
 
+    # Lo stesso contesto che si legge a schermo: un export senza gruppo e
+    # receiver costringerebbe a ritrovarli a mano nel foglio di calcolo.
+    posizioni = await resolve_locations(session, rows)
+
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")  # noqa: DTZ005
     if format == "json":
         payload = json.dumps(
-            [_to_out(row).model_dump(mode="json") for row in rows], ensure_ascii=False
+            [_to_out(row, posizioni.get(row.id, EMPTY)).model_dump(mode="json") for row in rows],
+            ensure_ascii=False,
         ).encode()
         media_type = "application/json"
         filename = f"audit-{stamp}.json"
@@ -276,7 +292,7 @@ async def export_audit_events(
         writer = csv.writer(buffer)
         writer.writerow(EXPORT_COLUMNS)
         for row in rows:
-            record = _to_out(row).model_dump(mode="json")
+            record = _to_out(row, posizioni.get(row.id, EMPTY)).model_dump(mode="json")
             writer.writerow(
                 [
                     json.dumps(record[column], ensure_ascii=False)
