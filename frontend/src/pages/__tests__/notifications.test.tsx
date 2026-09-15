@@ -4,8 +4,25 @@ import { HttpResponse, http } from "msw";
 import { describe, expect, it } from "vitest";
 import NotificationsPage from "../NotificationsPage";
 import { server } from "../../api/mocks/server";
-import { fixtureNotificationDetailObject, fixtureNotificationsPage1 } from "../../api/mocks/handlers";
+import {
+  fixtureNotificationDetailObject,
+  fixtureNotificationsPage1,
+  fixtureReceiver,
+} from "../../api/mocks/handlers";
 import { renderWithProviders } from "./testUtils";
+
+/** Il link "Apri" di una notifica: la lista non stampa piu' il contenuto,
+ *  quindi l'unico ancoraggio stabile di una riga e' l'id nell'href. */
+function linkApri(notificationId: string): HTMLElement | null {
+  return document.querySelector(`a[href="/notifications/${notificationId}"]`);
+}
+
+/** La riga della tabella che contiene quella notifica. */
+function riga(notificationId: string): HTMLElement {
+  const link = linkApri(notificationId);
+  if (link === null) throw new Error(`Nessuna riga per la notifica ${notificationId}`);
+  return link.closest("tr") as HTMLElement;
+}
 
 describe("NotificationsPage", () => {
   it("T-GRP1 landing mostra la griglia dei gruppi e non chiama le notifiche", async () => {
@@ -47,7 +64,7 @@ describe("NotificationsPage", () => {
       expect(urls.some((u) => new URL(u).searchParams.get("group_id") === "g1")).toBe(true);
     });
     const tabella = within(await screen.findByRole("table"));
-    expect(tabella.getByText(/Backup FALLITO/)).toBeInTheDocument();
+    expect(tabella.getAllByRole("link", { name: "Apri" })).toHaveLength(2);
   });
 
   it("T-GRP3 'Torna ai gruppi' torna alla griglia senza combobox gruppo", async () => {
@@ -71,25 +88,23 @@ describe("NotificationsPage", () => {
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
 
     await waitFor(() => {
-      expect(screen.getByText(/Backup FALLITO/)).toBeInTheDocument();
+      expect(linkApri("n1")).not.toBeNull();
     });
-    expect(screen.queryByText(/Terza notifica/)).not.toBeInTheDocument();
+    expect(linkApri("n3")).toBeNull();
 
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Carica altri" }));
 
     await waitFor(() => {
-      expect(screen.getByText(/Terza notifica/)).toBeInTheDocument();
+      expect(linkApri("n3")).not.toBeNull();
     });
-    expect(screen.getAllByText(/Backup FALLITO/)).toHaveLength(1);
+    expect(document.querySelectorAll('a[href="/notifications/n1"]')).toHaveLength(1);
   });
 
   it("T-UI8 test_nota_sulla_ricerca_presente: la nota dichiara la ricerca sull'intero contenuto", async () => {
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
 
-    await waitFor(() => {
-      expect(screen.getByText(/Backup FALLITO/)).toBeInTheDocument();
-    });
+    await screen.findByRole("table");
 
     expect(screen.getByText(/La ricerca esamina l'intero contenuto del messaggio/)).toBeInTheDocument();
     expect(screen.getByText(/object storage esamina i primi 4096 caratteri/)).toBeInTheDocument();
@@ -98,9 +113,7 @@ describe("NotificationsPage", () => {
   it("T-GRP5 test_evidenza_gruppo_nel_titolo: dentro un gruppo il titolo dice quale", async () => {
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
 
-    await waitFor(() => {
-      expect(screen.getByText(/Backup FALLITO/)).toBeInTheDocument();
-    });
+    await screen.findByRole("table");
 
     const titolo = screen.getByRole("heading", { level: 1 });
     expect(titolo).toHaveTextContent("Notifiche");
@@ -145,9 +158,7 @@ describe("NotificationsPage", () => {
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1&receiver_id=r1"]);
     const user = userEvent.setup();
 
-    await waitFor(() => {
-      expect(screen.getByText(/Backup FALLITO/)).toBeInTheDocument();
-    });
+    await screen.findByRole("table");
     await user.click(screen.getByRole("button", { name: "Segna tutte come lette" }));
 
     await waitFor(() => {
@@ -180,7 +191,10 @@ describe("NotificationsPage", () => {
     });
     const ultima = new URL(urls[urls.length - 1]);
     expect(ultima.searchParams.get("group_id")).toBe("g2");
-    expect(ultima.searchParams.get("receiver_id")).toBeNull();
+    // Ogni tabella chiede le notifiche del proprio receiver, quindi receiver_id
+    // e' sempre nella richiesta: che il FILTRO sia stato azzerato si legge sul
+    // select, che riflette la query string della pagina.
+    expect(await screen.findByLabelText("Receiver del gruppo")).toHaveValue("");
   });
 
   it("T-GRP4 test_filtri_group_scoped: filtri severity restano scoped al gruppo", async () => {
@@ -247,9 +261,7 @@ describe("NotificationsPage", () => {
 
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
 
-    await waitFor(() => {
-      expect(screen.getByText(/nessun invio da/)).toBeInTheDocument();
-    });
+    await screen.findByRole("table");
     // Le due notifiche scritte dal server si riconoscono dall'origine, senza
     // dover leggere il contenuto. Si guarda dentro la tabella: le stesse
     // etichette compaiono anche fra le opzioni del filtro.
@@ -304,10 +316,7 @@ describe("NotificationsPage", () => {
 
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
 
-    await waitFor(() => {
-      expect(screen.getByText(/job=backup avvio/)).toBeInTheDocument();
-    });
-    const tabella = within(screen.getByRole("table"));
+    const tabella = within(await screen.findByRole("table"));
     // Solo l'avvio porta la marca: la conclusione e' il caso normale e non ha
     // bisogno di essere annunciata.
     expect(tabella.getAllByText("avvio")).toHaveLength(1);
@@ -345,9 +354,9 @@ describe("NotificationsPage", () => {
 
   it("T-LIST1 le etichette commutano in base a status: unread mostra letta, read mostra non letta", async () => {
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
-    const tabella = within(await screen.findByRole("table"));
-    const rigaN1 = tabella.getByText(/Backup FALLITO/).closest("tr") as HTMLElement;
-    const rigaN2 = tabella.getByText(/Tutto ok/).closest("tr") as HTMLElement;
+    await screen.findByRole("table");
+    const rigaN1 = riga("n1");
+    const rigaN2 = riga("n2");
     expect(within(rigaN1).getByRole("button", { name: "Segna come letta" })).toBeInTheDocument();
     expect(within(rigaN2).getByRole("button", { name: "Segna come non letta" })).toBeInTheDocument();
   });
@@ -364,8 +373,8 @@ describe("NotificationsPage", () => {
       }),
     );
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
-    const tabella = within(await screen.findByRole("table"));
-    const rigaN2 = tabella.getByText(/Tutto ok/).closest("tr") as HTMLElement;
+    await screen.findByRole("table");
+    const rigaN2 = riga("n2");
     await userEvent.setup().click(within(rigaN2).getByRole("button", { name: "Segna come non letta" }));
     await waitFor(() => expect(patchBody).toEqual({ status: "unread" }));
   });
@@ -417,8 +426,8 @@ describe("NotificationsPage", () => {
       }),
     );
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
-    const tabella = within(await screen.findByRole("table"));
-    const rigaN2 = tabella.getByText(/Tutto ok/).closest("tr") as HTMLElement;
+    await screen.findByRole("table");
+    const rigaN2 = riga("n2");
     await userEvent.setup().click(within(rigaN2).getByRole("button", { name: "Segna come verificata" }));
     await waitFor(() => expect(patchBody).toEqual({ verified: true }));
     await waitFor(() => {
@@ -436,15 +445,15 @@ describe("NotificationsPage", () => {
 
   it("status_cell_wraps_pills_aligned: le pill di stato stanno nello stesso contenitore .status-cell", async () => {
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
-    const tabella = within(await screen.findByRole("table"));
+    await screen.findByRole("table");
 
-    const rigaN1 = tabella.getByText(/Backup FALLITO/).closest("tr") as HTMLElement;
+    const rigaN1 = riga("n1");
     const cellN1 = within(rigaN1).getByText("Verificata").closest(".status-cell") as HTMLElement;
     expect(cellN1).not.toBeNull();
     expect(cellN1).toHaveClass("status-cell");
     expect(within(rigaN1).getByText("Non letta").closest(".status-cell")).toBe(cellN1);
 
-    const rigaN2 = tabella.getByText(/Tutto ok/).closest("tr") as HTMLElement;
+    const rigaN2 = riga("n2");
     const cellN2 = within(rigaN2).getByText("Non verificata").closest(".status-cell") as HTMLElement;
     expect(cellN2).not.toBeNull();
     expect(within(rigaN2).getByText("Letta").closest(".status-cell")).toBe(cellN2);
@@ -452,8 +461,8 @@ describe("NotificationsPage", () => {
 
   it("action_buttons_stay_on_same_row: i due pulsanti stanno nello stesso 'row-actions'", async () => {
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
-    const tabella = within(await screen.findByRole("table"));
-    const rigaN2 = tabella.getByText(/Tutto ok/).closest("tr") as HTMLElement;
+    await screen.findByRole("table");
+    const rigaN2 = riga("n2");
     const btnNonLetta = within(rigaN2).getByRole("button", { name: "Segna come non letta" });
     const btnVerificata = within(rigaN2).getByRole("button", { name: "Segna come verificata" });
 
@@ -515,11 +524,11 @@ describe("NotificationsPage", () => {
 
     await user.click(screen.getByRole("button", { name: /server produzione/i }));
 
-    const tabella = within(await screen.findByRole("table"));
+    await screen.findByRole("table");
 
     expect(screen.getByText("Errore").closest(".severity-badge")).not.toBeNull();
 
-    const rigaN1 = tabella.getByText(/Backup FALLITO/).closest("tr") as HTMLElement;
+    const rigaN1 = riga("n1");
     expect(within(rigaN1).getByText("Verificata").closest(".status-cell")).not.toBeNull();
 
     const btnLetta = within(rigaN1).getByRole("button", { name: "Segna come letta" });
@@ -590,5 +599,126 @@ describe("NotificationsPage", () => {
       expect(bulkBody).not.toBeNull();
     });
     expect(bulkBody).toMatchObject({ group_id: "g1", verified: false });
+  });
+
+  // Dentro un gruppo la lista e' spezzata in una tabella per receiver: la
+  // domanda che ci si fa davanti a un gruppo e' "come sta andando QUESTO job",
+  // e una tabella unica costringeva a leggere la colonna del receiver riga per
+  // riga.
+  it("T-SPLIT1 un gruppo con piu' receiver mostra una tabella per ognuno", async () => {
+    const perReceiver: string[] = [];
+    server.use(
+      http.get("/api/v1/groups/:groupId/receivers", () =>
+        HttpResponse.json([
+          fixtureReceiver,
+          { ...fixtureReceiver, id: "r2", name: "Rsync offsite" },
+        ]),
+      ),
+      http.get("/api/v1/notifications", ({ request }) => {
+        const receiverId = new URL(request.url).searchParams.get("receiver_id") ?? "";
+        perReceiver.push(receiverId);
+        return HttpResponse.json(fixtureNotificationsPage1);
+      }),
+    );
+
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("table")).toHaveLength(2);
+    });
+    expect(screen.getByRole("link", { name: "Backup notturno" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Rsync offsite" })).toBeInTheDocument();
+
+    // Ogni tabella ha il proprio cursore: una richiesta per receiver, non una
+    // sola richiesta di gruppo spezzata a video.
+    await waitFor(() => {
+      expect(new Set(perReceiver)).toEqual(new Set(["r1", "r2"]));
+    });
+  });
+
+  it("T-SPLIT2 il filtro receiver lascia in pagina la sola tabella di quel receiver", async () => {
+    server.use(
+      http.get("/api/v1/groups/:groupId/receivers", () =>
+        HttpResponse.json([
+          fixtureReceiver,
+          { ...fixtureReceiver, id: "r2", name: "Rsync offsite" },
+        ]),
+      ),
+    );
+
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1&receiver_id=r2"]);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("table")).toHaveLength(1);
+    });
+    expect(screen.getByRole("link", { name: "Rsync offsite" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Backup notturno" })).not.toBeInTheDocument();
+  });
+
+  it("T-SPLIT3 'Carica altri' di una tabella non tocca le altre", async () => {
+    server.use(
+      http.get("/api/v1/groups/:groupId/receivers", () =>
+        HttpResponse.json([
+          fixtureReceiver,
+          { ...fixtureReceiver, id: "r2", name: "Rsync offsite" },
+        ]),
+      ),
+      http.get("/api/v1/notifications", ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        const receiverId = params.get("receiver_id");
+        if (receiverId === "r2") {
+          return HttpResponse.json({
+            notifications: [
+              {
+                ...fixtureNotificationsPage1.notifications[0],
+                id: "m1",
+                receiver_id: "r2",
+              },
+            ],
+            next_cursor: null,
+            unread_count: 1,
+          });
+        }
+        if (params.get("cursor") === "cursor-page-2") {
+          return HttpResponse.json({
+            notifications: [
+              {
+                ...fixtureNotificationsPage1.notifications[0],
+                id: "n3",
+              },
+            ],
+            next_cursor: null,
+            unread_count: 1,
+          });
+        }
+        return HttpResponse.json(fixtureNotificationsPage1);
+      }),
+    );
+
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+    const user = userEvent.setup();
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("table")).toHaveLength(2);
+    });
+    // Solo la tabella di r1 ha una pagina successiva: il pulsante e' uno solo.
+    const caricaAltri = screen.getByRole("button", { name: "Carica altri" });
+    await user.click(caricaAltri);
+
+    await waitFor(() => {
+      expect(linkApri("n3")).not.toBeNull();
+    });
+    // La tabella dell'altro receiver non e' cresciuta.
+    const tabellaR2 = screen.getByRole("region", { name: "Notifiche di Rsync offsite" });
+    expect(within(tabellaR2).getAllByRole("link", { name: "Apri" })).toHaveLength(1);
+  });
+
+  it("T-SPLIT4 un gruppo senza receiver lo dice, invece di mostrare una tabella vuota", async () => {
+    server.use(http.get("/api/v1/groups/:groupId/receivers", () => HttpResponse.json([])));
+
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+
+    expect(await screen.findByText("Nessun receiver in questo gruppo.")).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 });

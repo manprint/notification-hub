@@ -1,29 +1,22 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { apiGet, apiPatch, apiPost } from "../api/client";
+import { apiGet, apiPost } from "../api/client";
 import type {
   ApiError,
   GroupOut,
-  NotificationListItemOut,
-  NotificationListOut,
   NotificationStatus,
   ReceiverOut,
   Severity,
   SeveritySource,
 } from "../api/types";
-import DataTable, { type DataTableColumn } from "../components/DataTable";
+import EmptyState from "../components/EmptyState";
 import ErrorBanner from "../components/ErrorBanner";
 import GroupList from "../components/GroupList";
-import SeverityBadge from "../components/SeverityBadge";
-import StatusPill from "../components/StatusPill";
-import { useNotifications } from "../hooks/useNotifications";
-import {
-  SEVERITY_SOURCE_LABELS,
-  isSurveillanceSource,
-  phaseLabel,
-  severitySourceLabel,
-} from "../lib/severitySource";
+import ReceiverNotificationsTable, {
+  type ReceiverTableFilters,
+} from "../components/ReceiverNotificationsTable";
+import { SEVERITY_SOURCE_LABELS } from "../lib/severitySource";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
 // Origini filtrabili, nell'ordine della catena di severity. Le due della
@@ -76,61 +69,32 @@ export default function NotificationsPage() {
     queryFn: () => apiGet<GroupOut[]>("/api/v1/groups"),
   });
 
-  // I receiver del gruppo aperto alimentano il filtro per receiver: dentro un
-  // gruppo si guarda quasi sempre un job solo alla volta.
-  const { data: receivers } = useQuery<ReceiverOut[], ApiError>({
+  // I receiver del gruppo aperto sono l'ossatura della pagina: una tabella per
+  // ognuno, piu' il filtro che ne isola uno.
+  const {
+    data: receivers,
+    isLoading: receiversLoading,
+    error: receiversError,
+  } = useQuery<ReceiverOut[], ApiError>({
     queryKey: ["group-receivers", groupId],
     queryFn: () => apiGet<ReceiverOut[]>(`/api/v1/groups/${groupId}/receivers`),
     enabled: !!groupId,
   });
 
-  const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } =
-    useNotifications(
-      {
-        group_id: groupId,
-        receiver_id: receiverId,
-        severity_min: severityMin,
-        status,
-        source,
-        verified,
-        q: q || undefined,
-      },
-      { enabled: !!groupId },
-    );
-
   const currentGroup = groups?.find((g) => g.id === groupId);
 
-  const rows = data?.pages.flatMap((page: NotificationListOut) => page.notifications) ?? [];
+  // Filtri comuni a tutte le tabelle. Il receiver non sta qui: lo mette ogni
+  // tabella con il proprio.
+  const filters: ReceiverTableFilters = {
+    group_id: groupId,
+    severity_min: severityMin,
+    status,
+    source,
+    verified,
+    q: q || undefined,
+  };
 
-  async function setStatus(id: string, status: NotificationStatus) {
-    await runAction(`status:${id}`, async () => {
-      await apiPatch(`/api/v1/notifications/${id}`, { status });
-      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
-    });
-  }
-
-  async function setVerified(id: string, verified: boolean) {
-    await runAction(`verified:${id}`, async () => {
-      await apiPatch(`/api/v1/notifications/${id}`, { verified });
-      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
-    });
-  }
-
-  async function bulkRead() {
-    await runAction("bulk", async () => {
-      await apiPost("/api/v1/notifications/bulk-read", {
-        group_id: groupId,
-        receiver_id: receiverId,
-        severity_min: severityMin,
-        // Lo stesso filtro della lista: "segna tutte come lette" non deve toccare
-        // cio' che i filtri stanno tenendo fuori dalla vista.
-        source,
-        verified,
-        q: q || undefined,
-      });
-      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
-    });
-  }
+  const visibleReceivers = (receivers ?? []).filter((r) => !receiverId || r.id === receiverId);
 
   async function runAction(name: string, action: () => Promise<void>) {
     setActionError(null);
@@ -144,6 +108,18 @@ export default function NotificationsPage() {
     }
   }
 
+  async function bulkRead() {
+    await runAction("bulk", async () => {
+      await apiPost("/api/v1/notifications/bulk-read", {
+        ...filters,
+        // Lo stesso filtro della vista: "segna tutte come lette" non deve toccare
+        // cio' che i filtri stanno tenendo fuori, receiver compreso.
+        receiver_id: receiverId,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+    });
+  }
+
   function selectGroup(groupId: string) {
     const next = new URLSearchParams(searchParams);
     next.set("group_id", groupId);
@@ -152,92 +128,6 @@ export default function NotificationsPage() {
     next.delete("receiver_id");
     setSearchParams(next);
   }
-
-  const columns: DataTableColumn<NotificationListItemOut>[] = [
-    { key: "severity", header: "Severity", render: (n) => <SeverityBadge severity={n.severity} /> },
-    {
-      key: "content",
-      header: "Contenuto",
-      render: (n) => (
-        <Link to={`/notifications/${n.id}`}>
-          {n.content_preview}
-          {n.content_normalized && <span className="status-pill" style={{ marginLeft: 8 }}>contenuto normalizzato</span>}
-          {n.storage_backend === "object" && (
-            <span className="status-pill" style={{ marginLeft: 8 }}>{n.content_size} byte su object storage</span>
-          )}
-        </Link>
-      ),
-    },
-    {
-      key: "source",
-      header: "Origine",
-      render: (n) => (
-        <>
-          <span
-            className="status-pill"
-            title={
-              isSurveillanceSource(n.severity_source)
-                ? "Notifica scritta da NotifyHub: nessuno l'ha inviata"
-                : `Severity decisa da: ${severitySourceLabel(n.severity_source)}`
-            }
-          >
-            {severitySourceLabel(n.severity_source)}
-          </span>
-          {n.phase === "start" && (
-            <span
-              className="status-pill"
-              style={{ marginLeft: 6 }}
-              title="Ping di avvio: l'esito arriva a fine esecuzione"
-            >
-              {phaseLabel(n.phase)}
-            </span>
-          )}
-        </>
-      ),
-    },
-    {
-      key: "status",
-      header: "Stato",
-      render: (n) => (
-        <div className="status-cell">
-          <StatusPill status={n.status} />
-          <span className={`status-pill${n.verified ? " verified" : ""}`}>
-            {n.verified ? "Verificata" : "Non verificata"}
-          </span>
-        </div>
-      ),
-    },
-    {
-      key: "received_at",
-      header: "Ricevuta",
-      render: (n) => {
-        const d = new Date(n.received_at);
-        return (
-          <span className="received-at">
-            <span>{d.toLocaleDateString("it-IT")}</span>
-            <span>{d.toLocaleTimeString("it-IT")}</span>
-          </span>
-        );
-      },
-    },
-    {
-      key: "actions",
-      header: "",
-      render: (n) => (
-        <div className="row-actions">
-          <button
-            disabled={busyAction !== null}
-            onClick={() => void setStatus(n.id, n.status === "unread" ? "read" : "unread")}
-          >
-            {n.status === "unread" ? "Segna come letta" : "Segna come non letta"}
-          </button>
-          <button disabled={busyAction !== null} onClick={() => void setVerified(n.id, !n.verified)}>
-            {n.verified ? "Segna come non verificata" : "Segna come verificata"}
-          </button>
-        </div>
-      ),
-    },
-  ];
 
   if (!groupId) {
     return (
@@ -264,7 +154,7 @@ export default function NotificationsPage() {
         <span className="title-context">{currentGroup?.name ?? "Gruppo"}</span>
       </h1>
       {currentGroup?.description && <p className="page-subtitle">{currentGroup.description}</p>}
-      {error && <ErrorBanner error={error} />}
+      {receiversError && <ErrorBanner error={receiversError} />}
       {actionError && <ErrorBanner error={actionError} />}
 
       <div className="toolbar">
@@ -343,16 +233,13 @@ export default function NotificationsPage() {
         storage esamina i primi 4096 caratteri.
       </p>
 
-      <DataTable
-        columns={columns}
-        rows={rows}
-        rowKey={(n) => n.id}
-        loading={isLoading}
-        hasMore={hasNextPage}
-        loadingMore={isFetchingNextPage}
-        onLoadMore={() => void fetchNextPage()}
-        emptyMessage="Nessuna notifica trovata."
-      />
+      {receiversLoading && <EmptyState message="Caricamento…" />}
+      {!receiversLoading && visibleReceivers.length === 0 && (
+        <EmptyState message="Nessun receiver in questo gruppo." />
+      )}
+      {visibleReceivers.map((receiver) => (
+        <ReceiverNotificationsTable key={receiver.id} receiver={receiver} filters={filters} />
+      ))}
     </div>
   );
 }

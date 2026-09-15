@@ -195,7 +195,7 @@ all-in-one-smoke: ## Smoke test end-to-end dell'immagine all-in-one
 	SMOKE_IMAGE=$(ALL_IN_ONE_IMAGE):$(ALL_IN_ONE_VERSION) $(ALL_IN_ONE_DIR)/smoke-all-in-one.sh
 
 ##= Immagine gia' installata da cui parte il test di aggiornamento
-ALL_IN_ONE_UPGRADE_FROM ?= ghcr.io/manprint/notification-hub:v0.0.2
+ALL_IN_ONE_UPGRADE_FROM ?= ghcr.io/manprint/notification-hub:v0.0.3
 
 all-in-one-upgrade: ## Verifica l'aggiornamento da ALL_IN_ONE_UPGRADE_FROM sullo stesso /data
 	UPGRADE_FROM_IMAGE=$(ALL_IN_ONE_UPGRADE_FROM) \

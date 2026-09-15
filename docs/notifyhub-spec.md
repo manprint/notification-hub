@@ -697,6 +697,8 @@ Le sotto-risorse sono identificate da `channel_id`: `PUT`/`DELETE` su una collez
 
 La lista **non** restituisce il `content` completo ma i primi 500 caratteri di `content_preview` + `content_size`.
 
+Dentro un gruppo la dashboard consuma questa lista **un receiver alla volta** (`receiver_id`), una tabella per receiver del gruppo, ciascuna col proprio cursore: con un cursore unico di gruppo un receiver molto attivo riempirebbe la pagina e gli altri resterebbero vuoti pur avendo notifiche piu' vecchie. Nella tabella il contenuto non viene stampato: la cella porta un link *Apri* al dettaglio. `content_preview` resta comunque nella risposta, perche' e' parte del contratto dell'API e non un dettaglio della dashboard.
+
 Il filtro `q` è una **ricerca per sottostringa case-insensitive su `COALESCE(content, content_preview)`**, servita da un indice GIN `pg_trgm` sulla stessa espressione:
 
 - **payload inline** (≤ `NOTIFYHUB_INLINE_MAX_BYTES`, default 1MB): la ricerca copre il **contenuto intero**;
