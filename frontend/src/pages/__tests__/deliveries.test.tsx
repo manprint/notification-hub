@@ -58,7 +58,10 @@ describe("DeliveriesPage leggibilità", () => {
     const lungo = "Backup FALLITO: " + "disco pieno su /var ".repeat(40);
     server.use(
       http.get("/api/v1/deliveries", () =>
-        HttpResponse.json([{ ...fixtureDeliveries[0], content_preview: lungo }]),
+        HttpResponse.json({
+          deliveries: [{ ...fixtureDeliveries[0], content_preview: lungo }],
+          next_cursor: null,
+        }),
       ),
     );
 
@@ -153,5 +156,126 @@ describe("DeliveriesPage filtri", () => {
     await user.click(azzera);
     expect(screen.getByLabelText("Stato della consegna")).toHaveValue("");
     expect(screen.queryByRole("button", { name: /Azzera i filtri/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("DeliveriesPage paginazione", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setRefreshToken("refresh-token-fixture");
+  });
+
+  // Contratto C2: la lista nuda si fermava alle prime righe senza dirlo; ora e'
+  // una pagina a cursore, e il cursore si ripassa cosi' com'e'.
+  it("«Carica altri» ripassa il cursore opaco e accoda la pagina successiva", async () => {
+    const richieste: URLSearchParams[] = [];
+    server.use(
+      http.get("/api/v1/deliveries", ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        richieste.push(params);
+        if (params.get("cursor") === "opaco==") {
+          return HttpResponse.json({ deliveries: [fixtureDeliveries[1]], next_cursor: null });
+        }
+        return HttpResponse.json({ deliveries: [fixtureDeliveries[0]], next_cursor: "opaco==" });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<DeliveriesPage />);
+
+    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+    expect(screen.queryByText("Inviata", { selector: ".status-pill" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Carica altri" }));
+
+    expect(await screen.findByText("Inviata", { selector: ".status-pill" })).toBeInTheDocument();
+    // La prima pagina resta: la seconda si accoda.
+    expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument();
+    expect(richieste[0].get("cursor")).toBeNull();
+    expect(richieste[0].get("limit")).toBe("100");
+    expect(richieste[1].get("cursor")).toBe("opaco==");
+    expect(screen.queryByRole("button", { name: "Carica altri" })).not.toBeInTheDocument();
+  });
+
+  it("cambiare un filtro riparte dalla prima pagina", async () => {
+    const richieste: URLSearchParams[] = [];
+    server.use(
+      http.get("/api/v1/deliveries", ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        richieste.push(params);
+        if (params.get("cursor")) {
+          return HttpResponse.json({ deliveries: [fixtureDeliveries[1]], next_cursor: null });
+        }
+        return HttpResponse.json({ deliveries: [fixtureDeliveries[0]], next_cursor: "opaco==" });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<DeliveriesPage />);
+
+    await user.click(await screen.findByRole("button", { name: "Carica altri" }));
+    await screen.findByText("Inviata", { selector: ".status-pill" });
+
+    await user.selectOptions(screen.getByLabelText("Stato della consegna"), "dead");
+
+    await waitFor(() => expect(richieste[richieste.length - 1]?.get("status")).toBe("dead"));
+    // Il cursore della vista precedente non vale per il nuovo filtro.
+    expect(richieste[richieste.length - 1]?.get("cursor")).toBeNull();
+    await waitFor(() =>
+      expect(screen.queryByText("Inviata", { selector: ".status-pill" })).not.toBeInTheDocument(),
+    );
+  });
+});
+
+describe("DeliveriesPage prossimo tentativo", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setRefreshToken("refresh-token-fixture");
+  });
+
+  function rigaCon(stato: string): HTMLElement {
+    const riga = screen
+      .getAllByRole("row")
+      .find((r) => within(r).queryByText(stato, { selector: ".status-pill" }) !== null);
+    if (!riga) throw new Error(`Nessuna riga in stato ${stato}`);
+    return riga;
+  }
+
+  it("compare solo per le consegne che aspettano un nuovo tentativo", async () => {
+    server.use(
+      http.get("/api/v1/deliveries", () =>
+        HttpResponse.json({
+          deliveries: [
+            { ...fixtureDeliveries[0], id: "dd", status: "dead" },
+            { ...fixtureDeliveries[0], id: "ds", status: "sending", attempts: 1 },
+            { ...fixtureDeliveries[0], id: "dp", status: "pending", attempts: 0 },
+            { ...fixtureDeliveries[0], id: "df", status: "failed", attempts: 2 },
+          ],
+          next_cursor: null,
+        }),
+      ),
+    );
+    renderWithProviders(<DeliveriesPage />);
+    await waitFor(() => expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument());
+
+    // Una consegna morta non ritenta piu' da sola, una in invio lo sta gia'
+    // facendo: per loro next_attempt_at non e' un appuntamento.
+    expect(within(rigaCon("Morta")).queryByText(/prossimo tentativo/)).not.toBeInTheDocument();
+    expect(within(rigaCon("In invio")).queryByText(/prossimo tentativo/)).not.toBeInTheDocument();
+    expect(within(rigaCon("In attesa")).getByText(/prossimo tentativo/)).toBeInTheDocument();
+    expect(within(rigaCon("Fallita")).getByText(/prossimo tentativo/)).toBeInTheDocument();
+  });
+
+  it("uno stato che la dashboard non conosce resta leggibile", async () => {
+    server.use(
+      http.get("/api/v1/deliveries", () =>
+        HttpResponse.json({
+          deliveries: [{ ...fixtureDeliveries[0], status: "archived" }],
+          next_cursor: null,
+        }),
+      ),
+    );
+    renderWithProviders(<DeliveriesPage />);
+
+    expect(await screen.findByText("archived", { selector: ".status-pill" })).toBeInTheDocument();
+    expect(screen.getByText(/stato non riconosciuto/)).toBeInTheDocument();
   });
 });

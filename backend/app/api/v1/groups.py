@@ -174,8 +174,11 @@ async def update_group(
 
     if body.name is not None:
         group.name = body.name
-    if body.description is not None:
-        group.description = body.description
+    # Qui None (o "") esplicito svuota la descrizione; campo assente = invariata.
+    # Con il solo `is not None` la descrizione non si poteva piu' cancellare:
+    # la UI diceva "aggiornato" e il vecchio testo restava.
+    if "description" in body.model_fields_set:
+        group.description = body.description or None
 
     await session.flush()
     count = await _receiver_counts(session, uuid.UUID(claims.tid), [group.id])

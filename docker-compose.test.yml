@@ -52,7 +52,8 @@ services:
     networks: [notifyhub-test]
 
   minio-test:
-    image: minio/minio
+    # Docker Hub non distribuisce piu' minio/minio: quay.io, stessa release dell'all-in-one.
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
@@ -70,7 +71,7 @@ services:
     networks: [notifyhub-test]
 
   minio-init-test:
-    image: minio/mc
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
     depends_on:
       minio-test:
         condition: service_healthy

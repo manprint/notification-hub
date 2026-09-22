@@ -98,4 +98,28 @@ describe("AcceptInvitePage", () => {
     expect(await screen.findByText(/Token di invito mancante/)).toBeInTheDocument();
     expect(chiamate).toBe(0);
   });
+
+  it("conta i caratteri come il backend: un'emoji vale uno, non due", async () => {
+    const user = userEvent.setup();
+    let chiamate = 0;
+    server.use(
+      http.post("/api/v1/invitations/accept", () => {
+        chiamate += 1;
+        return HttpResponse.json({}, { status: 201 });
+      }),
+    );
+    // Undici caratteri, dodici unità UTF-16: `.length` la faceva passare e il
+    // backend (pydantic, code point) la rifiutava con un 422.
+    const password = "abcdefghij\u{1F600}";
+    expect(password.length).toBe(12);
+
+    renderWithProviders(<AcceptInvitePage />);
+    await user.type(screen.getByLabelText("Scegli una password"), password);
+    await user.type(screen.getByLabelText("Ripeti la password"), password);
+    expect(screen.getByLabelText("Scegli una password")).toHaveValue(password);
+    await user.click(screen.getByRole("button", { name: "Attiva account" }));
+
+    expect(await screen.findByText(/almeno 12 caratteri\./)).toBeInTheDocument();
+    expect(chiamate).toBe(0);
+  });
 });

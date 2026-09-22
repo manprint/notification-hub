@@ -52,6 +52,82 @@ export function toSeconds(amount: number, unit: DurationUnit): number {
   return amount * UNIT_FACTOR[unit];
 }
 
+/** Il massimo che il backend accetta sui campi interi del receiver (rate limit,
+ *  limite corpo, soglia di durata, intervallo e tolleranza dell'attesa): le
+ *  colonne sono integer di PostgreSQL, e oltre questo valore l'API risponde 422. */
+export const INT4_MAX = 2_147_483_647;
+
+/** La quantita' piu' grande che si puo' scrivere in un'unita' senza superare
+ *  INT4_MAX secondi: serve come `max` del campo. */
+export function maxAmount(unit: DurationUnit): number {
+  return Math.floor(INT4_MAX / UNIT_FACTOR[unit]);
+}
+
+export type ParsedNumber = { ok: true; value: number } | { ok: false; error: string };
+
+const MESSAGGIO_VUOTO = "Campo obbligatorio: scrivi un numero.";
+const MESSAGGIO_NON_NUMERO = "Non è un numero valido.";
+
+/** Un campo intero del modulo (rate limit, limite corpo). Rifiuta con un
+ *  messaggio il campo vuoto, i decimali, i valori non finiti (`1e308` compreso)
+ *  e quelli fuori da [min, max]: meglio dirlo qui che ricevere un 422, o peggio
+ *  salvare 0 perche' `Number("")` vale 0. */
+export function parseIntegerInput(
+  raw: string,
+  { min, max = INT4_MAX, empty = MESSAGGIO_VUOTO }: { min: number; max?: number; empty?: string },
+): ParsedNumber {
+  const text = raw.trim();
+  if (text === "") return { ok: false, error: empty };
+  const value = Number(text);
+  if (Number.isNaN(value)) return { ok: false, error: MESSAGGIO_NON_NUMERO };
+  if (value > max) return { ok: false, error: `Troppo grande: il massimo è ${max}.` };
+  if (!Number.isFinite(value)) return { ok: false, error: MESSAGGIO_NON_NUMERO };
+  if (!Number.isInteger(value)) {
+    return { ok: false, error: "Serve un numero intero, senza decimali." };
+  }
+  if (value < min) return { ok: false, error: `Il minimo è ${min}.` };
+  return { ok: true, value };
+}
+
+/** Una durata scritta come quantita' + unita', convertita nei secondi interi che
+ *  l'API vuole. I decimali vanno bene solo se il risultato e' un numero intero di
+ *  secondi (1,5 ore si', mezzo secondo no); il tetto si controlla dopo la
+ *  conversione, perche' 30000 giorni sono troppi anche se 30000 sta nel campo. */
+export function parseDurationInput(
+  raw: string,
+  unit: DurationUnit,
+  { minSeconds, empty = MESSAGGIO_VUOTO }: { minSeconds: number; empty?: string },
+): ParsedNumber {
+  const text = raw.trim();
+  if (text === "") return { ok: false, error: empty };
+  const amount = Number(text);
+  if (Number.isNaN(amount)) return { ok: false, error: MESSAGGIO_NON_NUMERO };
+  const exact = amount * UNIT_FACTOR[unit];
+  if (exact > INT4_MAX) {
+    return {
+      ok: false,
+      error: `Troppo grande: il massimo è ${maxAmount(unit)} ${DURATION_UNIT_LABELS[unit]} (${INT4_MAX} secondi).`,
+    };
+  }
+  if (!Number.isFinite(exact)) return { ok: false, error: MESSAGGIO_NON_NUMERO };
+  const seconds = Math.round(exact);
+  // Tolleranza per l'aritmetica in virgola mobile: 0,7 minuti fanno 42 secondi
+  // anche se 0.7 * 60 non e' esattamente 42 in binario.
+  if (Math.abs(exact - seconds) > 1e-6) {
+    return { ok: false, error: "Deve corrispondere a un numero intero di secondi." };
+  }
+  if (seconds < minSeconds) {
+    return {
+      ok: false,
+      error:
+        minSeconds === 0
+          ? "Non può essere negativa."
+          : `Il minimo è ${formatIntervalSeconds(minSeconds)}.`,
+    };
+  }
+  return { ok: true, value: seconds };
+}
+
 /** Secondi -> coppia (quantita, unita) piu leggibile per un campo di modifica:
  *  600 diventa "10 minuti", non "600 secondi". L'unita di default sui campi
  *  vuoti e il minuto, che e la scala dei job messi in cron. */

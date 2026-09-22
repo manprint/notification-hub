@@ -18,9 +18,13 @@ export const fixtureTokenPair = {
   expires_in: 900,
 };
 
+// Coerente come lo calcola il backend (api/v1/stats.py): il totale di un gruppo
+// e' la somma dei suoi receiver, quindi un gruppo senza receiver sta a zero;
+// total_unread e' la somma delle non lette; by_severity conta tutte le notifiche
+// visibili e omette le severity che non ne hanno (qui debug).
 export const fixtureStatsSummary = {
-  total_unread: 7,
-  by_severity: { critical: 1, error: 2, warning: 1, info: 3, debug: 0 },
+  total_unread: 5,
+  by_severity: { critical: 1, error: 2, warning: 1, info: 6 } as Record<string, number>,
   by_group: [
     {
       group_id: "g1",
@@ -44,10 +48,14 @@ export const fixtureStatsSummary = {
         },
       ],
     },
-    { group_id: "g2", group_name: "Backup", total: 4, unread_count: 2, receivers: [] },
+    // Nessun receiver (come in fixtureGroups): niente notifiche. Il vecchio
+    // `total: 4` con `receivers: []` era impossibile.
+    { group_id: "g2", group_name: "Backup", total: 0, unread_count: 0, receivers: [] },
   ],
-  notifications_last_24h: 12,
-  deliveries_dead: 3,
+  // Non piu' delle notifiche totali (10).
+  notifications_last_24h: 4,
+  // Le consegne morte di fixtureDeliveries.
+  deliveries_dead: 1,
 };
 
 export const fixtureGroups = [
@@ -83,8 +91,14 @@ export const fixtureNotificationsPage1 = {
       severity: "error",
       severity_source: "rule",
       phase: "end",
+      duration_ms: 750_123,
+      exit_code: 1,
       status: "unread",
       verified: true,
+      read_by_email: null,
+      read_at: null,
+      verified_by_email: "mario@acme.test",
+      verified_at: "2026-08-01T03:10:00Z",
       received_at: "2026-08-01T03:00:00Z",
     },
     {
@@ -97,13 +111,20 @@ export const fixtureNotificationsPage1 = {
       severity: "info",
       severity_source: "receiver_default",
       phase: null,
+      duration_ms: null,
+      exit_code: null,
       status: "read",
       verified: false,
+      read_by_email: "owner@acme.test",
+      read_at: "2026-08-01T02:05:00Z",
+      verified_by_email: null,
+      verified_at: null,
       received_at: "2026-08-01T02:00:00Z",
     },
   ],
   next_cursor: "cursor-page-2",
-  unread_count: 7,
+  // Non lette di tutto il tenant, indipendenti dai filtri (come nel backend).
+  unread_count: 5,
 };
 
 export const fixtureNotificationsPage2 = {
@@ -118,13 +139,19 @@ export const fixtureNotificationsPage2 = {
       severity: "warning",
       severity_source: "receiver_default",
       phase: null,
+      duration_ms: null,
+      exit_code: null,
       status: "unread",
       verified: false,
+      read_by_email: null,
+      read_at: null,
+      verified_by_email: null,
+      verified_at: null,
       received_at: "2026-08-01T01:00:00Z",
     },
   ],
   next_cursor: null,
-  unread_count: 7,
+  unread_count: 5,
 };
 
 export const fixtureNotificationDetailInline = {
@@ -143,6 +170,10 @@ export const fixtureNotificationDetailInline = {
   exit_code: 1,
   status: "unread",
   verified: true,
+  read_by_email: null,
+  read_at: null,
+  verified_by_email: "mario@acme.test",
+  verified_at: "2026-08-01T03:10:00Z",
   received_at: "2026-08-01T03:00:00Z",
   source_ip: "203.0.113.5",
 };
@@ -152,17 +183,25 @@ export const fixtureNotificationDetailObject = {
   receiver_id: "r1",
   content: null,
   content_url: "/api/v1/notifications/n4/content",
-  content_preview: "y".repeat(500),
+  // Per un payload su object storage content_preview e' pieno: i primi 4096
+  // caratteri del corpo.
+  content_preview: "y".repeat(4096),
   content_size: 2_097_152,
   content_normalized: false,
   severity: "critical",
-  severity_source: "header",
+  // Header X-Severity: nell'enum del backend (db/types.py) e' "explicit". Il
+  // vecchio "header" non esiste e cadeva nel ripiego dell'etichetta.
+  severity_source: "explicit",
   phase: null,
   matched_pattern: null,
   duration_ms: null,
   exit_code: null,
   status: "unread",
   verified: false,
+  read_by_email: null,
+  read_at: null,
+  verified_by_email: null,
+  verified_at: null,
   received_at: "2026-08-01T04:00:00Z",
   source_ip: "203.0.113.5",
 };
@@ -391,6 +430,23 @@ export const fixtureDeliveries = [
     last_error: null,
     sent_at: "2026-08-01T02:00:01Z",
   },
+  {
+    id: "d3",
+    notification_id: "n3",
+    channel_id: "c1",
+    channel_name: "Slack #ops",
+    receiver_name: "Backup notturno",
+    severity: "warning",
+    content_preview: "Terza notifica",
+    received_at: "2026-08-01T01:00:00Z",
+    status: "failed",
+    attempts: 2,
+    next_attempt_at: "2026-08-01T01:04:00Z",
+    locked_at: null,
+    response_code: 500,
+    last_error: "HTTP 500",
+    sent_at: null,
+  },
 ];
 
 export const fixtureUsers = [
@@ -490,6 +546,175 @@ export const fixtureInvitations: Array<{
   accepted_at: string | null;
 }> = [];
 
+// --- filtri e paginazione come nel backend ------------------------------------
+// Un mock che ignora i query param fa passare qualunque richiesta sbagliata: un
+// filtro che non arriva, una data nel formato sbagliato, un cursore perso. Qui
+// si rispettano almeno i parametri principali di ogni lista.
+
+/** Receiver -> gruppo, per il filtro `group_id` delle notifiche. */
+const RECEIVER_GROUP: Record<string, string> = { r1: "g1", r9: "g1" };
+
+/** Ordine dell'enum `severity` in Postgres: `severity_min` e' un >=. */
+const SEVERITY_RANK: Record<string, number> = {
+  debug: 0,
+  info: 1,
+  warning: 2,
+  error: 3,
+  critical: 4,
+};
+
+function problem(status: number, detail: string) {
+  const title = status === 422 ? "Validation Error" : "Error";
+  return HttpResponse.json(
+    { type: "/problems/validation-error", title, status, detail },
+    { status },
+  );
+}
+
+/** Un datetime di query string come lo leggerebbe FastAPI: `undefined` se il
+ *  parametro manca, `null` se non si interpreta (il backend risponde 422). */
+function parseInstant(params: URLSearchParams, key: string): number | undefined | null {
+  const raw = params.get(key);
+  if (raw === null || raw === "") return undefined;
+  const time = new Date(raw).getTime();
+  return Number.isNaN(time) ? null : time;
+}
+
+function inRange(value: string, from: number | undefined, to: number | undefined): boolean {
+  const time = new Date(value).getTime();
+  return (from === undefined || time >= from) && (to === undefined || time <= to);
+}
+
+/** Pagina a cursore opaco su una lista gia' filtrata e ordinata. Il cursore e'
+ *  la posizione codificata: il client lo deve ripassare cosi' com'e'. */
+function paginate<T>(
+  rows: T[],
+  params: URLSearchParams,
+  defaultLimit: number,
+  maxLimit: number,
+): { page: T[]; next_cursor: string | null } | null {
+  const limit = Number(params.get("limit") ?? defaultLimit);
+  if (!Number.isInteger(limit) || limit < 1 || limit > maxLimit) return null;
+  const cursor = params.get("cursor");
+  let offset = 0;
+  if (cursor !== null) {
+    const match = /^offset-(\d+)$/.exec(cursor);
+    if (!match) return null;
+    offset = Number(match[1]);
+  }
+  const page = rows.slice(offset, offset + limit);
+  const next = offset + limit;
+  return { page, next_cursor: next < rows.length ? `offset-${next}` : null };
+}
+
+interface MockNotification {
+  receiver_id: string;
+  content_preview: string;
+  severity: string;
+  severity_source: string;
+  status: string;
+  verified: boolean;
+  received_at: string;
+}
+
+function matchesNotification(n: MockNotification, params: URLSearchParams): boolean {
+  const groupId = params.get("group_id");
+  const receiverId = params.get("receiver_id");
+  const status = params.get("status");
+  const verified = params.get("verified");
+  const severityMin = params.get("severity_min");
+  const source = params.get("source");
+  const q = params.get("q");
+  const from = parseInstant(params, "from") ?? undefined;
+  const to = parseInstant(params, "to") ?? undefined;
+  return (
+    (!groupId || RECEIVER_GROUP[n.receiver_id] === groupId) &&
+    (!receiverId || n.receiver_id === receiverId) &&
+    (!status || n.status === status) &&
+    (verified === null || String(n.verified) === verified) &&
+    (!severityMin || SEVERITY_RANK[n.severity] >= SEVERITY_RANK[severityMin]) &&
+    (!source || n.severity_source === source) &&
+    (!q || n.content_preview.toLowerCase().includes(q.toLowerCase())) &&
+    inRange(n.received_at, from, to)
+  );
+}
+
+type MockAuditEvent = (typeof fixtureAuditEvents)[number];
+
+const NOTIFICATION_STATUS_ACTIONS = new Set([
+  "notification.marked_read",
+  "notification.marked_unread",
+  "notification.marked_verified",
+  "notification.marked_unverified",
+  "notification.bulk_marked_read",
+]);
+
+/** I filtri dell'audit come in backend/app/api/v1/audit.py (`_base_query`):
+ *  `from`/`to` confrontati come istanti, estremi inclusi. Esportata per i test
+ *  che servono eventi propri con la stessa semantica. `null` = parametri che il
+ *  backend rifiuterebbe con 422. */
+export function filterAuditEvents<T extends MockAuditEvent>(
+  events: T[],
+  params: URLSearchParams,
+  notificationStatusOnly: boolean,
+): T[] | null {
+  const from = parseInstant(params, "from");
+  const to = parseInstant(params, "to");
+  if (from === null || to === null) return null;
+  const notificationId = params.get("notification_id");
+  const exact: Array<keyof MockAuditEvent> = [
+    "actor_user_id",
+    "action",
+    "resource_type",
+    "resource_id",
+    "outcome",
+  ];
+  return events.filter((event) => {
+    if (notificationStatusOnly && !NOTIFICATION_STATUS_ACTIONS.has(event.action)) return false;
+    for (const key of exact) {
+      const wanted = params.get(key);
+      if (wanted && event[key] !== wanted) return false;
+    }
+    if (notificationId) {
+      const ids = event.context?.notification_ids ?? [];
+      if (event.resource_id !== notificationId && !ids.includes(notificationId)) return false;
+    }
+    return inRange(event.occurred_at, from, to);
+  });
+}
+
+function auditList(request: Request, notificationStatusOnly: boolean) {
+  const params = new URL(request.url).searchParams;
+  const events = filterAuditEvents(fixtureAuditEvents, params, notificationStatusOnly);
+  if (events === null) return problem(422, "Invalid datetime.");
+  const result = paginate(events, params, 50, 200);
+  if (result === null) return problem(422, "Invalid cursor or limit.");
+  return HttpResponse.json({ events: result.page, next_cursor: result.next_cursor });
+}
+
+const AUDIT_EXPORT_COLUMNS = [
+  "occurred_at",
+  "actor_email",
+  "actor_role",
+  "action",
+  "resource_type",
+  "resource_id",
+  "resource_label",
+  "group_name",
+  "receiver_name",
+  "outcome",
+  "ip",
+  "request_id",
+  "changes",
+  "context",
+] as const;
+
+function csvCell(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
 export const handlers = [
   http.get("/api/v1/auth/me", () => HttpResponse.json(fixtureMe)),
   http.post("/api/v1/auth/login", () => HttpResponse.json(fixtureTokenPair)),
@@ -501,9 +726,26 @@ export const handlers = [
   http.get("/api/v1/groups/:groupId/delete-impact", () => HttpResponse.json(fixtureDeleteImpact)),
   http.get("/api/v1/groups/:groupId/channels", () => HttpResponse.json([])),
   http.get("/api/v1/notifications", ({ request }) => {
-    const url = new URL(request.url);
-    const cursor = url.searchParams.get("cursor");
-    return HttpResponse.json(cursor ? fixtureNotificationsPage2 : fixtureNotificationsPage1);
+    const params = new URL(request.url).searchParams;
+    if (parseInstant(params, "from") === null || parseInstant(params, "to") === null) {
+      return problem(422, "Invalid datetime.");
+    }
+    const cursor = params.get("cursor");
+    if (cursor !== null && cursor !== fixtureNotificationsPage1.next_cursor) {
+      return problem(422, "Invalid cursor.");
+    }
+    const limit = Number(params.get("limit") ?? 50);
+    // Due pagine fisse, filtrate: la seconda esiste solo se i filtri vi
+    // lasciano qualcosa, come farebbe il cursore del backend.
+    const page = cursor ? fixtureNotificationsPage2 : fixtureNotificationsPage1;
+    const matching = page.notifications.filter((n) => matchesNotification(n, params));
+    const hasNext =
+      !cursor && fixtureNotificationsPage2.notifications.some((n) => matchesNotification(n, params));
+    return HttpResponse.json({
+      ...page,
+      notifications: matching.slice(0, limit),
+      next_cursor: hasNext ? page.next_cursor : null,
+    });
   }),
   http.get("/api/v1/notifications/n1", () => HttpResponse.json(fixtureNotificationDetailInline)),
   http.get("/api/v1/notifications/n4", () => HttpResponse.json(fixtureNotificationDetailObject)),
@@ -524,15 +766,47 @@ export const handlers = [
   ),
   http.post("/api/v1/receivers/r1/test-severity", () => HttpResponse.json(fixtureTestSeverityRule)),
   http.get("/api/v1/channels", () => HttpResponse.json(fixtureChannels)),
-  http.get("/api/v1/deliveries", () => HttpResponse.json(fixtureDeliveries)),
+  http.get("/api/v1/deliveries", ({ request }) => {
+    // Contratto C2: pagina a cursore, ordinata per ricezione della notifica.
+    const params = new URL(request.url).searchParams;
+    const status = params.get("status");
+    const channelId = params.get("channel_id");
+    const rows = fixtureDeliveries
+      .filter((d) => (!status || d.status === status) && (!channelId || d.channel_id === channelId))
+      .sort((a, b) => b.received_at.localeCompare(a.received_at));
+    const result = paginate(rows, params, 100, 500);
+    if (result === null) return problem(422, "Invalid cursor or limit.");
+    return HttpResponse.json({ deliveries: result.page, next_cursor: result.next_cursor });
+  }),
   http.get("/api/v1/users", () => HttpResponse.json(fixtureUsers)),
   http.get("/api/v1/tenant", () => HttpResponse.json(fixtureTenant)),
-  http.get("/api/v1/audit/events", () =>
-    HttpResponse.json({ events: fixtureAuditEvents, next_cursor: null }),
-  ),
-  http.get("/api/v1/audit/notification-status", () =>
-    HttpResponse.json({ events: fixtureAuditEvents, next_cursor: null }),
-  ),
+  http.get("/api/v1/audit/events", ({ request }) => auditList(request, false)),
+  http.get("/api/v1/audit/notification-status", ({ request }) => auditList(request, true)),
+  http.get("/api/v1/audit/export", ({ request }) => {
+    const params = new URL(request.url).searchParams;
+    const statusOnly = params.get("notification_status_only") === "true";
+    const events = filterAuditEvents(fixtureAuditEvents, params, statusOnly);
+    if (events === null) return problem(422, "Invalid datetime.");
+    const format = params.get("format") ?? "csv";
+    if (format === "json") {
+      return HttpResponse.json(events, {
+        headers: { "Content-Disposition": 'attachment; filename="audit-20260915-100000.json"' },
+      });
+    }
+    // Come il backend: UTF-8 senza BOM, una riga d'intestazione.
+    const lines = [
+      AUDIT_EXPORT_COLUMNS.join(","),
+      ...events.map((event) =>
+        AUDIT_EXPORT_COLUMNS.map((column) => csvCell(event[column])).join(","),
+      ),
+    ];
+    return HttpResponse.text(`${lines.join("\r\n")}\r\n`, {
+      headers: {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="audit-20260915-100000.csv"',
+      },
+    });
+  }),
   http.get("/api/v1/invitations", () => HttpResponse.json(fixtureInvitations)),
   http.get("/api/v1/receivers/:receiverId/channels", () => HttpResponse.json([])),
   http.get("/api/v1/severity-presets", () => HttpResponse.json(fixturePresets)),

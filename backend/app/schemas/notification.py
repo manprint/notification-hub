@@ -96,6 +96,10 @@ class BulkReadIn(BaseModel):
     # Idem per la revisione manuale: con il filtro "non verificate" attivo,
     # "segna tutte come lette" non deve toccare quelle gia verificate.
     verified: bool | None = None
+    # Anche il filtro sullo stato, che la dashboard manda insieme agli altri:
+    # prima veniva scartato in silenzio, e con "solo lette" attivo "segna tutte
+    # come lette" toccava proprio le non lette che la vista stava nascondendo.
+    status: NotificationStatus | None = None
     q: str | None = None
     from_: datetime | None = Field(default=None, alias="from")
     to: datetime | None = None

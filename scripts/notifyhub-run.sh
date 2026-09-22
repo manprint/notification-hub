@@ -60,7 +60,7 @@
 
 set -uo pipefail
 
-VERSION="1.4.0"
+VERSION="1.5.0"
 
 # --- configurazione --------------------------------------------------------
 # Le due righe qui sotto sono le uniche da toccare per mettere in funzione lo
@@ -81,6 +81,10 @@ PING_START="${NOTIFYHUB_PING_START:-0}"
 TIMEOUT=""
 MAX_BYTES="${NOTIFYHUB_MAX_BYTES:-1000000}"
 CONNECT_TIMEOUT=10
+RETRIES="${NOTIFYHUB_RETRIES:-2}"
+# Secondi concessi al comando per chiudersi dopo il SIGTERM di --timeout, prima
+# del SIGKILL: senza, un comando che ignora SIGTERM girava oltre ogni limite.
+KILL_AFTER=10
 DRY_RUN=0
 QUIET=0
 STRICT=0
@@ -113,9 +117,13 @@ Opzioni:
       --ping-start       Manda un ping prima di eseguire il comando (X-Phase: start,
                          severity debug), cosi' il server distingue "non e' partito"
                          da "partito e mai concluso"  (env NOTIFYHUB_PING_START=1)
-      --timeout SEC      Uccide il comando dopo SEC secondi (exit code 124 -> fallimento)
+      --timeout SEC      Uccide il comando dopo SEC secondi (exit code 124 -> fallimento);
+                         se ignora SIGTERM, SIGKILL dopo altri 10 secondi
       --max-bytes N      Tronca il corpo a N byte (default 1000000)
       --connect-timeout SEC  Timeout della chiamata HTTP (default 10)
+      --retries N        Nuovi tentativi se l'invio fallisce per rete, 5xx, 429 o
+                         409 (default 2, env NOTIFYHUB_RETRIES). Stesso
+                         X-Request-Id: il server non duplica la notifica.
       --strict           Esce con 1 se l'invio a NotifyHub fallisce
                          (default: l'invio fallito e' solo un avviso su stderr)
       --dry-run          Stampa il messaggio invece di inviarlo
@@ -194,19 +202,27 @@ human_duration() {
     fi
 }
 
+# Un'opzione con valore scritta per ultima (`-s` senza slug) faceva fallire
+# `shift 2` in silenzio: $1 restava l'opzione e il ciclo girava per sempre al
+# 100% di CPU, un processo in piu' a ogni giro di cron.
+need_value() {
+    [ $# -ge 2 ] || die "l'opzione $1 richiede un valore (usa --help)"
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
-        -u|--url) URL="${2:-}"; shift 2 ;;
-        -s|--slug) SLUG="${2:-}"; shift 2 ;;
-        -n|--name) JOB_NAME="${2:-}"; shift 2 ;;
-        --severity) SEVERITY_FORCED="${2:-}"; shift 2 ;;
-        --severity-ok) SEVERITY_OK="${2:-}"; shift 2 ;;
-        --severity-fail) SEVERITY_FAIL="${2:-}"; shift 2 ;;
+        -u|--url) need_value "$@"; URL="$2"; shift 2 ;;
+        -s|--slug) need_value "$@"; SLUG="$2"; shift 2 ;;
+        -n|--name) need_value "$@"; JOB_NAME="$2"; shift 2 ;;
+        --severity) need_value "$@"; SEVERITY_FORCED="$2"; shift 2 ;;
+        --severity-ok) need_value "$@"; SEVERITY_OK="$2"; shift 2 ;;
+        --severity-fail) need_value "$@"; SEVERITY_FAIL="$2"; shift 2 ;;
         --only-on-failure) ONLY_ON_FAILURE=1; shift ;;
         --ping-start) PING_START=1; shift ;;
-        --timeout) TIMEOUT="${2:-}"; shift 2 ;;
-        --max-bytes) MAX_BYTES="${2:-}"; shift 2 ;;
-        --connect-timeout) CONNECT_TIMEOUT="${2:-}"; shift 2 ;;
+        --timeout) need_value "$@"; TIMEOUT="$2"; shift 2 ;;
+        --max-bytes) need_value "$@"; MAX_BYTES="$2"; shift 2 ;;
+        --connect-timeout) need_value "$@"; CONNECT_TIMEOUT="$2"; shift 2 ;;
+        --retries) need_value "$@"; RETRIES="$2"; shift 2 ;;
         --strict) STRICT=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -q|--quiet) QUIET=1; shift ;;
@@ -235,8 +251,25 @@ for sev in "$SEVERITY_FORCED" "$SEVERITY_OK" "$SEVERITY_FAIL"; do
     [ -z "$sev" ] || valid_severity "$sev" || die "severity non valida: '$sev'"
 done
 
+# Numeri validati subito: un valore non numerico finiva in `[ -gt ]` (errore a
+# video e troncamento disattivato) o in `$((...))`, dove `abc` vale 0 e
+# `--max-time 0` per curl significa "nessun limite".
+is_uint() {
+    case "$1" in
+        ''|*[!0-9]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+is_uint "$MAX_BYTES" || die "--max-bytes vuole un intero di byte, non '$MAX_BYTES'"
+is_uint "$CONNECT_TIMEOUT" && [ "$CONNECT_TIMEOUT" -gt 0 ] \
+    || die "--connect-timeout vuole un intero di secondi maggiore di zero, non '$CONNECT_TIMEOUT'"
+is_uint "$RETRIES" || die "--retries vuole un intero, non '$RETRIES'"
+
 if [ -n "$TIMEOUT" ]; then
     command -v timeout >/dev/null 2>&1 || die "--timeout richiede il comando 'timeout' (coreutils)"
+    # Stessa sintassi di timeout(1): numero, anche decimale, con unita' opzionale.
+    [[ "$TIMEOUT" =~ ^[0-9]+(\.[0-9]+)?[smhd]?$ ]] \
+        || die "--timeout vuole una durata come 90, 1.5, 30m o 2h, non '$TIMEOUT'"
 fi
 
 # "1", "true", "yes", "on": chi esporta NOTIFYHUB_PING_START=true si aspetta che
@@ -302,13 +335,30 @@ send_ping_start() {
 
 [ "$PING_START" != "1" ] || send_ping_start
 
+# L'output va su un file temporaneo, non in una variabile: un comando che scrive
+# gigabyte di log avrebbe riempito la memoria prima ancora del taglio a
+# --max-bytes, e la variabile perdeva comunque i byte NUL.
+output_file="$(mktemp "${TMPDIR:-/tmp}/notifyhub-run.XXXXXX")" \
+    || die "impossibile creare un file temporaneo in ${TMPDIR:-/tmp}"
+trap 'rm -f "$output_file"' EXIT
+
+# Un SIGTERM (systemd che ferma il servizio, kill dell'operatore) o un Ctrl-C
+# arrivano di solito anche al comando, che termina. Senza trap lo script moriva
+# con lui senza inviare niente; cosi' invece l'esecuzione si conclude e la
+# notifica dice che e' stata interrotta. Il trap non ignora il segnale: il
+# comando eseguito lo riceve con la disposizione predefinita.
+INTERRUPTED=""
+trap 'INTERRUPTED=SIGTERM' TERM
+trap 'INTERRUPTED=SIGINT' INT
+trap 'INTERRUPTED=SIGHUP' HUP
+
 start_ms="$(now_ms)"
 
 if [ -n "$TIMEOUT" ]; then
-    output="$(timeout "$TIMEOUT" "$@" 2>&1)"
+    timeout -k "$KILL_AFTER" "$TIMEOUT" "$@" >"$output_file" 2>&1
     rc=$?
 else
-    output="$("$@" 2>&1)"
+    "$@" >"$output_file" 2>&1
     rc=$?
 fi
 
@@ -319,7 +369,14 @@ duration_ms=$(( $(now_ms) - start_ms ))
 [ "$duration_ms" -ge 0 ] || duration_ms=0
 duration_human="$(human_duration "$duration_ms")"
 
-[ "$QUIET" -eq 1 ] || [ -z "$output" ] || printf '%s\n' "$output"
+output_bytes=$(wc -c <"$output_file" | tr -d ' ')
+
+if [ "$QUIET" -eq 0 ] && [ "$output_bytes" -gt 0 ]; then
+    cat "$output_file"
+    # Come prima con printf '%s\n': le righe di notifyhub-run che seguono non
+    # devono attaccarsi a un'ultima riga senza a capo.
+    [ -z "$(tail -c 1 "$output_file")" ] || echo
+fi
 
 if [ "$ONLY_ON_FAILURE" -eq 1 ] && [ "$rc" -eq 0 ]; then
     exit 0
@@ -338,9 +395,13 @@ else
     severity="$SEVERITY_OK"
 fi
 
-if [ "$rc" -eq 0 ]; then
+if [ -n "$INTERRUPTED" ]; then
+    esito="interrotto-${INTERRUPTED}"
+elif [ "$rc" -eq 0 ]; then
     esito="ok"
-elif [ "$rc" -eq 124 ] && [ -n "$TIMEOUT" ]; then
+elif [ -n "$TIMEOUT" ] && { [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; }; then
+    # 124: terminato col SIGTERM di timeout; 137: non si e' fermato ed e'
+    # arrivato il SIGKILL di `-k`. Per chi legge e' lo stesso fatto.
     esito="timeout"
 elif [ "$rc" -eq 127 ]; then
     esito="comando-non-trovato"
@@ -356,22 +417,31 @@ fi
 header="[notifyhub] job=${JOB_NAME} esito=${esito} exit=${rc} durata=${duration_human} (${duration_ms}ms) host=$(hostname 2>/dev/null || echo sconosciuto) avvio=${started_at}
 [notifyhub] comando: ${COMMAND_LINE}"
 
-output_bytes=$(printf '%s' "$output" | wc -c)
-
 if [ "$output_bytes" -eq 0 ]; then
     body="${header}
 [notifyhub] il comando non ha prodotto output."
 else
-    shown="$output"
-    if [ "$output_bytes" -gt "$MAX_BYTES" ]; then
-        # L'unico taglio che resta e' quello dimensionale: il receiver rifiuta
-        # con 413 i corpi oltre il proprio max_body_bytes. Si tengono testa e
+    # --max-bytes vale per il corpo intero, intestazione compresa: il receiver
+    # rifiuta con 413 i corpi oltre il proprio max_body_bytes, e contare solo
+    # l'output lasciava sforare di qualche centinaio di byte chi impostava
+    # --max-bytes esattamente al limite del receiver. 200 byte di margine per le
+    # righe [notifyhub] aggiunte qui sotto.
+    header_bytes=$(printf '%s' "$header" | wc -c | tr -d ' ')
+    budget=$((MAX_BYTES - header_bytes - 200))
+    [ "$budget" -ge 0 ] || budget=0
+
+    # `tr -d '\000'`: bash non puo' tenere un NUL in una variabile (lo scarta
+    # con un avviso su stderr), e il server li toglierebbe comunque.
+    if [ "$output_bytes" -le "$budget" ]; then
+        shown="$(tr -d '\000' <"$output_file")"
+    else
+        # L'unico taglio che resta e' quello dimensionale. Si tengono testa e
         # coda, che sono le parti che spiegano cos'e' successo.
-        half=$((MAX_BYTES / 2))
-        dropped=$((output_bytes - MAX_BYTES))
-        shown="$(printf '%s' "$output" | head -c "$half")
+        half=$((budget / 2))
+        dropped=$((output_bytes - 2 * half))
+        shown="$(head -c "$half" "$output_file" | tr -d '\000')
 [notifyhub] ... ${dropped} byte omessi ...
-$(printf '%s' "$output" | tail -c "$half")"
+$(tail -c "$half" "$output_file" | tr -d '\000')"
     fi
 
     body="${header}
@@ -409,13 +479,47 @@ curl_args=(
 )
 [ -z "$severity" ] || curl_args+=(--header "X-Severity: ${severity}")
 
-response="$(printf '%s' "$body" | curl "${curl_args[@]}" "${URL}/ingest/${SLUG}" 2>&1)"
-curl_rc=$?
-http_code="$(printf '%s' "$response" | tail -n 1)"
+# Un solo tentativo perdeva la notifica a ogni errore passeggero (rete, riavvio
+# di NotifyHub, 429), e con la sorveglianza dell'attesa attiva il silenzio
+# diventava anche un falso allarme di assenza. Si ritenta solo cio' che puo'
+# cambiare esito ripetendo la richiesta: errore di rete (http 000), 5xx, 429 e
+# 409 ("stessa richiesta ancora in lavorazione"). Un 4xx diverso (slug errato,
+# corpo troppo grande) fallirebbe identico. Lo stesso X-Request-Id su ogni
+# tentativo rende la ripetizione sicura: se il primo invio era arrivato e si e'
+# persa solo la risposta, il server risponde col risultato gia' registrato.
+attempt=0
+while :; do
+    attempt=$((attempt + 1))
+    response="$(printf '%s' "$body" | curl "${curl_args[@]}" "${URL}/ingest/${SLUG}" 2>&1)"
+    curl_rc=$?
+    http_code="$(printf '%s' "$response" | tail -n 1)"
+    # --write-out mette il codice sull'ultima riga; se manca (curl interrotto
+    # prima di scriverlo) vale come errore di rete.
+    [[ "$http_code" =~ ^[0-9]{3}$ ]] || http_code="000"
+
+    if [ "$curl_rc" -eq 0 ] && [ "${http_code:0:1}" = "2" ]; then
+        break
+    fi
+    case "$http_code" in
+        000|5??|429|409) retryable=1 ;;
+        *) retryable=0 ;;
+    esac
+    if [ "$retryable" -eq 0 ] || [ "$attempt" -gt "$RETRIES" ]; then
+        break
+    fi
+    # 2, 4, 8... secondi, al massimo 30: pochi tentativi ravvicinati coprono un
+    # riavvio o un errore di rete senza tenere occupato il job a lungo.
+    delay=$((1 << attempt))
+    [ "$delay" -le 30 ] || delay=30
+    echo "notifyhub-run: invio fallito (curl=${curl_rc} http=${http_code}), nuovo tentativo fra ${delay}s" >&2
+    sleep "$delay"
+done
 
 if [ "$curl_rc" -ne 0 ] || [ "${http_code:0:1}" != "2" ]; then
-    echo "notifyhub-run: invio fallito (curl=${curl_rc} http=${http_code:-nessuno})" >&2
-    printf '%s\n' "$response" | head -n -1 >&2
+    echo "notifyhub-run: invio fallito (curl=${curl_rc} http=${http_code}, tentativi=${attempt})" >&2
+    # Tutto tranne l'ultima riga (il codice http): `head -n -1` esiste solo
+    # nella head di GNU, `sed '$d'` ovunque.
+    printf '%s\n' "$response" | sed '$d' >&2
     [ "$STRICT" -eq 0 ] || exit 1
 elif [ "$QUIET" -eq 0 ]; then
     echo "notifyhub-run: notifica inviata (http ${http_code}, severity ${severity:-decisa dal server})"

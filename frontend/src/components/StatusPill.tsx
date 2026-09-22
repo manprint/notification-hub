@@ -31,7 +31,9 @@ export function statusLabel(status: Status): string {
   return LABELS[status] ?? status;
 }
 
+/** Uno stato che questa versione non conosce (il backend ne ha aggiunto uno)
+ *  si legge come codice grezzo, in grigio: una pill vuota non dice niente. */
 export default function StatusPill({ status }: { status: Status }) {
   const tone = TONES[status];
-  return <span className={tone ? `status-pill ${tone}` : "status-pill"}>{LABELS[status]}</span>;
+  return <span className={tone ? `status-pill ${tone}` : "status-pill"}>{statusLabel(status)}</span>;
 }

@@ -2,7 +2,7 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.db.types import Severity
+from app.db.types import INT4_MAX, Severity
 
 
 class SeverityPresetRuleOut(BaseModel):
@@ -19,7 +19,7 @@ class SeverityPresetRuleOut(BaseModel):
 
 class SeverityPresetRuleCreate(BaseModel):
     # Come per le regole dei receiver: priorita assente = accoda in fondo.
-    priority: int | None = Field(default=None, ge=0)
+    priority: int | None = Field(default=None, ge=0, le=INT4_MAX)
     pattern: str = Field(min_length=1, max_length=200)
     case_insensitive: bool = True
     severity: Severity
@@ -27,7 +27,7 @@ class SeverityPresetRuleCreate(BaseModel):
 
 
 class SeverityPresetRuleUpdate(BaseModel):
-    priority: int | None = Field(default=None, ge=0)
+    priority: int | None = Field(default=None, ge=0, le=INT4_MAX)
     pattern: str | None = Field(default=None, min_length=1, max_length=200)
     case_insensitive: bool | None = None
     severity: Severity | None = None

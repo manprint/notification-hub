@@ -382,7 +382,35 @@ async def logout(
         tokens = refresh_result.scalars().all()
         for token in tokens:
             token.revoked_at = datetime.now(UTC)
-    else:
+    elif body.refresh_token is not None:
+        # Il caso della dashboard: "Esci" chiude QUESTA sessione, cioe' la
+        # famiglia del refresh token che il client tiene. Il client non conosce
+        # il jti (il refresh token e' opaco), quindi prima il logout mandava
+        # `{}` e il filtro `jti == None` non trovava niente: il token restava
+        # valido per tutta la sua durata. Revocare solo la riga presentata non
+        # basterebbe: una copia ruotata dello stesso token resterebbe viva.
+        now = datetime.now(UTC)
+        presented_result = await session.execute(
+            select(RefreshToken).where(
+                RefreshToken.user_id == uuid.UUID(claims.sub),
+                RefreshToken.tenant_id == uuid.UUID(claims.tid),
+                RefreshToken.token_hash == hash_token(body.refresh_token),
+            )
+        )
+        presented: RefreshToken | None = presented_result.scalar_one_or_none()
+        if presented is not None:
+            family_result = await session.execute(
+                select(RefreshToken).where(
+                    RefreshToken.user_id == uuid.UUID(claims.sub),
+                    RefreshToken.tenant_id == uuid.UUID(claims.tid),
+                    RefreshToken.family_id == presented.family_id,
+                    RefreshToken.revoked_at.is_(None),
+                )
+            )
+            for token in family_result.scalars().all():
+                token.revoked_at = now
+    elif body.jti is not None:
+        # Senza il controllo su None, `jti == None` diventerebbe `IS NULL`.
         refresh_result = await session.execute(
             select(RefreshToken).where(
                 RefreshToken.user_id == uuid.UUID(claims.sub),

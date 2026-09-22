@@ -60,6 +60,22 @@ def _host_of(webhook_url: str) -> str:
     return urlsplit(webhook_url).hostname or "unknown"
 
 
+def safe_error(exc: BaseException, webhook_url: str) -> str:
+    """Messaggio d'errore senza il segreto del webhook. Il testo delle eccezioni
+    httpx contiene spesso l'URL completo, e per Slack e Google Chat il path E' il
+    segreto: finiva in `deliveries.last_error` e `channels.last_error`, che la
+    dashboard mostra anche ai member, e nei log. Si tiene il tipo d'errore e il
+    testo con ogni forma dell'URL (intera o solo path/query) sostituita."""
+    parts = urlsplit(webhook_url)
+    message = str(exc).replace(webhook_url, f"{parts.scheme}://{parts.hostname}/<redacted>")
+    for secret in (parts.path, parts.query):
+        if len(secret) > 1:
+            message = message.replace(secret, "/<redacted>")
+    message = message[:300]
+    name = type(exc).__name__
+    return f"{name}: {message}" if message else name
+
+
 @dataclass
 class WebhookResult:
     ok: bool
@@ -114,17 +130,20 @@ def send_webhook_sync(
 ) -> WebhookResult:
     """Versione sincrona, usata dal worker Celery (spec 8.4: engine sincrono
     dedicato, niente event loop per task)."""
-    payload = _build_payload(
-        channel_type,
-        receiver_name=receiver_name,
-        severity=severity,
-        content_preview=content_preview,
-        content_size=content_size,
-        notification_url=notification_url,
-        duration_ms=duration_ms,
-        duration_threshold_seconds=duration_threshold_seconds,
-    )
     try:
+        # Dentro il try anche la formattazione: un formatter che solleva su un
+        # contenuto particolare sarebbe uscito da dispatch_delivery con la riga
+        # `sending`, cioe' nel ciclo senza fine descritto sotto.
+        payload = _build_payload(
+            channel_type,
+            receiver_name=receiver_name,
+            severity=severity,
+            content_preview=content_preview,
+            content_size=content_size,
+            notification_url=notification_url,
+            duration_ms=duration_ms,
+            duration_threshold_seconds=duration_threshold_seconds,
+        )
         with httpx.Client(timeout=10.0) as client:
             response = client.post(webhook_url, json=payload)
         if response.status_code == 429:
@@ -151,5 +170,6 @@ def send_webhook_sync(
         # malformato) e gli errori di serializzazione del payload non sono
         # HTTPError. Un guasto va contato come tentativo fallito, non ripetuto
         # all'infinito.
-        logger.error("webhook_delivery_failed", webhook_host=_host_of(webhook_url), error=str(exc))
-        return WebhookResult(ok=False, status_code=None, retry_after=None, error=str(exc))
+        error = safe_error(exc, webhook_url)
+        logger.error("webhook_delivery_failed", webhook_host=_host_of(webhook_url), error=error)
+        return WebhookResult(ok=False, status_code=None, retry_after=None, error=error)

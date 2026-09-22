@@ -2,6 +2,11 @@ from enum import StrEnum
 
 from sqlalchemy.dialects.postgresql import ENUM
 
+# Massimo di una colonna `integer` di Postgres. I campi numerici delle API che
+# finiscono in una colonna int4 lo dichiarano come `le=`: oltre, l'INSERT
+# fallisce con un overflow e l'utente riceve un 500 invece di un 422.
+INT4_MAX = 2_147_483_647
+
 
 class TenantStatus(StrEnum):
     ACTIVE = "active"

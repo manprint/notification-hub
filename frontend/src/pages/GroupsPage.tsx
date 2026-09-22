@@ -30,7 +30,10 @@ function EditGroupForm({ group, onDone }: { group: GroupOut; onDone: () => void 
       async () => {
         await apiPatch(`/api/v1/groups/${group.id}`, {
           name: name.trim(),
-          description: description.trim() || null,
+          // Sempre presente, anche vuota: "" esplicito svuota la descrizione.
+          // Il campo omesso (o null, per il backend di prima) la lasciava com'era,
+          // e il modulo si chiudeva con "Gruppo aggiornato" senza averla tolta.
+          description: description.trim(),
         });
         await queryClient.invalidateQueries({ queryKey: ["groups"] });
       },
@@ -122,7 +125,9 @@ function DeleteGroupButton({ group }: { group: GroupOut }) {
           title={`Elimina gruppo "${group.name}"`}
           expectedText={group.name}
           confirmLabel="Elimina gruppo"
-          onConfirm={() => void confirmDelete()}
+          // La promessa, non `void`: il dialogo resta occupato fino alla risposta,
+          // e un doppio click non manda una seconda DELETE.
+          onConfirm={confirmDelete}
           onCancel={() => setOpen(false)}
         >
           <p>Verranno eliminati in cascata:</p>

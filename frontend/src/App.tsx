@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ReactNode } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import Layout from "./components/Layout";
 import RequireRole from "./components/RequireRole";
 import { SessionProvider, useSession } from "./hooks/useSession";
@@ -22,11 +22,31 @@ const UsersPage = lazy(() => import("./pages/UsersPage"));
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useSession();
+  const location = useLocation();
 
   if (loading) return <div className="empty-state">Caricamento…</div>;
-  if (!user) return <Navigate to="/login" replace />;
+  if (!user) {
+    // La pagina chiesta viaggia con il redirect: un link a una notifica aperto
+    // da una mail deve portare lì dopo il login, non al riepilogo.
+    const from = `${location.pathname}${location.search}${location.hash}`;
+    return <Navigate to="/login" replace state={{ from }} />;
+  }
 
   return <>{children}</>;
+}
+
+/** Un indirizzo che non esiste (link vecchio, errore di battitura): senza
+ *  questa rotta la pagina restava bianca, senza modo di capire perché. */
+function NotFound() {
+  return (
+    <div>
+      <div className="page-header">
+        <h1>Pagina non trovata</h1>
+      </div>
+      <p className="page-subtitle">L'indirizzo non corrisponde a nessuna pagina di NotifyHub.</p>
+      <Link to="/">Torna al riepilogo</Link>
+    </div>
+  );
 }
 
 export default function App() {
@@ -119,6 +139,9 @@ export default function App() {
               </RequireRole>
             }
           />
+          {/* Dentro il layout autenticato: chi non è entrato passa prima dal
+              login, e il menu resta a disposizione per tornare altrove. */}
+          <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>
       </Suspense>

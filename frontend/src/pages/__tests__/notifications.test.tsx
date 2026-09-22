@@ -1,8 +1,9 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import NotificationsPage from "../NotificationsPage";
+import { setRefreshToken } from "../../api/client";
 import { server } from "../../api/mocks/server";
 import {
   fixtureNotificationDetailObject,
@@ -24,7 +25,29 @@ function riga(notificationId: string): HTMLElement {
   return link.closest("tr") as HTMLElement;
 }
 
+/** Sessione di un altro ruolo: /auth/me risponde con quello. */
+function comeRuolo(role: string) {
+  server.use(
+    http.get("/api/v1/auth/me", () =>
+      HttpResponse.json({
+        id: "u9",
+        email: `${role}@acme.test`,
+        role,
+        tenant_id: "t1",
+        tenant_name: "ACME",
+      }),
+    ),
+  );
+}
+
 describe("NotificationsPage", () => {
+  // Le azioni su notifiche seguono il ruolo (backend: require_member): serve
+  // una sessione, come nelle altre pagine. fixtureMe di default e' owner.
+  beforeEach(() => {
+    localStorage.clear();
+    setRefreshToken("refresh-token-fixture");
+  });
+
   it("T-GRP1 landing mostra la griglia dei gruppi e non chiama le notifiche", async () => {
     let notificationsCalled = false;
     server.use(
@@ -159,7 +182,8 @@ describe("NotificationsPage", () => {
     const user = userEvent.setup();
 
     await screen.findByRole("table");
-    await user.click(screen.getByRole("button", { name: "Segna tutte come lette" }));
+    // Il pulsante dipende dal ruolo, che arriva da /auth/me: si aspetta.
+    await user.click(await screen.findByRole("button", { name: "Segna tutte come lette" }));
 
     await waitFor(() => {
       expect(body).not.toBeNull();
@@ -347,7 +371,7 @@ describe("NotificationsPage", () => {
     });
 
     // "Segna tutte come lette" non deve agire su cio' che il filtro esclude.
-    await user.click(screen.getByRole("button", { name: "Segna tutte come lette" }));
+    await user.click(await screen.findByRole("button", { name: "Segna tutte come lette" }));
     await waitFor(() => expect(bulkBody).not.toBeNull());
     expect(bulkBody).toMatchObject({ source: "missing" });
   });
@@ -357,7 +381,8 @@ describe("NotificationsPage", () => {
     await screen.findByRole("table");
     const rigaN1 = riga("n1");
     const rigaN2 = riga("n2");
-    expect(within(rigaN1).getByRole("button", { name: "Segna come letta" })).toBeInTheDocument();
+    // I pulsanti di riga possono dipendere dal ruolo: si aspettano.
+    expect(await within(rigaN1).findByRole("button", { name: "Segna come letta" })).toBeInTheDocument();
     expect(within(rigaN2).getByRole("button", { name: "Segna come non letta" })).toBeInTheDocument();
   });
 
@@ -375,7 +400,9 @@ describe("NotificationsPage", () => {
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
     await screen.findByRole("table");
     const rigaN2 = riga("n2");
-    await userEvent.setup().click(within(rigaN2).getByRole("button", { name: "Segna come non letta" }));
+    await userEvent
+      .setup()
+      .click(await within(rigaN2).findByRole("button", { name: "Segna come non letta" }));
     await waitFor(() => expect(patchBody).toEqual({ status: "unread" }));
   });
 
@@ -428,7 +455,9 @@ describe("NotificationsPage", () => {
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
     await screen.findByRole("table");
     const rigaN2 = riga("n2");
-    await userEvent.setup().click(within(rigaN2).getByRole("button", { name: "Segna come verificata" }));
+    await userEvent
+      .setup()
+      .click(await within(rigaN2).findByRole("button", { name: "Segna come verificata" }));
     await waitFor(() => expect(patchBody).toEqual({ verified: true }));
     await waitFor(() => {
       expect(within(rigaN2).getByText("Verificata")).toBeInTheDocument();
@@ -463,7 +492,7 @@ describe("NotificationsPage", () => {
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
     await screen.findByRole("table");
     const rigaN2 = riga("n2");
-    const btnNonLetta = within(rigaN2).getByRole("button", { name: "Segna come non letta" });
+    const btnNonLetta = await within(rigaN2).findByRole("button", { name: "Segna come non letta" });
     const btnVerificata = within(rigaN2).getByRole("button", { name: "Segna come verificata" });
 
     expect(btnNonLetta.parentElement).toBe(btnVerificata.parentElement);
@@ -531,7 +560,7 @@ describe("NotificationsPage", () => {
     const rigaN1 = riga("n1");
     expect(within(rigaN1).getByText("Verificata").closest(".status-cell")).not.toBeNull();
 
-    const btnLetta = within(rigaN1).getByRole("button", { name: "Segna come letta" });
+    const btnLetta = await within(rigaN1).findByRole("button", { name: "Segna come letta" });
     const btnVerificata = within(rigaN1).getByRole("button", { name: "Segna come non verificata" });
     expect(btnLetta.parentElement).toBe(btnVerificata.parentElement);
     expect(btnLetta.parentElement as HTMLElement).toHaveClass("row-actions");
@@ -593,12 +622,78 @@ describe("NotificationsPage", () => {
     });
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Segna tutte come lette" }));
+    await user.click(await screen.findByRole("button", { name: "Segna tutte come lette" }));
 
     await waitFor(() => {
       expect(bulkBody).not.toBeNull();
     });
     expect(bulkBody).toMatchObject({ group_id: "g1", verified: false });
+  });
+
+  // Contratto C7: il bulk-read accetta `status`. Il corpo lo porta gia' con gli
+  // altri filtri della vista, e il test lo fissa.
+  it("'segna tutte come lette' manda anche il filtro sullo stato di lettura", async () => {
+    let bulkBody: Record<string, unknown> | null = null;
+    server.use(
+      http.post("/api/v1/notifications/bulk-read", async ({ request }) => {
+        bulkBody = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ marked_read: 2 });
+      }),
+    );
+
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1&status=unread"]);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Segna tutte come lette" }));
+
+    await waitFor(() => expect(bulkBody).not.toBeNull());
+    expect(bulkBody).toMatchObject({ group_id: "g1", status: "unread" });
+  });
+
+  it("con il filtro «Solo lette» non c'e' niente da segnare: il pulsante e' spento", async () => {
+    let bulkChiamato = false;
+    server.use(
+      http.post("/api/v1/notifications/bulk-read", () => {
+        bulkChiamato = true;
+        return HttpResponse.json({ marked_read: 0 });
+      }),
+    );
+
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1&status=read"]);
+
+    const pulsante = await screen.findByRole("button", { name: "Segna tutte come lette" });
+    expect(pulsante).toBeDisabled();
+    await userEvent.setup().click(pulsante);
+    expect(bulkChiamato).toBe(false);
+  });
+
+  it("al viewer 'segna tutte come lette' non compare: il backend gli risponde 403", async () => {
+    let sessioneServita = false;
+    server.use(
+      http.get("/api/v1/auth/me", () => {
+        sessioneServita = true;
+        return HttpResponse.json({
+          id: "u9",
+          email: "viewer@acme.test",
+          role: "viewer",
+          tenant_id: "t1",
+          tenant_name: "ACME",
+        });
+      }),
+    );
+
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+    await screen.findByRole("heading", { level: 1 });
+    await waitFor(() => expect(sessioneServita).toBe(true));
+    await screen.findByLabelText("Receiver del gruppo");
+
+    expect(screen.queryByRole("button", { name: "Segna tutte come lette" })).not.toBeInTheDocument();
+  });
+
+  it("il member vede 'segna tutte come lette'", async () => {
+    comeRuolo("member");
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+
+    expect(await screen.findByRole("button", { name: "Segna tutte come lette" })).toBeEnabled();
   });
 
   // Dentro un gruppo la lista e' spezzata in una tabella per receiver: la
@@ -648,9 +743,13 @@ describe("NotificationsPage", () => {
 
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1&receiver_id=r2"]);
 
+    // Si contano le sezioni, non le tabelle: il mock ora rispetta receiver_id
+    // e r2 non ha notifiche, quindi la sua sezione mostra il vuoto invece di
+    // una tabella riempita con le notifiche di r1 (dato impossibile).
     await waitFor(() => {
-      expect(screen.getAllByRole("table")).toHaveLength(1);
+      expect(screen.getAllByRole("region")).toHaveLength(1);
     });
+    expect(screen.getByRole("region", { name: "Notifiche di Rsync offsite" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Rsync offsite" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Backup notturno" })).not.toBeInTheDocument();
   });

@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useDialogKeyboard } from "../hooks/useDialogKeyboard";
 
 interface ModalProps {
   title: string;
@@ -13,8 +14,7 @@ interface ModalProps {
 export default function Modal({ title, onClose, children }: ModalProps) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
+  useDialogKeyboard(dialogRef, onClose);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -28,31 +28,6 @@ export default function Modal({ title, onClose, children }: ModalProps) {
     return () => previouslyFocused?.focus();
   }, []);
 
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      closeRef.current();
-      return;
-    }
-    if (event.key !== "Tab") return;
-
-    const focusable = Array.from(
-      event.currentTarget.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
-      ),
-    );
-    if (focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
-
   return (
     <div
       className="confirm-backdrop"
@@ -60,13 +35,15 @@ export default function Modal({ title, onClose, children }: ModalProps) {
         if (event.target === event.currentTarget) onClose();
       }}
     >
+      {/* tabIndex -1: un click su un testo del dialogo lascia il fuoco sul
+          dialogo invece di mandarlo sul body, fuori dalla finestra. */}
       <div
         ref={dialogRef}
         className="card confirm-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        onKeyDown={handleKeyDown}
+        tabIndex={-1}
       >
         <div className="card-header">
           <h2 id={titleId}>{title}</h2>

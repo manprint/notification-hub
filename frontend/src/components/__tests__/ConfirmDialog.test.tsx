@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import ConfirmDialog from "../ConfirmDialog";
@@ -54,5 +54,56 @@ describe("ConfirmDialog", () => {
     expect(screen.getByLabelText(/digita/i)).toHaveFocus();
     await user.keyboard("{Escape}");
     expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it("mentre la conferma è in corso i pulsanti si disabilitano e un doppio click non la ripete", async () => {
+    const user = userEvent.setup();
+    let finisci: () => void = () => undefined;
+    const onConfirm = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finisci = resolve;
+        }),
+    );
+    const onCancel = vi.fn();
+    render(
+      <ConfirmDialog
+        title="Revoca invito"
+        confirmLabel="Revoca"
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+      />,
+    );
+
+    const conferma = screen.getByRole("button", { name: "Revoca" });
+    await user.dblClick(conferma);
+
+    // Prima: due click, due DELETE.
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(conferma).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Annulla" })).toBeDisabled();
+    // Nemmeno Escape chiude a metà: la richiesta è già partita.
+    await user.keyboard("{Escape}");
+    expect(onCancel).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finisci();
+    });
+    expect(conferma).toBeEnabled();
+  });
+
+  it("dopo un click sul testo, Escape annulla ancora", async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn();
+    render(
+      <ConfirmDialog title="Revoca invito" onConfirm={vi.fn()} onCancel={onCancel}>
+        <p>Il collegamento smette di funzionare.</p>
+      </ConfirmDialog>,
+    );
+
+    await user.click(screen.getByText(/smette di funzionare/));
+    await user.keyboard("{Escape}");
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });

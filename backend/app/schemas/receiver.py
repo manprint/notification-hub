@@ -4,7 +4,7 @@ from typing import Annotated, Self
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
-from app.db.types import ReceiverStatus, Severity
+from app.db.types import INT4_MAX, ReceiverStatus, Severity
 
 DURATION_POLICY_HALF_CONFIGURED = (
     "duration_threshold_seconds and duration_severity must be set together: "
@@ -74,8 +74,8 @@ TimezoneName = Annotated[str, AfterValidator(lambda value: value.strip())]
 
 class ReceiverCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    max_body_bytes: int | None = Field(default=None, ge=1)
-    rate_limit_per_min: int = Field(default=60, ge=0)
+    max_body_bytes: int | None = Field(default=None, ge=1, le=INT4_MAX)
+    rate_limit_per_min: int = Field(default=60, ge=0, le=INT4_MAX)
     default_severity: Severity = Severity.INFO
     # Severity applicata quando arriva X-Exit-Code diverso da zero.
     # None esplicito = l'exit code non influenza la severity.
@@ -83,16 +83,16 @@ class ReceiverCreate(BaseModel):
     # Soglia di durata dell'esecuzione (header X-Duration-Ms) e severity da
     # applicare quando viene superata. Default disattivo: quanto sia "troppo
     # lento" dipende dal singolo job, non esiste un valore ragionevole per tutti.
-    duration_threshold_seconds: int | None = Field(default=None, ge=1)
+    duration_threshold_seconds: int | None = Field(default=None, ge=1, le=INT4_MAX)
     duration_severity: Severity | None = None
     # Sorveglianza dell'attesa (dead man's switch): ogni quanto ci si aspetta un
     # invio, con quale tolleranza e con quale severity segnalare l'assenza. Uno
     # solo fra intervallo ed espressione cron. Default spenta: quanto spesso
     # debba parlare un job lo sa solo chi l'ha messo in crontab.
-    expected_every_seconds: int | None = Field(default=None, ge=1)
+    expected_every_seconds: int | None = Field(default=None, ge=1, le=INT4_MAX)
     expected_cron: CronExpression | None = Field(default=None, max_length=100)
     expected_timezone: TimezoneName | None = Field(default=None, max_length=64)
-    expected_grace_seconds: int | None = Field(default=None, ge=0)
+    expected_grace_seconds: int | None = Field(default=None, ge=0, le=INT4_MAX)
     missing_severity: Severity | None = None
 
     @model_validator(mode="after")
@@ -116,8 +116,8 @@ class ReceiverCreate(BaseModel):
 class ReceiverUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     status: ReceiverStatus | None = None
-    max_body_bytes: int | None = Field(default=None, ge=1)
-    rate_limit_per_min: int | None = Field(default=None, ge=0)
+    max_body_bytes: int | None = Field(default=None, ge=1, le=INT4_MAX)
+    rate_limit_per_min: int | None = Field(default=None, ge=0, le=INT4_MAX)
     default_severity: Severity | None = None
     # Qui None e un valore legittimo (disattiva la politica sull'exit code), non
     # "campo assente": l'endpoint distingue i due casi con model_fields_set.
@@ -125,14 +125,14 @@ class ReceiverUpdate(BaseModel):
     # Idem: None disattiva. La coerenza della coppia non si puo verificare qui,
     # perche una PATCH puo cambiare solo una delle due lasciando l'altra al
     # valore gia salvato: il controllo sta nell'endpoint, sullo stato finale.
-    duration_threshold_seconds: int | None = Field(default=None, ge=1)
+    duration_threshold_seconds: int | None = Field(default=None, ge=1, le=INT4_MAX)
     duration_severity: Severity | None = None
     # Come sopra: None disattiva, e la coerenza si verifica sullo stato finale
     # nell'endpoint, perche una PATCH puo toccare un solo campo dei cinque.
-    expected_every_seconds: int | None = Field(default=None, ge=1)
+    expected_every_seconds: int | None = Field(default=None, ge=1, le=INT4_MAX)
     expected_cron: CronExpression | None = Field(default=None, max_length=100)
     expected_timezone: TimezoneName | None = Field(default=None, max_length=64)
-    expected_grace_seconds: int | None = Field(default=None, ge=0)
+    expected_grace_seconds: int | None = Field(default=None, ge=0, le=INT4_MAX)
     missing_severity: Severity | None = None
 
 
@@ -183,7 +183,7 @@ class SeverityRuleCreate(BaseModel):
     # Priorita opzionale: se assente il backend accoda la regola in fondo
     # (massima priorita esistente + 10), cosi la creazione dalla UI non deve
     # indovinare un numero libero.
-    priority: int | None = Field(default=None, ge=0)
+    priority: int | None = Field(default=None, ge=0, le=INT4_MAX)
     pattern: str = Field(min_length=1, max_length=200)
     case_insensitive: bool = True
     severity: Severity
@@ -191,7 +191,7 @@ class SeverityRuleCreate(BaseModel):
 
 
 class SeverityRuleUpdate(BaseModel):
-    priority: int | None = Field(default=None, ge=0)
+    priority: int | None = Field(default=None, ge=0, le=INT4_MAX)
     pattern: str | None = Field(default=None, min_length=1, max_length=200)
     case_insensitive: bool | None = None
     severity: Severity | None = None

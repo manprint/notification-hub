@@ -8,10 +8,10 @@
 //   collegato      -> soglia diversa  PUT    (aggiorna, non duplica)
 //   collegato      -> non collegato   DELETE (slega)
 
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ChannelBindings from "../ChannelBindings";
 import { setRefreshToken } from "../../api/client";
 import { server } from "../../api/mocks/server";
@@ -58,6 +58,95 @@ describe("ChannelBindings", () => {
   beforeEach(() => {
     localStorage.clear();
     setRefreshToken("refresh-token-fixture");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("T-CB1 se i collegamenti non si leggono non mostra tutto «Non collegato»", async () => {
+    server.use(
+      http.get(`/api/v1/groups/${GROUP_ID}/channels`, () =>
+        HttpResponse.json(
+          { type: "/problems/internal-error", title: "Internal Server Error", detail: "db giu" },
+          { status: 500 },
+        ),
+      ),
+    );
+    renderWithProviders(<ChannelBindings groupId={GROUP_ID} channels={canali} />);
+
+    expect(await screen.findByText("db giu")).toBeInTheDocument();
+    // Nessuna tendina: con i collegamenti ignoti, «Non collegato» sarebbe falso
+    // e sceglierne una soglia partirebbe da uno stato sbagliato.
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  });
+
+  it("T-CB2 durante il caricamento dice che sta caricando", async () => {
+    let rispondi: () => void = () => undefined;
+    server.use(
+      http.get(`/api/v1/groups/${GROUP_ID}/channels`, async () => {
+        await new Promise<void>((resolve) => {
+          rispondi = resolve;
+        });
+        return HttpResponse.json([]);
+      }),
+    );
+    renderWithProviders(<ChannelBindings groupId={GROUP_ID} channels={canali} />);
+
+    expect(await screen.findByText(/Caricamento dei collegamenti/)).toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+
+    rispondi();
+    expect(await screen.findAllByRole("combobox")).toHaveLength(2);
+  });
+
+  it("T-CB3 un collegamento disattivato non si presenta come attivo", async () => {
+    const user = userEvent.setup();
+    let inviato: Record<string, unknown> | null = null;
+    server.use(
+      http.put(`/api/v1/groups/${GROUP_ID}/channels/c1`, async ({ request }) => {
+        inviato = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({});
+      }),
+    );
+    renderBindings([
+      { id: "b1", group_id: GROUP_ID, channel_id: "c1", min_severity: "error", enabled: false },
+    ]);
+
+    const tendina = await within(await screen.findByRole("table")).findByLabelText(
+      "Soglia di Slack #ops",
+    );
+    expect(tendina).toHaveDisplayValue("Disattivato (soglia error)");
+    expect(within(rigaDi("Slack #ops")).getByText(/nessun inoltro/)).toBeInTheDocument();
+
+    // Scegliere una soglia lo riattiva.
+    await user.selectOptions(tendina, "error");
+    await waitFor(() => expect(inviato).toEqual({ min_severity: "error", enabled: true }));
+  });
+
+  it("T-CB4 «Non salvato» torna neutro da solo, l'errore resta nel banner", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    server.use(
+      http.post(`/api/v1/groups/${GROUP_ID}/channels`, () =>
+        HttpResponse.json(
+          { type: "/problems/not-found", title: "Not Found", status: 404, detail: "Channel not found." },
+          { status: 404 },
+        ),
+      ),
+    );
+    renderBindings();
+    await waitFor(() => expect(screen.getByText(/Slack #ops/)).toBeInTheDocument());
+
+    await user.selectOptions(within(rigaDi("Slack #ops")).getByRole("combobox"), "error");
+    expect(await within(rigaDi("Slack #ops")).findByText("Non salvato")).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(within(rigaDi("Slack #ops")).queryByText("Non salvato")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("alert").some((n) => /Channel not found/.test(n.textContent ?? "")))
+      .toBe(true);
   });
 
   it("mostra la soglia dei canali collegati e «Non collegato» per gli altri", async () => {

@@ -16,10 +16,19 @@ import ErrorBanner from "../components/ErrorBanner";
 import Field, { RequiredLegend, fieldAria } from "../components/Field";
 import SaveIndicator from "../components/SaveIndicator";
 import { useAction } from "../hooks/useAction";
+import { useSession } from "../hooks/useSession";
 import { formatDateTime, roleLabel, userStatusLabel } from "../lib/format";
+import { ADMIN_ROLES, hasRole } from "../lib/roles";
 
 const ROLES: UserRole[] = ["owner", "admin", "member", "viewer"];
 const MIN_PASSWORD_LENGTH = 12;
+
+/** Ruoli che la sessione può assegnare. Il ruolo owner lo concede solo un
+ *  owner (il backend rifiuta con 403): offrirlo a un admin voleva dire un
+ *  modulo che fallisce sempre. */
+function assignableRoles(sessionRole: UserRole | null): UserRole[] {
+  return sessionRole === "owner" ? ROLES : ROLES.filter((r) => r !== "owner");
+}
 
 const ROLE_HINTS: Record<UserRole, string> = {
   owner: "tutto, comprese le quote del tenant",
@@ -32,10 +41,15 @@ function GroupPicker({
   groups,
   value,
   onChange,
+  disabled = false,
 }: {
   groups: GroupOut[];
   value: string[];
   onChange: (groupIds: string[]) => void;
+  /** Durante il salvataggio: la lista nuova si calcola da `value`, che si
+   *  aggiorna solo a salvataggio finito. Un secondo click nel frattempo
+   *  partirebbe dalla lista vecchia e cancellerebbe il primo. */
+  disabled?: boolean;
 }) {
   function toggle(groupId: string, checked: boolean) {
     onChange(checked ? [...value, groupId] : value.filter((id) => id !== groupId));
@@ -52,6 +66,7 @@ function GroupPicker({
           <input
             type="checkbox"
             checked={value.includes(g.id)}
+            disabled={disabled}
             onChange={(event) => toggle(g.id, event.target.checked)}
           />
           {g.name}
@@ -68,11 +83,13 @@ function GroupsCell({
   value,
   onChange,
   saveState,
+  disabled,
 }: {
   groups: GroupOut[];
   value: string[];
   onChange: (groupIds: string[]) => void;
   saveState: React.ComponentProps<typeof SaveIndicator>["state"];
+  disabled: boolean;
 }) {
   const selectedNames = groups.filter((g) => value.includes(g.id)).map((g) => g.name);
 
@@ -82,7 +99,7 @@ function GroupsCell({
         {selectedNames.length > 0 ? selectedNames.join(", ") : "Nessuno"}
       </summary>
       <div className="group-summary-editor">
-        <GroupPicker groups={groups} value={value} onChange={onChange} />
+        <GroupPicker groups={groups} value={value} onChange={onChange} disabled={disabled} />
         <SaveIndicator state={saveState} />
       </div>
     </details>
@@ -99,7 +116,8 @@ function PendingInvitations() {
   const [revoking, setRevoking] = useState<InvitationSummaryOut | null>(null);
 
   async function revoke(invitation: InvitationSummaryOut) {
-    setRevoking(null);
+    // Il dialogo resta aperto (e occupato) fino alla risposta: chiuderlo prima
+    // lasciava spazio a un secondo click, cioè a una seconda DELETE.
     await run(
       async () => {
         await apiDelete(`/api/v1/invitations/${invitation.id}`);
@@ -107,6 +125,7 @@ function PendingInvitations() {
       },
       { success: `Invito a ${invitation.email} revocato.` },
     );
+    setRevoking(null);
   }
 
   if (!invitations || invitations.length === 0) return null;
@@ -150,7 +169,7 @@ function PendingInvitations() {
         <ConfirmDialog
           title={`Revoca l'invito a ${revoking.email}`}
           confirmLabel="Revoca invito"
-          onConfirm={() => void revoke(revoking)}
+          onConfirm={() => revoke(revoking)}
           onCancel={() => setRevoking(null)}
         >
           <p>Il collegamento già inviato smette di funzionare. Se ne può creare un altro.</p>
@@ -160,7 +179,7 @@ function PendingInvitations() {
   );
 }
 
-function InviteForm() {
+function InviteForm({ roles }: { roles: UserRole[] }) {
   const queryClient = useQueryClient();
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<UserRole>("member");
@@ -214,7 +233,7 @@ function InviteForm() {
             value={role}
             onChange={(event) => setRole(event.target.value as UserRole)}
           >
-            {ROLES.map((r) => (
+            {roles.map((r) => (
               <option key={r} value={r}>
                 {roleLabel(r)}
               </option>
@@ -244,7 +263,7 @@ function InviteForm() {
   );
 }
 
-function CreateUserForm({ groups }: { groups: GroupOut[] }) {
+function CreateUserForm({ groups, roles }: { groups: GroupOut[]; roles: UserRole[] }) {
   const queryClient = useQueryClient();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -259,7 +278,8 @@ function CreateUserForm({ groups }: { groups: GroupOut[] }) {
     // rete e con il campo indicato invece di un 422 generico.
     const errors: { email?: string; password?: string } = {};
     if (!email.includes("@")) errors.email = "Indica un indirizzo email valido.";
-    if (password.length < MIN_PASSWORD_LENGTH)
+    // In code point, come pydantic: con `.length` un'emoji conta due.
+    if ([...password].length < MIN_PASSWORD_LENGTH)
       errors.password = `La password deve avere almeno ${MIN_PASSWORD_LENGTH} caratteri.`;
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) return;
@@ -322,7 +342,7 @@ function CreateUserForm({ groups }: { groups: GroupOut[] }) {
             value={role}
             onChange={(event) => setRole(event.target.value as UserRole)}
           >
-            {ROLES.map((r) => (
+            {roles.map((r) => (
               <option key={r} value={r}>
                 {roleLabel(r)}
               </option>
@@ -363,11 +383,16 @@ export default function UsersPage() {
     queryKey: ["groups"],
     queryFn: () => apiGet<GroupOut[]>("/api/v1/groups"),
   });
+  const { user: me, role: sessionRole, reloadProfile, logout } = useSession();
   const { busy, error: actionError, saveState, run } = useAction();
   const [removing, setRemoving] = useState<UserOut | null>(null);
+  // Il proprio ruolo non si cambia con un solo gesto sulla tendina: si chiede
+  // conferma, perché declassarsi toglie l'accesso a questa stessa pagina.
+  const [selfRoleChange, setSelfRoleChange] = useState<UserRole | null>(null);
   // Quale campo ha salvato per ultimo: senza, l'esito "Salvato" comparirebbe
   // su tutte le righe insieme, perché lo stato dell'operazione è uno solo.
   const [lastSaved, setLastSaved] = useState<string | null>(null);
+  const roles = assignableRoles(sessionRole);
 
   /** Stato da mostrare accanto a un campo modificabile in linea. */
   function stateOf(key: string) {
@@ -376,37 +401,62 @@ export default function UsersPage() {
     return "idle" as const;
   }
 
+  function isSelf(user: UserOut): boolean {
+    return me !== null && user.id === me.id;
+  }
+
+  /** Un owner lo modifica o lo rimuove solo un altro owner (il backend
+   *  risponde 403 a un admin): per un admin la riga resta in sola lettura. */
+  function canManage(user: UserOut): boolean {
+    return sessionRole === "owner" || user.role !== "owner";
+  }
+
   async function changeRole(user: UserOut, role: UserRole) {
     setLastSaved(`role:${user.id}`);
-    await run(
+    const ok = await run(
       async () => {
         await apiPatch(`/api/v1/users/${user.id}`, { role });
         await queryClient.invalidateQueries({ queryKey: ["users"] });
       },
       { name: `role:${user.id}`, success: `${user.email} ora è ${roleLabel(role)}.` },
     );
+    // Senza, la sessione continuerebbe a presentarsi col ruolo vecchio: menu,
+    // pagine e pulsanti di chi non ha più quei permessi.
+    if (ok && isSelf(user)) await reloadProfile();
+  }
+
+  function requestRoleChange(user: UserOut, role: UserRole) {
+    if (isSelf(user)) setSelfRoleChange(role);
+    else void changeRole(user, role);
   }
 
   async function changeGroups(user: UserOut, groupIds: string[]) {
     setLastSaved(`groups:${user.id}`);
-    await run(
+    const ok = await run(
       async () => {
         await apiPatch(`/api/v1/users/${user.id}`, { group_ids: groupIds });
         await queryClient.invalidateQueries({ queryKey: ["users"] });
       },
       { name: `groups:${user.id}`, success: `Gruppi di ${user.email} aggiornati.` },
     );
+    if (ok && isSelf(user)) await reloadProfile();
   }
 
   async function remove(user: UserOut) {
-    setRemoving(null);
-    await run(
+    const self = isSelf(user);
+    const ok = await run(
       async () => {
         await apiDelete(`/api/v1/users/${user.id}`);
-        await queryClient.invalidateQueries({ queryKey: ["users"] });
+        if (!self) await queryClient.invalidateQueries({ queryKey: ["users"] });
       },
       { name: `remove:${user.id}`, success: `Utenza ${user.email} rimossa.` },
     );
+    // Il dialogo si chiude a risposta arrivata: prima restava cliccabile e un
+    // doppio click mandava due DELETE.
+    setRemoving(null);
+    // Chi ha rimosso se stesso non ha più una sessione valida: restare sulla
+    // pagina vorrebbe dire una fila di 401 senza spiegazione.
+    if (ok && self) await logout();
   }
 
   const lastOwnerConflict = actionError?.type === "/problems/last-owner";
@@ -425,12 +475,12 @@ export default function UsersPage() {
         <div className="error-banner" role="alert">
           {lastOwnerConflict
             ? "Non è possibile rimuovere o declassare l'ultimo owner del tenant."
-            : actionError.detail}
+            : actionError.detail || actionError.title}
         </div>
       )}
 
-      <CreateUserForm groups={groups ?? []} />
-      <InviteForm />
+      <CreateUserForm groups={groups ?? []} roles={roles} />
+      <InviteForm roles={roles} />
       <PendingInvitations />
 
       <div className="card">
@@ -452,56 +502,72 @@ export default function UsersPage() {
                 </tr>
               </thead>
               <tbody>
-                {users?.map((user) => (
-                  <tr key={user.id}>
-                    <td>{user.email}</td>
-                    <td>
-                      <div className="status-cell">
-                        <select
-                          aria-label={`Ruolo di ${user.email}`}
-                          value={user.role}
-                          disabled={busy !== null}
-                          onChange={(event) =>
-                            void changeRole(user, event.target.value as UserRole)
+                {users?.map((user) => {
+                  const manageable = canManage(user);
+                  const readOnlyHint = manageable
+                    ? undefined
+                    : "Solo un owner può modificare o rimuovere un altro owner.";
+                  return (
+                    <tr key={user.id}>
+                      <td>
+                        {user.email}
+                        {isSelf(user) && <span className="text-muted text-sm"> (tu)</span>}
+                      </td>
+                      <td>
+                        <div className="status-cell">
+                          <select
+                            aria-label={`Ruolo di ${user.email}`}
+                            value={user.role}
+                            disabled={busy !== null || !manageable}
+                            title={readOnlyHint}
+                            onChange={(event) =>
+                              requestRoleChange(user, event.target.value as UserRole)
+                            }
+                          >
+                            {/* La riga di un owner in sola lettura deve comunque
+                                poter mostrare "owner" come valore. */}
+                            {(manageable ? roles : ROLES).map((r) => (
+                              <option key={r} value={r}>
+                                {roleLabel(r)}
+                              </option>
+                            ))}
+                          </select>
+                          <SaveIndicator state={stateOf(`role:${user.id}`)} />
+                        </div>
+                      </td>
+                      <td>
+                        <GroupsCell
+                          groups={groups ?? []}
+                          value={user.group_ids}
+                          onChange={(groupIds) => void changeGroups(user, groupIds)}
+                          saveState={stateOf(`groups:${user.id}`)}
+                          disabled={busy !== null || !manageable}
+                        />
+                      </td>
+                      <td>
+                        <span
+                          className={
+                            user.status === "active" ? "status-pill ok" : "status-pill warn"
                           }
                         >
-                          {ROLES.map((r) => (
-                            <option key={r} value={r}>
-                              {roleLabel(r)}
-                            </option>
-                          ))}
-                        </select>
-                        <SaveIndicator state={stateOf(`role:${user.id}`)} />
-                      </div>
-                    </td>
-                    <td>
-                      <GroupsCell
-                        groups={groups ?? []}
-                        value={user.group_ids}
-                        onChange={(groupIds) => void changeGroups(user, groupIds)}
-                        saveState={stateOf(`groups:${user.id}`)}
-                      />
-                    </td>
-                    <td>
-                      <span
-                        className={user.status === "active" ? "status-pill ok" : "status-pill warn"}
-                      >
-                        {userStatusLabel(user.status)}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="row-actions">
-                        <button
-                          className="danger"
-                          disabled={busy !== null}
-                          onClick={() => setRemoving(user)}
-                        >
-                          Rimuovi
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          {userStatusLabel(user.status)}
+                        </span>
+                      </td>
+                      <td>
+                        <div className="row-actions">
+                          <button
+                            className="danger"
+                            disabled={busy !== null || !manageable}
+                            title={readOnlyHint}
+                            onClick={() => setRemoving(user)}
+                          >
+                            Rimuovi
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -510,14 +576,41 @@ export default function UsersPage() {
 
       {removing && (
         <ConfirmDialog
-          title={`Rimuovi ${removing.email}`}
-          confirmLabel="Rimuovi utenza"
-          onConfirm={() => void remove(removing)}
+          title={isSelf(removing) ? "Rimuovi la tua utenza" : `Rimuovi ${removing.email}`}
+          confirmLabel={isSelf(removing) ? "Rimuovi la mia utenza" : "Rimuovi utenza"}
+          onConfirm={() => remove(removing)}
           onCancel={() => setRemoving(null)}
         >
+          {isSelf(removing) ? (
+            <p>
+              Stai rimuovendo l'utenza con cui sei entrato: la sessione si chiude subito e non potrai
+              più accedere a questo tenant.
+            </p>
+          ) : (
+            <p>
+              L'utenza perde subito l'accesso. Le notifiche che ha letto o verificato restano con il
+              suo nome nell'audit.
+            </p>
+          )}
+        </ConfirmDialog>
+      )}
+
+      {selfRoleChange && me && (
+        <ConfirmDialog
+          title="Cambia il tuo ruolo"
+          confirmLabel={`Diventa ${roleLabel(selfRoleChange)}`}
+          onConfirm={async () => {
+            const self = users?.find((u) => u.id === me.id);
+            if (self) await changeRole(self, selfRoleChange);
+            setSelfRoleChange(null);
+          }}
+          onCancel={() => setSelfRoleChange(null)}
+        >
           <p>
-            L'utenza perde subito l'accesso. Le notifiche che ha letto o verificato restano con il
-            suo nome nell'audit.
+            {`Stai cambiando il tuo ruolo da ${roleLabel(me.role)} a ${roleLabel(selfRoleChange)}.`}
+            {hasRole(selfRoleChange, ADMIN_ROLES)
+              ? " I permessi cambiano da subito, e quelli che il nuovo ruolo non ha non potrai riprenderteli da solo."
+              : " Perderai subito l'accesso a questa pagina, e per tornare indietro servirà un altro owner o admin."}
           </p>
         </ConfirmDialog>
       )}

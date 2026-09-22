@@ -6,31 +6,28 @@ import ErrorBanner from "../components/ErrorBanner";
 import ResourceLocation from "../components/ResourceLocation";
 import SettingsTabs from "../components/SettingsTabs";
 import { type AuditFilters, useAuditEvents } from "../hooks/useAuditEvents";
-import { actionLabel, describeChanges, resourceLabel } from "../lib/audit";
+import {
+  RESOURCE_TYPES,
+  actionLabel,
+  describeChanges,
+  endOfDay,
+  resourceLabel,
+  startOfDay,
+} from "../lib/audit";
 import { formatDateTime } from "../lib/format";
-
-const RESOURCE_TYPES = [
-  "notification",
-  "receiver",
-  "group",
-  "user",
-  "invitation",
-  "delivery_channel",
-  "severity_rule",
-  "severity_preset",
-  "user_group_membership",
-  "tenant",
-  "session",
-];
 
 export default function AuditPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  // Nell'URL resta il giorno scelto, com'e' nel campo data; all'API va
+  // l'intervallo di quel giorno nel fuso di chi guarda.
+  const fromDay = searchParams.get("from") ?? "";
+  const toDay = searchParams.get("to") ?? "";
 
   const filters: AuditFilters = {
     resource_type: searchParams.get("resource_type") ?? undefined,
     outcome: (searchParams.get("outcome") as AuditOutcome | null) ?? undefined,
-    from: searchParams.get("from") ?? undefined,
-    to: searchParams.get("to") ?? undefined,
+    from: startOfDay(fromDay),
+    to: endOfDay(toDay),
   };
 
   const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } =
@@ -159,7 +156,7 @@ export default function AuditPage() {
             <input
               id="audit-from"
               type="date"
-              value={filters.from ?? ""}
+              value={fromDay}
               onChange={(event) => setParam("from", event.target.value)}
             />
           </div>
@@ -168,7 +165,7 @@ export default function AuditPage() {
             <input
               id="audit-to"
               type="date"
-              value={filters.to ?? ""}
+              value={toDay}
               onChange={(event) => setParam("to", event.target.value)}
             />
           </div>

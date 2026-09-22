@@ -371,7 +371,9 @@ async def test_consegne_riportano_canale_e_receiver(api_client, two_tenants, own
 
     listed = await api_client.get("/api/v1/deliveries", headers=headers)
     assert listed.status_code == 200, listed.text
-    row = next(d for d in listed.json() if d["notification_id"] == str(notification_id))
+    row = next(
+        d for d in listed.json()["deliveries"] if d["notification_id"] == str(notification_id)
+    )
     assert row["channel_name"] == "Slack #ops"
     assert row["receiver_name"] == "Backup notturno"
     assert row["content_preview"] == "disco pieno"
@@ -407,7 +409,7 @@ async def test_consegne_scopate_ai_gruppi_associati(api_client, two_tenants, own
 
     listed = await api_client.get("/api/v1/deliveries", headers=member_headers)
     assert listed.status_code == 200
-    assert all(d["notification_id"] != str(notification_b) for d in listed.json())
+    assert all(d["notification_id"] != str(notification_b) for d in listed.json()["deliveries"])
 
 
 # --- Utenti ---------------------------------------------------------------

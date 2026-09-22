@@ -217,3 +217,80 @@ async def test_canale_disabilitato_rende_terminale_la_delivery(two_tenants):
         delivery = await session.get(Delivery, delivery_id)
         assert delivery.status == DeliveryStatus.DEAD
         assert delivery.last_error == "channel disabled before delivery"
+
+
+# --- Review 2026-09 ------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_webhook_non_decifrabile_rende_la_delivery_dead_con_la_causa(two_tenants):
+    """Con NOTIFYHUB_SECRET_KEY cambiata la decifratura sollevava dentro la fase 1:
+    rollback, riga di nuovo `pending`, reconcile che la riaccodava ogni 5 minuti
+    per sempre, senza last_error ne' tentativi contati."""
+    tenant_id, _ = two_tenants
+    delivery_id, channel_id = await _setup_delivery(tenant_id)
+    async with tenant_session(tenant_id) as session:
+        channel = await session.get(DeliveryChannel, channel_id)
+        channel.webhook_url = b"x" * 48  # cifrato con un'altra chiave: tag GCM non valido
+
+    dispatch_delivery(str(delivery_id), str(tenant_id))
+
+    async with tenant_session(tenant_id) as session:
+        delivery = await session.get(Delivery, delivery_id)
+        assert delivery.status == DeliveryStatus.DEAD
+        assert delivery.last_error is not None
+        assert "decryption" in delivery.last_error
+        channel = await session.get(DeliveryChannel, channel_id)
+        assert channel.last_error is not None
+
+
+@pytest.mark.integration
+async def test_esito_di_un_tentativo_orfano_non_sovrascrive_lo_stato(two_tenants, monkeypatch):
+    """Fra la fase 1 e la fase 3 reconcile puo' riprendersi una riga rimasta
+    `sending` troppo a lungo e riaccodarla: l'esito del vecchio tentativo non deve
+    scavalcare lo stato del nuovo proprietario."""
+    from app.db.sync_session import tenant_session_sync
+    from app.outbound.sender import WebhookResult
+    from app.tasks import delivery as delivery_module
+
+    tenant_id, _ = two_tenants
+    delivery_id, _ = await _setup_delivery(tenant_id)
+
+    def invio_lento(*_args, **_kwargs):
+        # Simula reconcile durante la chiamata di rete.
+        with tenant_session_sync(tenant_id) as session:
+            riga = session.get(Delivery, delivery_id)
+            riga.status = DeliveryStatus.FAILED
+            riga.locked_at = None
+        return WebhookResult(ok=True, status_code=200, retry_after=None, error=None)
+
+    monkeypatch.setattr(delivery_module, "send_webhook_sync", invio_lento)
+
+    dispatch_delivery(str(delivery_id), str(tenant_id))
+
+    async with tenant_session(tenant_id) as session:
+        delivery = await session.get(Delivery, delivery_id)
+        assert delivery.status == DeliveryStatus.FAILED
+        assert delivery.sent_at is None
+
+
+@pytest.mark.integration
+@respx.mock
+async def test_errore_di_rete_non_espone_il_segreto_del_webhook(two_tenants):
+    """Il testo delle eccezioni httpx contiene l'URL completo: finiva in
+    last_error, che la dashboard mostra anche ai member."""
+    tenant_id, _ = two_tenants
+    delivery_id, channel_id = await _setup_delivery(tenant_id)
+    respx.post(WEBHOOK_URL).mock(
+        side_effect=httpx.ConnectError(f"connessione fallita verso {WEBHOOK_URL}")
+    )
+
+    dispatch_delivery(str(delivery_id), str(tenant_id))
+
+    async with tenant_session(tenant_id) as session:
+        delivery = await session.get(Delivery, delivery_id)
+        channel = await session.get(DeliveryChannel, channel_id)
+        for testo in (delivery.last_error, channel.last_error):
+            assert testo is not None
+            assert "/services/T0/B0/X0" not in testo
+            assert "ConnectError" in testo

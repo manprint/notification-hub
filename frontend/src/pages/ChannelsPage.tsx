@@ -253,6 +253,15 @@ function ChannelRow({ channel, canManage }: { channel: DeliveryChannelOut; canMa
       async () => {
         await apiDelete(`/api/v1/channels/${channel.id}`);
         await queryClient.invalidateQueries({ queryKey: ["channels"] });
+        // Il backend cancella a cascata collegamenti ai gruppi, override e
+        // storico consegne. Per prefisso, su ogni gruppo e ogni receiver: senza,
+        // le tabelle gia' aperte restavano con una riga intestata all'UUID del
+        // canale che non esiste piu'.
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["group-channel-bindings"] }),
+          queryClient.invalidateQueries({ queryKey: ["receiver-overrides"] }),
+          queryClient.invalidateQueries({ queryKey: ["deliveries"] }),
+        ]);
       },
       { name: "delete", success: `Canale "${channel.name}" eliminato.` },
     );
@@ -390,7 +399,20 @@ function ReceiverOverridesPanel({
   );
 }
 
-function ReceiverOverrideForm({ channels }: { channels: DeliveryChannelOut[] }) {
+/** Etichetta del receiver nel selettore: "gruppo / receiver". Il solo nome non
+ *  basta, due gruppi possono avere entrambi un receiver "backup". */
+function receiverLabel(receiver: ReceiverOut, groupNames: Map<string, string>): string {
+  const group = groupNames.get(receiver.group_id);
+  return group ? `${group} / ${receiver.name}` : receiver.name;
+}
+
+function ReceiverOverrideForm({
+  channels,
+  groups,
+}: {
+  channels: DeliveryChannelOut[];
+  groups: GroupOut[];
+}) {
   const [receiverId, setReceiverId] = useState("");
   const [channelId, setChannelId] = useState("");
   const [mode, setMode] = useState<OverrideMode>("override");
@@ -405,6 +427,11 @@ function ReceiverOverrideForm({ channels }: { channels: DeliveryChannelOut[] }) 
     queryKey: ["receivers-all"],
     queryFn: () => apiGet<ReceiverOut[]>("/api/v1/receivers"),
   });
+
+  const groupNames = new Map(groups.map((g) => [g.id, g.name]));
+  const receiverOptions = (receivers ?? [])
+    .map((r) => ({ id: r.id, label: receiverLabel(r, groupNames) }))
+    .sort((a, b) => a.label.localeCompare(b.label, "it"));
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -445,9 +472,9 @@ function ReceiverOverrideForm({ channels }: { channels: DeliveryChannelOut[] }) 
               <option value="" disabled>
                 Scegli un receiver
               </option>
-              {receivers?.map((r) => (
+              {receiverOptions.map((r) => (
                 <option key={r.id} value={r.id}>
-                  {r.name}
+                  {r.label}
                 </option>
               ))}
             </select>
@@ -592,11 +619,15 @@ export default function ChannelsPage() {
               ))}
             </select>
           </div>
-          {selectedGroupId && <ChannelBindings groupId={selectedGroupId} channels={channels} />}
+          {/* key: cambiando gruppo, riga appena salvata ed errore dell'ultima
+              azione restano al gruppo di prima. */}
+          {selectedGroupId && (
+            <ChannelBindings key={selectedGroupId} groupId={selectedGroupId} channels={channels} />
+          )}
         </div>
       )}
 
-      {canManage && channels && <ReceiverOverrideForm channels={channels} />}
+      {canManage && channels && <ReceiverOverrideForm channels={channels} groups={groups ?? []} />}
     </div>
   );
 }

@@ -35,6 +35,10 @@ class RefreshIn(BaseModel):
 
 class LogoutIn(BaseModel):
     revoke_all: bool = False
+    # Il refresh token della sessione da chiudere: se presente si revoca la sua
+    # intera famiglia. E' quello che manda la dashboard, che del token conosce
+    # solo il valore opaco e non il jti.
+    refresh_token: str | None = None
     jti: str | None = None
 
 

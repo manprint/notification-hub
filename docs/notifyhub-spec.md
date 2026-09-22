@@ -118,13 +118,14 @@ Tutte le tabelle (tranne `tenants` e `pending_object_deletions`) hanno `tenant_i
 | Azione | owner | admin | member | viewer |
 |---|:-:|:-:|:-:|:-:|
 | Gestire tenant (retention, cap body, quote) | ✅ | ❌ | ❌ | ❌ |
-| Invitare / rimuovere utenti, cambiare ruoli | ✅ | ✅ | ❌ | ❌ |
+| Invitare / rimuovere utenti, cambiare ruoli (su un owner: solo owner) | ✅ | ✅ | ❌ | ❌ |
 | CRUD Group / Receiver / Channel / SeverityRule | ✅ | ✅ | ✅ | ❌ |
 | Rigenerare lo slug di un Receiver | ✅ | ✅ | ❌ | ❌ |
 | Vedere l'elenco dei DeliveryChannel (URL mascherato) | ✅ | ✅ | ✅ | ❌ |
 | Consultare `/deliveries` (diagnostica inoltri) | ✅ | ✅ | ✅ | ✅ |
 | Ri-accodare una delivery `dead` | ✅ | ✅ | ✅ | ❌ |
-| Leggere notifiche, segnare come lette / non lette e come verificate / non verificate | ✅ | ✅ | ✅ | ✅ |
+| Leggere notifiche | ✅ | ✅ | ✅ | ✅ |
+| Segnare come lette / non lette e come verificate / non verificate (§10.2) | ✅ | ✅ | ✅ | ❌ |
 | Eliminare notifiche | ✅ | ✅ | ✅ | ❌ |
 
 Il rotate-slug resta ad admin+ anche se il `member` può creare receiver: rigenerare uno slug rompe gli script già in produzione sui server dei clienti.
@@ -180,7 +181,7 @@ Il rotate-slug resta ad admin+ anche se il `member` può creare receiver: rigene
 | max_body_bytes | int | **configurabile per receiver**. Validato a ≤ `tenants.max_body_bytes` |
 | rate_limit_per_min | int | default 60. **0 = nessun limite per-slug**; il limite per IP resta comunque attivo |
 | expected_every_seconds | int NULL | sorveglianza dell'attesa: intervallo fra un invio e il successivo |
-| expected_cron | text(100) NULL | alternativa all'intervallo: espressione cron a 5 campi, come in crontab |
+| expected_cron | text(100) NULL | alternativa all'intervallo: espressione cron a 5 campi, come in crontab. Rifiutate le estensioni `H` e `R` (valori hash/casuali: la scadenza cambierebbe a ogni controllo) e le espressioni che non scattano mai |
 | expected_timezone | text(64) NULL | fuso dell'espressione cron (default `UTC`); solo con `expected_cron` |
 | expected_grace_seconds | int NULL | tolleranza sul ritardo |
 | missing_severity | enum NULL | severity della notifica di assenza. NULL su tutti = sorveglianza spenta (CHECK `ck_receivers_expected_policy`) |
@@ -685,12 +686,13 @@ Il bisogno diagnostico dell'amministratore è coperto altrove: ogni tentativo ve
 | POST | `/api/v1/auth/register` | Crea Tenant + primo utente `owner`. **Disabilitato di default** (§10.2) |
 | POST | `/api/v1/auth/login` | email + password → access token (15 min) + refresh token (30 gg) |
 | POST | `/api/v1/auth/refresh` | Rotazione del refresh token |
-| POST | `/api/v1/auth/logout` | Revoca la famiglia di refresh token |
+| POST | `/api/v1/auth/logout` | Body `{"refresh_token": "…"}`: revoca l'intera famiglia di quel refresh token, cioè la sessione corrente (le altre sessioni dello stesso utente restano valide). `{"revoke_all": true}` revoca tutte le sessioni dell'utente |
 | GET | `/api/v1/auth/me` | Profilo + tenant + ruolo |
 | POST | `/api/v1/invitations` | Invita un utente (admin+). Risposta: `{"invite_url": "...", "email_sent": true|false}` |
 | POST | `/api/v1/invitations/accept` | Accetta invito. **Token nel body**, mai nel path |
 | GET | `/api/v1/users` | Lista membri (admin+) |
-| PATCH/DELETE | `/api/v1/users/{id}` | Cambio ruolo / rimozione (admin+). `409` se tocca l'ultimo owner |
+| GET | `/api/v1/users/{id}` | Dettaglio membro (admin+) |
+| PATCH/DELETE | `/api/v1/users/{id}` | Cambio ruolo / rimozione (admin+). Un utente `owner` lo modifica o lo rimuove solo un owner (`403` per un admin); concedere il ruolo owner è riservato agli owner. `409` se tocca l'ultimo owner |
 
 Claim del JWT: `sub` (user_id), `tid` (tenant_id), `role`, `exp`, `jti`.
 
@@ -701,7 +703,7 @@ Il token di invito viaggia nel corpo della richiesta e non nel path: un URL con 
 | Metodo | Path | Descrizione |
 |---|---|---|
 | GET/POST | `/api/v1/groups` | Lista / crea gruppo |
-| GET/PATCH | `/api/v1/groups/{id}` | Dettaglio, rinomina |
+| GET/PATCH | `/api/v1/groups/{id}` | Dettaglio, rinomina. `description: null` (o `""`) esplicito la svuota; campo assente = invariata |
 | GET | `/api/v1/groups/{id}/delete-impact` | Preflight: `{"receivers": 4, "notifications": 18402, "deliveries": 2210}` |
 | DELETE | `/api/v1/groups/{id}` | Elimina in cascata. Richiede `?confirm={nome esatto del gruppo}` |
 | GET/POST | `/api/v1/groups/{id}/receivers` | Lista / crea receiver (genera lo slug) |
@@ -711,7 +713,7 @@ Il token di invito viaggia nel corpo della richiesta e non nel path: un URL con 
 | GET/POST | `/api/v1/receivers/{id}/severity-rules` | Lista / crea regola |
 | PATCH/DELETE | `/api/v1/severity-rules/{id}` | Modifica / elimina regola |
 | POST | `/api/v1/receivers/{id}/test-severity` | Dato un testo di prova, restituisce la severity risolta e quale regola ha vinto |
-| GET/PATCH | `/api/v1/tenant` | Impostazioni del tenant (owner). `409` se il nuovo `max_body_bytes` è sotto quello di receiver esistenti |
+| GET/PATCH | `/api/v1/tenant` | Impostazioni del tenant (owner). `409` se il nuovo `max_body_bytes` è sotto quello di receiver esistenti. Per `max_notifications_per_day`, `max_storage_bytes`, `retention_days`, `audit_retention_days` un `null` esplicito = illimitata; campo assente = invariato |
 
 **Cancellazione di un gruppo non vuoto** — cascade su receiver, notifiche, delivery e oggetti MinIO, con conferma esplicita. La UI chiama prima `delete-impact`, mostra i conteggi reali (*"verranno eliminati 4 receiver e 18.402 notifiche"*) e chiede di digitare il nome del gruppo; l'API rifiuta con `422` se `confirm` non corrisponde. Il blocco "svuota prima" è stato scartato: costringe a cancellare a mano decine di receiver per dismettere un ambiente.
 
@@ -728,7 +730,7 @@ Il token di invito viaggia nel corpo della richiesta e non nel path: un URL con 
 | PUT/DELETE | `/api/v1/groups/{id}/channels/{channel_id}` | Modifica `min_severity` / rimuove il binding |
 | GET/POST | `/api/v1/receivers/{id}/channels` | Lista / crea override o mute |
 | PUT/DELETE | `/api/v1/receivers/{id}/channels/{channel_id}` | Modifica / rimuove l'override |
-| GET | `/api/v1/deliveries?status=&channel_id=` | Storico inoltri, per diagnosticare i fallimenti |
+| GET | `/api/v1/deliveries?status=&channel_id=&limit=&cursor=` | Storico inoltri, per diagnosticare i fallimenti. Risposta `{"deliveries": [...], "next_cursor": …}`, paginazione **a cursore** su `(received_at della notifica, id)` DESC; `limit` default 100, max 500 |
 | POST | `/api/v1/deliveries/{id}/retry` | Ri-accoda una delivery `dead` |
 
 Le sotto-risorse sono identificate da `channel_id`: `PUT`/`DELETE` su una collezione, senza dire su quale binding agiscono, non sono indirizzabili.
@@ -741,7 +743,7 @@ Le sotto-risorse sono identificate da `channel_id`: `PUT`/`DELETE` su una collez
 | GET | `/api/v1/notifications/{id}` | Dettaglio. `content` inline se ≤1MB, altrimenti `content_url` |
 | GET | `/api/v1/notifications/{id}/content` | Streaming del corpo completo (proxy MinIO se offloaded) |
 | PATCH | `/api/v1/notifications/{id}` | Segna letta / non letta e verificata / non verificata. Body: almeno uno fra `status` e `verified`; body vuoto → 422. Registra chi ha gestito la notifica (`read_by`/`read_at`, `verified_by`/`verified_at`, esposti come `read_by_email`/`verified_by_email`) e lascia un evento di audit (§9.6) |
-| POST | `/api/v1/notifications/bulk-read` | Segna in blocco (per filtro, gli stessi della lista). Un solo evento di audit per l'intera operazione, con filtri, conteggio e id delle notifiche toccate |
+| POST | `/api/v1/notifications/bulk-read` | Segna in blocco (per filtro, gli stessi della lista, `status` compreso: con `status=read` non c'è niente da segnare). Un solo evento di audit per l'intera operazione, con filtri, conteggio e id delle notifiche toccate |
 | DELETE | `/api/v1/notifications/{id}` | Elimina |
 | GET | `/api/v1/stats/summary` | Conteggi per severity / non lette e albero gruppo → receiver (`by_group[].receivers[]`, con `total` e `unread_count` per receiver, compresi quelli a zero), per la home della dashboard |
 

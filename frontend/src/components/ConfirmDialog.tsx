@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useDialogKeyboard } from "../hooks/useDialogKeyboard";
 
 interface ConfirmDialogProps {
   title: string;
@@ -7,7 +8,9 @@ interface ConfirmDialogProps {
    *  la conferma esplicita e il campo non compare. */
   expectedText?: string;
   children?: ReactNode;
-  onConfirm: () => void;
+  /** Se restituisce una promessa, il dialogo resta occupato finché non si
+   *  risolve: i pulsanti si disabilitano e un secondo click non parte. */
+  onConfirm: () => void | Promise<unknown>;
   onCancel: () => void;
   confirmLabel?: string;
   /** Conferma di un'azione che toglie qualcosa: pulsante rosso. */
@@ -24,12 +27,21 @@ export default function ConfirmDialog({
   destructive = true,
 }: ConfirmDialogProps) {
   const [typed, setTyped] = useState("");
+  const [pending, setPending] = useState(false);
+  // Il ref, non solo lo stato: un doppio click arriva prima che il pulsante
+  // disabilitato sia sullo schermo, e mandava due DELETE.
+  const pendingRef = useRef(false);
   const matches = expectedText === undefined || typed === expectedText;
+  const dialogRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
-  const cancelRef = useRef(onCancel);
   const titleId = useId();
-  cancelRef.current = onCancel;
+
+  useDialogKeyboard(dialogRef, () => {
+    // Annullare a metà non ferma la richiesta già partita: farebbe solo
+    // sparire il dialogo prima di sapere com'è andata.
+    if (!pendingRef.current) onCancel();
+  });
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -40,28 +52,15 @@ export default function ConfirmDialog({
     return () => previouslyFocused?.focus();
   }, []);
 
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      cancelRef.current();
-      return;
-    }
-    if (event.key !== "Tab") return;
-
-    const focusable = Array.from(
-      event.currentTarget.querySelectorAll<HTMLElement>(
-        'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
-      ),
-    );
-    if (focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
+  async function handleConfirm() {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    setPending(true);
+    try {
+      await onConfirm();
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
     }
   }
 
@@ -69,15 +68,19 @@ export default function ConfirmDialog({
     <div
       className="confirm-backdrop"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onCancel();
+        if (event.target === event.currentTarget && !pendingRef.current) onCancel();
       }}
     >
+      {/* tabIndex -1: un click su un testo del dialogo lascia il fuoco sul
+          dialogo invece di mandarlo sul body, fuori dalla finestra. */}
       <div
+        ref={dialogRef}
         className="card confirm-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        onKeyDown={handleKeyDown}
+        aria-busy={pending || undefined}
+        tabIndex={-1}
       >
         <h2 id={titleId}>{title}</h2>
         {children}
@@ -94,15 +97,15 @@ export default function ConfirmDialog({
           </div>
         )}
         <div className="form-actions">
-          <button type="button" onClick={onCancel}>
+          <button type="button" disabled={pending} onClick={onCancel}>
             Annulla
           </button>
           <button
             ref={confirmRef}
             type="button"
             className={destructive ? "primary danger" : "primary"}
-            disabled={!matches}
-            onClick={onConfirm}
+            disabled={!matches || pending}
+            onClick={() => void handleConfirm()}
           >
             {confirmLabel}
           </button>

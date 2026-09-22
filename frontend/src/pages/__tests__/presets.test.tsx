@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import PresetsPage from "../PresetsPage";
 import { setRefreshToken } from "../../api/client";
 import { server } from "../../api/mocks/server";
-import { fixturePresetCatalog } from "../../api/mocks/handlers";
+import { fixturePresetCatalog, fixturePresets } from "../../api/mocks/handlers";
 import { renderWithProviders } from "./testUtils";
 
 function renderPage() {
@@ -161,6 +161,125 @@ describe("PresetsPage", () => {
 
     expect(await within(card).findByText(/already exists/)).toBeInTheDocument();
     expect(within(card).getByRole("button", { name: "Salva" })).toBeInTheDocument();
+  });
+
+  it("T-PST1 l'esito dell'installazione si vede anche se la scheda sparisce", async () => {
+    const user = userEvent.setup();
+    let installati = false;
+    server.use(
+      http.post("/api/v1/severity-presets/sync-builtin", () => {
+        installati = true;
+        return HttpResponse.json({ installed: ["rclone"], already_present: ["bash-generic"] });
+      }),
+      // Dopo l'installazione il catalogo non ha piu' mancanti: la scheda
+      // "Preset predefiniti non ancora installati" smonta.
+      http.get("/api/v1/severity-presets/catalog", () =>
+        HttpResponse.json(
+          fixturePresetCatalog.map((v) => ({ ...v, installed: installati || v.installed })),
+        ),
+      ),
+    );
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: /Installa i 1 preset mancanti/ }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /preset mancanti/ })).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByText(/Preset installati: rclone/)).toBeInTheDocument();
+  });
+
+  it("T-PST2 Rinomina riparte dal preset attuale, Annulla scarta la bozza", async () => {
+    const user = userEvent.setup();
+    let descrizione = fixturePresets[0].description;
+    server.use(
+      http.get("/api/v1/severity-presets", () =>
+        HttpResponse.json([{ ...fixturePresets[0], description: descrizione }, fixturePresets[1]]),
+      ),
+      http.post("/api/v1/severity-presets/p1/reset", () => {
+        descrizione = "Descrizione ripristinata.";
+        return HttpResponse.json({});
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Bash generico")).toBeInTheDocument());
+    const card = screen.getByText("Bash generico").closest<HTMLElement>(".card")!;
+
+    // Bozza scritta e poi annullata: riaprendo non deve ricomparire.
+    await user.click(within(card).getByRole("button", { name: "Rinomina" }));
+    await user.clear(within(card).getByLabelText("Nome"));
+    await user.type(within(card).getByLabelText("Nome"), "Bozza scartata");
+    await user.click(within(card).getByRole("button", { name: "Annulla" }));
+    await user.click(within(card).getByRole("button", { name: "Rinomina" }));
+    expect(within(card).getByLabelText("Nome")).toHaveValue("Bash generico");
+    await user.click(within(card).getByRole("button", { name: "Annulla" }));
+
+    // Dopo il ripristino la bozza riparte dai valori nuovi, non da quelli letti
+    // al primo caricamento della pagina.
+    await user.click(within(card).getByRole("button", { name: /Ripristina i valori predefiniti/ }));
+    expect(await within(card).findByText("Descrizione ripristinata.")).toBeInTheDocument();
+    await user.click(within(card).getByRole("button", { name: "Rinomina" }));
+    expect(within(card).getByLabelText("Descrizione")).toHaveValue("Descrizione ripristinata.");
+  });
+
+  it("T-PST3 il nome si salva senza spazi e non puo' essere vuoto", async () => {
+    const user = userEvent.setup();
+    const inviati: Record<string, unknown>[] = [];
+    server.use(
+      http.patch("/api/v1/severity-presets/p1", async ({ request }) => {
+        inviati.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json(fixturePresets[0]);
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Bash generico")).toBeInTheDocument());
+    const card = screen.getByText("Bash generico").closest<HTMLElement>(".card")!;
+    await user.click(within(card).getByRole("button", { name: "Rinomina" }));
+
+    await user.clear(within(card).getByLabelText("Nome"));
+    await user.type(within(card).getByLabelText("Nome"), "   ");
+    await user.click(within(card).getByRole("button", { name: "Salva" }));
+    expect(await within(card).findByText(/Il nome del preset è obbligatorio/)).toBeInTheDocument();
+    expect(inviati).toHaveLength(0);
+
+    await user.clear(within(card).getByLabelText("Nome"));
+    await user.type(within(card).getByLabelText("Nome"), "  Backup interni ");
+    await user.click(within(card).getByRole("button", { name: "Salva" }));
+    await waitFor(() => expect(inviati).toHaveLength(1));
+    expect(inviati[0]).toMatchObject({ name: "Backup interni" });
+  });
+
+  it("T-PST4 le frecce delle regole restano ferme finche' un riordino e' in volo", async () => {
+    const user = userEvent.setup();
+    let chiamate = 0;
+    let sblocca: () => void = () => undefined;
+    server.use(
+      http.put("/api/v1/severity-presets/p1/rules/order", async () => {
+        chiamate += 1;
+        await new Promise<void>((resolve) => {
+          sblocca = resolve;
+        });
+        return HttpResponse.json([]);
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Bash generico")).toBeInTheDocument());
+    const card = screen.getByText("Bash generico").closest<HTMLElement>(".card")!;
+    await user.click(within(card).getByRole("button", { name: "Mostra regole" }));
+
+    await user.click(await screen.findByLabelText("Sposta giù No space left on device"));
+    await waitFor(() => expect(chiamate).toBe(1));
+    expect(screen.getByLabelText("Sposta su Permission denied")).toBeDisabled();
+    await user.click(screen.getByLabelText("Sposta su Permission denied"));
+
+    sblocca();
+    await waitFor(() =>
+      expect(screen.getByLabelText("Sposta giù No space left on device")).toBeEnabled(),
+    );
+    expect(chiamate).toBe(1);
   });
 
   it("il member vede i preset ma non li puo modificare", async () => {

@@ -11,14 +11,16 @@ import SeverityBadge from "../components/SeverityBadge";
 import StatusPill from "../components/StatusPill";
 import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
+import { saveBlob } from "../lib/download";
 import { formatBytes, formatDateTime } from "../lib/format";
 import { formatDurationMs } from "../lib/duration";
+import { ADMIN_ROLES, MEMBER_ROLES, hasRole } from "../lib/roles";
 import { isSurveillanceSource, phaseLabel, severitySourceLabel } from "../lib/severitySource";
 
-const DELETE_ALLOWED_ROLES = ["owner", "admin", "member"];
-// L'audit e' di owner e admin (backend: require_admin): agli altri il
-// collegamento non si mostra, prenderebbero 403.
-const AUDIT_ROLES = ["owner", "admin"];
+// Origini della severity decise da un pattern: una regola del receiver o una
+// arrivata da un preset. In entrambi i casi il pattern vincente dice cosa ha
+// fatto scattare la severity, e dove correggerla.
+const PATTERN_SOURCES = ["rule", "preset_rule"];
 
 export default function NotificationDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -83,22 +85,19 @@ export default function NotificationDetailPage() {
     await run(
       async () => {
         const text = await apiGet<string>(`/api/v1/notifications/${id}/content`);
-        const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
-        try {
-          const anchor = document.createElement("a");
-          anchor.href = url;
-          anchor.download = `notifica-${id}.txt`;
-          anchor.click();
-        } finally {
-          URL.revokeObjectURL(url);
-        }
+        saveBlob(new Blob([text], { type: "text/plain;charset=utf-8" }), `notifica-${id}.txt`);
       },
       { name: "download" },
     );
   }
 
-  const canDelete = role !== null && DELETE_ALLOWED_ROLES.includes(role);
-  const canSeeAudit = role !== null && AUDIT_ROLES.includes(role);
+  const canDelete = hasRole(role, MEMBER_ROLES);
+  // Letta/non letta e verificata richiedono member (backend: require_member): al
+  // viewer i pulsanti non si mostrano, prenderebbe 403.
+  const canHandle = hasRole(role, MEMBER_ROLES);
+  // L'audit e' di owner e admin (backend: require_admin): agli altri il
+  // collegamento non si mostra, prenderebbero 403.
+  const canSeeAudit = hasRole(role, ADMIN_ROLES);
 
   return (
     <div>
@@ -108,15 +107,22 @@ export default function NotificationDetailPage() {
       <div className="page-header">
         <h1>Dettaglio notifica</h1>
         <div className="page-header-actions">
-          <button
-            disabled={busyAction !== null}
-            onClick={() => void setStatus(data.status === "unread" ? "read" : "unread")}
-          >
-            {data.status === "unread" ? "Segna come letta" : "Segna come non letta"}
-          </button>
-          <button disabled={busyAction !== null} onClick={() => void setVerified(!data.verified)}>
-            {data.verified ? "Segna come non verificata" : "Segna come verificata"}
-          </button>
+          {canHandle && (
+            <>
+              <button
+                disabled={busyAction !== null}
+                onClick={() => void setStatus(data.status === "unread" ? "read" : "unread")}
+              >
+                {data.status === "unread" ? "Segna come letta" : "Segna come non letta"}
+              </button>
+              <button
+                disabled={busyAction !== null}
+                onClick={() => void setVerified(!data.verified)}
+              >
+                {data.verified ? "Segna come non verificata" : "Segna come verificata"}
+              </button>
+            </>
+          )}
           {/* L'id della notifica non e' esposto da nessuna parte, e non deve
               esserlo: il filtro dell'audit si riempie da qui. */}
           {canSeeAudit && (
@@ -150,7 +156,7 @@ export default function NotificationDetailPage() {
           <Detail label="Ricevuta">{formatDateTime(data.received_at)}</Detail>
           <Detail label="Origine della severity">
             <strong>{severitySourceLabel(data.severity_source)}</strong>
-            {data.severity_source === "rule" && data.matched_pattern && (
+            {PATTERN_SOURCES.includes(data.severity_source) && data.matched_pattern && (
               <div className="cell-diagnostics">
                 pattern vincente: <code>{data.matched_pattern}</code>
               </div>
@@ -206,7 +212,21 @@ export default function NotificationDetailPage() {
 
       <div className="card">
         <div className="card-header">
-          <h3>Contenuto</h3>
+          {/* Il corpo non era UTF-8 valido o conteneva byte NUL (spec 6.2): il
+              testo a video e' la versione ripulita in ingestion. Accanto al
+              titolo, come la pill "disabilitato" accanto al nome di un
+              receiver. */}
+          <h3>
+            Contenuto{" "}
+            {data.content_normalized && (
+              <span
+                className="status-pill"
+                title="Il corpo ricevuto non era UTF-8 valido o conteneva byte NUL: il testo mostrato è stato ripulito in ingestion."
+              >
+                contenuto normalizzato
+              </span>
+            )}
+          </h3>
           {data.content === null && data.content_url && (
             <div className="card-header-actions">
               <button disabled={busyAction !== null} onClick={() => void downloadContent()}>
@@ -215,12 +235,24 @@ export default function NotificationDetailPage() {
             </div>
           )}
         </div>
+        {/* Payload su object storage: il corpo intero (fino a decine di MB) non
+            si porta nel DOM, si scarica. L'anteprima di 4096 caratteri arriva
+            gia' nella risposta, ed e' la stessa su cui lavorano la ricerca e
+            gli inoltri: mostrarla evita di scaricare il file per capire di
+            cosa parla. Dichiarata come parziale, perche' non la si scambi per
+            il messaggio completo. */}
         {data.content !== null ? (
           <pre>{data.content}</pre>
         ) : (
-          <p className="card-hint">
-            {`Contenuto salvato su object storage (${formatBytes(data.content_size)}).`}
-          </p>
+          <>
+            <p className="card-hint">
+              {`Contenuto salvato su object storage (${formatBytes(data.content_size)}).`}
+            </p>
+            <p className="card-hint" id="content-preview-hint">
+              Anteprima: primi 4096 caratteri — contenuto completo da scaricare.
+            </p>
+            <pre aria-describedby="content-preview-hint">{data.content_preview}</pre>
+          </>
         )}
       </div>
 

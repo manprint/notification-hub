@@ -288,6 +288,13 @@ export interface DeliveryOut {
   sent_at: string | null;
 }
 
+// GET /api/v1/deliveries: pagina a cursore, ordinata per ricezione della
+// notifica (piu' recente prima). `next_cursor` e' opaco: si ripassa com'e'.
+export interface DeliveryListOut {
+  deliveries: DeliveryOut[];
+  next_cursor: string | null;
+}
+
 export interface NotificationListItemOut {
   id: string;
   receiver_id: string;

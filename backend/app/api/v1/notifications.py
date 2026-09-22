@@ -457,7 +457,8 @@ async def bulk_mark_read(
         to=body.to,
         write=True,
     )
-    if not visible:
+    # Un filtro "solo lette" non lascia niente da segnare come letto.
+    if not visible or body.status == NotificationStatus.READ:
         return BulkReadOut(marked_read=0)
     conditions.append(Notification.status == NotificationStatus.UNREAD)
 

@@ -33,7 +33,10 @@ export default function AcceptInvitePage() {
     setPasswordError(null);
     setRepeatedError(null);
 
-    if (password.length < MIN_PASSWORD_LENGTH) {
+    // Caratteri come li conta il backend (pydantic, code point), non unità
+    // UTF-16: con `.length` un'emoji vale due e una password di undici
+    // caratteri passava qui per essere poi rifiutata con un 422.
+    if ([...password].length < MIN_PASSWORD_LENGTH) {
       setPasswordError(`La password deve avere almeno ${MIN_PASSWORD_LENGTH} caratteri.`);
       return;
     }

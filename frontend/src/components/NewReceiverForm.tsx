@@ -5,6 +5,7 @@ import type { Severity } from "../api/types";
 import ErrorBanner from "./ErrorBanner";
 import Field, { RequiredLegend, fieldAria } from "./Field";
 import { useAction } from "../hooks/useAction";
+import { invalidateReceiverLists } from "../lib/receiverCache";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
 
@@ -28,7 +29,9 @@ export default function NewReceiverForm({ groupId }: { groupId: string }) {
           name: name.trim(),
           default_severity: defaultSeverity,
         });
-        await queryClient.invalidateQueries({ queryKey: ["receivers", groupId] });
+        // Non solo la tabella del gruppo: il nuovo receiver deve comparire anche
+        // nelle notifiche, nel selettore degli override e nei conteggi.
+        await invalidateReceiverLists(queryClient, groupId);
       },
       { success: `Receiver "${name.trim()}" creato.` },
     );

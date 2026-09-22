@@ -1,7 +1,13 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { type InfiniteData, useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { apiGet, apiPost } from "../api/client";
-import type { ApiError, DeliveryChannelOut, DeliveryOut, DeliveryStatus } from "../api/types";
+import type {
+  ApiError,
+  DeliveryChannelOut,
+  DeliveryListOut,
+  DeliveryOut,
+  DeliveryStatus,
+} from "../api/types";
 import DataTable, { type DataTableColumn } from "../components/DataTable";
 import ErrorBanner from "../components/ErrorBanner";
 import SeverityBadge from "../components/SeverityBadge";
@@ -21,6 +27,12 @@ const STATUS_HELP: Record<DeliveryStatus, string> = {
   dead: "esauriti i tentativi, serve un ri-accodamento manuale",
 };
 
+// Solo in questi due stati `next_attempt_at` e' un appuntamento: una consegna
+// morta non ritenta piu' da sola, una in invio lo sta gia' facendo.
+const WAITING_RETRY: DeliveryStatus[] = ["pending", "failed"];
+
+const PAGE_SIZE = 100;
+
 export default function DeliveriesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const status = (searchParams.get("status") as DeliveryStatus | null) ?? undefined;
@@ -29,10 +41,30 @@ export default function DeliveriesPage() {
   const { role } = useSession();
   const { busy: retryingId, error: actionError, run } = useAction();
 
-  const { data, isLoading, error } = useQuery<DeliveryOut[], ApiError>({
-    queryKey: ["deliveries", status, channelId],
-    queryFn: () => apiGet<DeliveryOut[]>("/api/v1/deliveries", { status, channel_id: channelId }),
-  });
+  // Paginazione a cursore, come le notifiche e l'audit: lo storico cresce a
+  // ogni inoltro, e la lista nuda si fermava alle prime 100 righe senza dirlo.
+  // I filtri stanno nella chiave: cambiarli riparte dalla prima pagina.
+  const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } =
+    useInfiniteQuery<
+      DeliveryListOut,
+      ApiError,
+      InfiniteData<DeliveryListOut>,
+      readonly unknown[],
+      string | undefined
+    >({
+      queryKey: ["deliveries", { status, channel_id: channelId }],
+      queryFn: ({ pageParam }) =>
+        apiGet<DeliveryListOut>("/api/v1/deliveries", {
+          status,
+          channel_id: channelId,
+          cursor: pageParam,
+          limit: PAGE_SIZE,
+        }),
+      initialPageParam: undefined,
+      getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    });
+
+  const rows = data?.pages.flatMap((page) => page.deliveries) ?? [];
 
   const { data: channels } = useQuery<DeliveryChannelOut[], ApiError>({
     queryKey: ["channels"],
@@ -89,7 +121,9 @@ export default function DeliveriesPage() {
       render: (d) => (
         <div className="cell-preview">
           <StatusPill status={d.status} />
-          <div className="cell-diagnostics">{STATUS_HELP[d.status]}</div>
+          <div className="cell-diagnostics">
+            {STATUS_HELP[d.status] ?? "stato non riconosciuto da questa versione"}
+          </div>
         </div>
       ),
     },
@@ -102,7 +136,7 @@ export default function DeliveriesPage() {
           {d.sent_at && (
             <div className="cell-diagnostics">inviata: {formatDateTime(d.sent_at)}</div>
           )}
-          {!d.sent_at && d.status !== "sent" && (
+          {WAITING_RETRY.includes(d.status) && (
             <div className="cell-diagnostics">
               prossimo tentativo: {formatDateTime(d.next_attempt_at)}
             </div>
@@ -202,10 +236,13 @@ export default function DeliveriesPage() {
 
       <DataTable
         columns={columns}
-        rows={data ?? []}
+        rows={rows}
         rowKey={(d) => d.id}
         loading={isLoading}
         emptyMessage="Nessuna consegna trovata: nessuna notifica ha ancora superato la soglia di un canale."
+        hasMore={hasNextPage}
+        onLoadMore={() => void fetchNextPage()}
+        loadingMore={isFetchingNextPage}
       />
     </div>
   );

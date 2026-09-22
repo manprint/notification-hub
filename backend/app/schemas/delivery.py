@@ -61,3 +61,12 @@ class DeliveryOut(BaseModel):
     response_code: int | None
     last_error: str | None
     sent_at: datetime | None
+
+
+class DeliveryListOut(BaseModel):
+    """Pagina di consegne con cursore opaco (spec 9.4). La lista nuda si fermava
+    al `limit` senza dirlo: con piu' di 100 consegne morte le altre non si
+    potevano ne' vedere ne' ri-accodare dalla dashboard."""
+
+    deliveries: list[DeliveryOut]
+    next_cursor: str | None

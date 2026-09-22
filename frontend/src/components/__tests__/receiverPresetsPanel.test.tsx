@@ -122,6 +122,64 @@ describe("ReceiverPresetsPanel", () => {
     expect(screen.getByLabelText("Sposta su Bash generico")).toBeDisabled();
   });
 
+  it("T-PRS1 con l'elenco applicato in errore non si puo applicare niente", async () => {
+    let put = 0;
+    server.use(
+      http.get("/api/v1/receivers/r1/presets", () =>
+        HttpResponse.json(
+          { type: "/problems/internal-error", title: "Internal Server Error", detail: "boom" },
+          { status: 500 },
+        ),
+      ),
+      http.put("/api/v1/receivers/r1/presets", () => {
+        put += 1;
+        return HttpResponse.json([]);
+      }),
+    );
+    renderPanel();
+
+    // Senza l'elenco applicato, "Applica" manderebbe il solo preset nuovo e
+    // staccherebbe gli altri: la casella non c'e' proprio, e l'errore si vede.
+    expect(await screen.findByText("boom")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Applica Backup interni")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Nessun preset applicato/)).not.toBeInTheDocument();
+    expect(put).toBe(0);
+  });
+
+  it("T-PRS2 mentre l'elenco applicato carica le azioni non ci sono", async () => {
+    let rispondi: () => void = () => undefined;
+    server.use(
+      http.get("/api/v1/receivers/r1/presets", async () => {
+        await new Promise<void>((resolve) => {
+          rispondi = resolve;
+        });
+        return HttpResponse.json([]);
+      }),
+    );
+    renderPanel();
+
+    expect(await screen.findByText(/Caricamento dei preset applicati/)).toBeInTheDocument();
+    // Anche col catalogo gia' arrivato, senza l'elenco applicato non si agisce.
+    expect(screen.queryByLabelText("Applica Backup interni")).not.toBeInTheDocument();
+
+    rispondi();
+    expect(await screen.findByLabelText("Applica Backup interni")).toBeEnabled();
+  });
+
+  it("T-PRS3 mostra anche l'errore del catalogo dei preset", async () => {
+    server.use(
+      http.get("/api/v1/severity-presets", () =>
+        HttpResponse.json(
+          { type: "/problems/internal-error", title: "Internal Server Error", detail: "catalogo giu" },
+          { status: 500 },
+        ),
+      ),
+    );
+    renderPanel();
+
+    expect(await screen.findByText("catalogo giu")).toBeInTheDocument();
+  });
+
   it("il viewer vede i preset applicati ma non li puo cambiare", async () => {
     server.use(
       http.get("/api/v1/auth/me", () =>

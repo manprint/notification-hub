@@ -26,6 +26,14 @@ async def get_tenant(
     return TenantOut.model_validate(tenant)
 
 
+UNLIMITED_WHEN_NULL = (
+    "max_notifications_per_day",
+    "max_storage_bytes",
+    "retention_days",
+    "audit_retention_days",
+)
+
+
 @router.patch("", response_model=TenantOut)
 async def update_tenant(
     body: TenantUpdate,
@@ -60,14 +68,12 @@ async def update_tenant(
         tenant.name = body.name
     if body.max_body_bytes is not None:
         tenant.max_body_bytes = body.max_body_bytes
-    if body.max_notifications_per_day is not None:
-        tenant.max_notifications_per_day = body.max_notifications_per_day
-    if body.max_storage_bytes is not None:
-        tenant.max_storage_bytes = body.max_storage_bytes
-    if body.retention_days is not None:
-        tenant.retention_days = body.retention_days
-    if body.audit_retention_days is not None:
-        tenant.audit_retention_days = body.audit_retention_days
+    # Quote e ritenzioni: NULL = illimitata (spec 4.1), quindi un null esplicito
+    # e' un valore da scrivere, non un campo da ignorare. Senza questa
+    # distinzione una quota impostata una volta non tornava piu' illimitata.
+    for field in UNLIMITED_WHEN_NULL:
+        if field in body.model_fields_set:
+            setattr(tenant, field, getattr(body, field))
 
     await session.flush()
     return TenantOut.model_validate(tenant)

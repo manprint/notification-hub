@@ -6,12 +6,13 @@ import type { ApiError, Severity, StatsSummaryOut } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import ErrorBanner from "../components/ErrorBanner";
 import SeverityBadge from "../components/SeverityBadge";
+import { formatTime } from "../lib/format";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
 const POLL_INTERVAL_MS = 30_000;
 
 export default function HomePage() {
-  const { data, isLoading, error } = useQuery<StatsSummaryOut, ApiError>({
+  const { data, isLoading, error, dataUpdatedAt } = useQuery<StatsSummaryOut, ApiError>({
     queryKey: ["stats-summary"],
     queryFn: () => apiGet<StatsSummaryOut>("/api/v1/stats/summary"),
     refetchInterval: POLL_INTERVAL_MS,
@@ -31,14 +32,26 @@ export default function HomePage() {
   }
 
   if (isLoading) return <EmptyState message="Caricamento…" />;
-  if (error) return <ErrorBanner error={error} />;
-  if (!data) return null;
+  // Senza dati l'errore e' tutta la pagina. Con i dati di un giro precedente,
+  // un polling fallito (una rete che singhiozza, un deploy) non li cancella:
+  // restano a video, col banner sopra che dice che potrebbero non essere
+  // aggiornati.
+  if (!data) return error ? <ErrorBanner error={error} /> : null;
 
   return (
     <div>
       <div className="page-header">
         <h1>Riepilogo</h1>
       </div>
+      {error && (
+        <>
+          <ErrorBanner error={error} />
+          <p className="card-hint">
+            I numeri qui sotto sono dell'ultimo aggiornamento riuscito, alle{" "}
+            {formatTime(new Date(dataUpdatedAt).toISOString())}.
+          </p>
+        </>
+      )}
 
       {/* I tre numeri che si guardano per primi, affiancati: in colonna
           occupavano tre schermate di card mezze vuote. */}

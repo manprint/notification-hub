@@ -167,3 +167,22 @@ def test_google_chat_mette_la_durata_nel_sottotitolo():
         notification_url="https://notifyhub.example.com/notifications/abc",
     )
     assert "subtitle" not in senza["cardsV2"][0]["card"]["header"]
+
+
+@pytest.mark.unit
+def test_safe_error_toglie_url_path_e_query_del_webhook():
+    from app.outbound.sender import safe_error
+
+    url = "https://chat.googleapis.com/v1/spaces/AAA/messages?key=SEGRETO&token=ALTRO"
+    testo = safe_error(ValueError(f"errore su {url} (path /v1/spaces/AAA/messages)"), url)
+    assert "SEGRETO" not in testo
+    assert "/v1/spaces/AAA/messages" not in testo
+    assert "chat.googleapis.com" in testo
+    assert testo.startswith("ValueError: ")
+
+
+@pytest.mark.unit
+def test_safe_error_senza_messaggio_restituisce_il_tipo():
+    from app.outbound.sender import safe_error
+
+    assert safe_error(TimeoutError(), "https://hooks.slack.com/services/T/B/X") == "TimeoutError"

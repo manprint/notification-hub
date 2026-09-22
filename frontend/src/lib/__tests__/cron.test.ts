@@ -50,6 +50,74 @@ describe("validateCronExpression", () => {
     expect(validateCronExpression("0 0 29 2 *")).toBeNull();
   });
 
+  // Tabella verificata contro il backend: ogni riga e' stata passata a
+  // validate_cron (backend/app/services/surveillance.py, croniter 6.2) e a
+  // questa funzione, con lo stesso esito. Serve a tenere il form allineato a
+  // quello che il backend salva: prima cron-parser divergeva su meta' di questi.
+  it.each([
+    "0 3 * * *",
+    "0 0 * * 7",
+    "0 0 * * sun",
+    "0 0 * * MON-FRI",
+    "0 0 1 jan *",
+    "0 0 L * *",
+    "0 0 * * 1#2",
+    "0 0 * * mon#2",
+    "0 0 * * l3",
+    "0 0 15W * *",
+    "0 0 1W * *",
+    "0 0 31W 2 *",
+    "0 0 ? * *",
+    "0 0 * * ?",
+    "1/2 * * * *",
+    "0 0 * * 1/2",
+    "5-1 * * * *",
+    "0 22-2 * * *",
+    "0 0 * * 7-1",
+    "0 0 * * fri-mon",
+    "*/61 * * * *",
+    "5-5 * * * *",
+    "0 0 1,15 * 1",
+    "0 0 15W * 1",
+  ])("T-CRON8 accetta come il backend: %s", (expr) => {
+    expect(validateCronExpression(expr)).toBeNull();
+  });
+
+  it.each([
+    "0 0 * * 5L",
+    "0 0 * * L",
+    "0 0 * * 1L",
+    "0 0 LW * *",
+    "0 0 L-2 * *",
+    "0 0 * * 2#6",
+    "0 0 * * 1#2,3",
+    "? * * * *",
+    "*/0 * * * *",
+    "0,,1 * * * *",
+    "-1 * * * *",
+    "60 * * * *",
+    "* 24 * * *",
+    "0 0 0 * *",
+    "0 0 * 0 *",
+    "0 0 * * 8",
+  ])("T-CRON9 rifiuta come il backend: %s", (expr) => {
+    expect(validateCronExpression(expr)).toContain("non valida");
+  });
+
+  it.each(["0 0 30 2 *", "0 0 31 4 *", "0 0 31 2,4 *", "0 0 30 2 1", "0 0 15 * 1#2"])(
+    "T-CRON10 rifiuta come il backend le espressioni che non scattano mai: %s",
+    (expr) => {
+      expect(validateCronExpression(expr)).toContain("non scatta mai");
+    },
+  );
+
+  it.each(["H * * * *", "H(0-5) * * * *", "R * * * *", "r/5 * * * *", "1,R * * * *"])(
+    "T-CRON11 rifiuta H e R (orario casuale), come il backend: %s",
+    (expr) => {
+      expect(validateCronExpression(expr)).toMatch(/H e R/);
+    },
+  );
+
   it("T-CRON4 rifiuta le espressioni piu' lunghe della soglia", () => {
     const overlong = `0 ${"3".repeat(200)} * * *`;
     expect(validateCronExpression(overlong)).toContain("100 caratteri");
@@ -88,6 +156,34 @@ describe("nextCronExecutions", () => {
       .toBeLessThan(occorrenze[1].getTime());
     expect(occorrenze[1].getTime())
       .toBeLessThan(occorrenze[2].getTime());
+  });
+
+  // Occorrenze calcolate dal backend (next_fire_after, applicato a catena come
+  // fa questa anteprima) per gli stessi input. Coprono i punti in cui
+  // cron-parser dava altre date: il cambio d'ora (orario saltato e orario
+  // doppio), `1/2` nel giorno della settimana, gli intervalli che scavalcano la
+  // fine del campo, W, L, # e l'OR fra giorno del mese e giorno della settimana.
+  it.each([
+    ["0 3 * * *", "Europe/Rome", "2026-03-28T12:00:00Z", ["2026-03-29T01:00:00Z", "2026-03-30T01:00:00Z", "2026-03-31T01:00:00Z"]],
+    ["30 2 * * *", "Europe/Rome", "2026-03-28T20:00:00Z", ["2026-03-29T01:00:00Z", "2026-03-30T00:30:00Z", "2026-03-31T00:30:00Z"]],
+    ["30 2 * * *", "Europe/Rome", "2026-10-24T20:00:00Z", ["2026-10-25T00:30:00Z", "2026-10-25T01:30:00Z", "2026-10-26T01:30:00Z"]],
+    ["0 1 * * *", "America/New_York", "2026-10-31T20:00:00Z", ["2026-11-01T05:00:00Z", "2026-11-01T06:00:00Z", "2026-11-02T06:00:00Z"]],
+    ["0 0 * * 1/2", "UTC", "2026-03-28T12:00:00Z", ["2026-03-30T00:00:00Z", "2026-04-01T00:00:00Z", "2026-04-03T00:00:00Z"]],
+    ["0 0 * * fri-mon", "UTC", "2026-08-05T12:00:00Z", ["2026-08-07T00:00:00Z", "2026-08-08T00:00:00Z", "2026-08-09T00:00:00Z"]],
+    ["0 22-2 * * *", "UTC", "2026-08-05T12:00:00Z", ["2026-08-05T22:00:00Z", "2026-08-05T23:00:00Z", "2026-08-06T00:00:00Z"]],
+    ["0 0 15W * *", "UTC", "2026-08-01T12:00:00Z", ["2026-08-14T00:00:00Z", "2026-09-15T00:00:00Z", "2026-10-15T00:00:00Z"]],
+    ["0 0 L * *", "UTC", "2026-01-30T12:00:00Z", ["2026-01-31T00:00:00Z", "2026-02-28T00:00:00Z", "2026-03-31T00:00:00Z"]],
+    ["0 0 * * 1#2", "UTC", "2026-08-05T12:00:00Z", ["2026-08-10T00:00:00Z", "2026-09-14T00:00:00Z", "2026-10-12T00:00:00Z"]],
+    ["0 0 1,15 * 1", "UTC", "2026-08-05T12:00:00Z", ["2026-08-10T00:00:00Z", "2026-08-15T00:00:00Z", "2026-08-17T00:00:00Z"]],
+    ["0 0 29 2 *", "UTC", "2026-08-05T12:00:00Z", ["2028-02-29T00:00:00Z", "2032-02-29T00:00:00Z", "2036-02-29T00:00:00Z"]],
+  ])("T-CRON12 %s in %s da %s: stesse date del backend", (expr, tz, start, attese) => {
+    const occorrenze = nextCronExecutions(expr, tz, new Date(start));
+    expect(occorrenze.map((d) => d.toISOString().replace(".000Z", "Z"))).toEqual(attese);
+  });
+
+  it("T-CRON13 un'espressione non valida o un fuso sconosciuto danno un'anteprima vuota", () => {
+    expect(nextCronExecutions("0 0 * * 5L", "UTC", now)).toEqual([]);
+    expect(nextCronExecutions("0 3 * * *", "Europa/Roma", now)).toEqual([]);
   });
 
   it("formatta le occorrenze nel fuso richiesto", () => {

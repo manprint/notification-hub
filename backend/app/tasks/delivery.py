@@ -66,11 +66,35 @@ def dispatch_delivery(delivery_id: str, tenant_id: str) -> None:
         # per dire nel messaggio non solo quanto e' durato, ma se era troppo.
         duration_threshold_seconds = receiver.duration_threshold_seconds if receiver else None
 
+        try:
+            webhook_url = decrypt_secret(channel.webhook_url)
+        except Exception as exc:  # noqa: BLE001
+            # Tipicamente NOTIFYHUB_SECRET_KEY cambiata dopo aver salvato il
+            # canale (non c'e' rotazione della chiave). Rilanciare faceva il
+            # rollback: la riga restava `pending`/`failed`, reconcile la
+            # riaccodava ogni 5 minuti per sempre, senza mai un last_error ne'
+            # un tentativo contato. Un guasto che nessun retry puo' risolvere:
+            # la delivery muore con la causa scritta, e dopo aver sistemato la
+            # chiave (o reinserito il webhook) si ri-accoda dalla dashboard.
+            reason = f"webhook decryption failed ({type(exc).__name__})"
+            delivery.status = DeliveryStatus.DEAD
+            delivery.last_error = reason
+            channel.last_error_at = datetime.now(UTC)
+            channel.last_error = reason
+            deliveries_total.labels(outcome="dead").inc()
+            logger.error(
+                "dispatch_delivery_decrypt_failed",
+                delivery_id=delivery_id,
+                channel_id=str(channel.id),
+                error=type(exc).__name__,
+            )
+            return
+
         delivery.status = DeliveryStatus.SENDING
-        delivery.locked_at = datetime.now(UTC)
+        locked_at = datetime.now(UTC)
+        delivery.locked_at = locked_at
         session.flush()
 
-        webhook_url = decrypt_secret(channel.webhook_url)
         channel_type = channel.type
         severity = notification.severity
         content_preview = notification.content_preview
@@ -96,9 +120,22 @@ def dispatch_delivery(delivery_id: str, tenant_id: str) -> None:
 
     # Fase 3: scrive l'esito in una nuova transazione (spec 8.2).
     with tenant_session_sync(tid) as session:
-        delivery = session.get(Delivery, did)
+        delivery = session.get(Delivery, did, with_for_update=True)
         if delivery is None:
             logger.error("dispatch_delivery_vanished", delivery_id=delivery_id)
+            return
+        if delivery.status != DeliveryStatus.SENDING or delivery.locked_at != locked_at:
+            # Nel frattempo la riga e' passata di mano: reconcile l'ha trovata
+            # `sending` da oltre 10 minuti e l'ha riaccodata, oppure un altro
+            # worker l'ha gia' ripresa. Scrivere qui l'esito sovrascriverebbe
+            # lo stato del proprietario attuale con quello di un tentativo
+            # ormai orfano.
+            logger.warning(
+                "dispatch_delivery_outcome_discarded",
+                delivery_id=delivery_id,
+                status=str(delivery.status),
+                outcome_ok=result.ok,
+            )
             return
         channel = session.get(DeliveryChannel, delivery.channel_id)
         now = datetime.now(UTC)

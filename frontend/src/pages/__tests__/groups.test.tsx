@@ -1,9 +1,11 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { HttpResponse, http } from "msw";
 import { describe, expect, it } from "vitest";
 import GroupsPage from "../GroupsPage";
 import { setRefreshToken } from "../../api/client";
-import { fixtureDeleteImpact } from "../../api/mocks/handlers";
+import { fixtureDeleteImpact, fixtureGroups } from "../../api/mocks/handlers";
+import { server } from "../../api/mocks/server";
 import { renderWithProviders } from "./testUtils";
 
 describe("GroupsPage", () => {
@@ -53,5 +55,60 @@ describe("GroupsPage", () => {
     await user.type(screen.getByLabelText("Cerca gruppi"), "backup");
     expect(screen.queryByText("Server Produzione")).toBeNull();
     expect(screen.getByRole("row", { name: /backup/i })).toBeInTheDocument();
+  });
+
+  it("svuotare la descrizione la toglie davvero e la riga la mostra vuota", async () => {
+    setRefreshToken("refresh-token-fixture");
+    let groups = fixtureGroups.map((g) => ({ ...g }));
+    let body: Record<string, unknown> | null = null;
+    server.use(
+      http.get("/api/v1/groups", () => HttpResponse.json(groups)),
+      http.patch("/api/v1/groups/:groupId", async ({ request, params }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        // Il contratto del backend: "" (o null) esplicito svuota.
+        const description = body.description ? String(body.description) : null;
+        groups = groups.map((g) => (g.id === params.groupId ? { ...g, description } : g));
+        return HttpResponse.json(groups.find((g) => g.id === params.groupId));
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<GroupsPage />);
+
+    await screen.findByText("Ambiente di produzione");
+    const riga = screen.getByRole("row", { name: /server produzione/i });
+    await user.click(within(riga).getByRole("button", { name: "Modifica gruppo" }));
+    const dialogo = within(screen.getByRole("dialog"));
+    await user.clear(dialogo.getByLabelText("Descrizione"));
+    await user.click(dialogo.getByRole("button", { name: "Salva" }));
+
+    await waitFor(() => expect(body).not.toBeNull());
+    expect(body).toMatchObject({ name: "Server Produzione", description: "" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByText("Ambiente di produzione")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("un doppio click sulla conferma di eliminazione manda una sola DELETE", async () => {
+    setRefreshToken("refresh-token-fixture");
+    let deletes = 0;
+    server.use(
+      http.delete("/api/v1/groups/:groupId", async () => {
+        deletes += 1;
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<GroupsPage />);
+
+    await screen.findByText("Server Produzione");
+    await user.click(screen.getAllByRole("button", { name: "Elimina gruppo" })[0]);
+    const dialogo = within(await screen.findByRole("dialog"));
+    await user.type(dialogo.getByLabelText(/digita/i), "Server Produzione");
+    await user.dblClick(dialogo.getByRole("button", { name: "Elimina gruppo" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(deletes).toBe(1);
   });
 });

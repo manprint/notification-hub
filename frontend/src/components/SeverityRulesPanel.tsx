@@ -118,6 +118,9 @@ function RuleForm({
         }
         await queryClient.invalidateQueries({ queryKey: ["severity-rules", receiverId] });
         await queryClient.invalidateQueries({ queryKey: ["severity-chain", receiverId] });
+        // La prova sulle ultime notifiche, se aperta, va rifatta con la regola
+        // nuova: altrimenti mostra il risultato delle regole di prima.
+        await queryClient.invalidateQueries({ queryKey: ["severity-replay", receiverId] });
       },
       { success: rule ? "Regola aggiornata." : "Regola aggiunta in fondo alla catena." },
     );
@@ -182,13 +185,17 @@ function RuleForm({
  *  nell'ordine reale di valutazione. Con due o tre preset applicati, ricostruire
  *  a mente chi viene prima non è ragionevole. */
 function EffectiveChain({ receiverId }: { receiverId: string }) {
-  const { data, error } = useQuery<SeverityChainItemOut[], ApiError>({
+  const { data, error, isLoading } = useQuery<SeverityChainItemOut[], ApiError>({
     queryKey: ["severity-chain", receiverId],
     queryFn: () => apiGet<SeverityChainItemOut[]>(`/api/v1/receivers/${receiverId}/severity-chain`),
   });
 
   if (error) return <ErrorBanner error={error} />;
-  if (!data || data.length === 0) {
+  // Senza dati non si sa ancora niente: "nessuna regola attiva" durante il
+  // caricamento diceva il falso per un attimo, e per sempre se la richiesta
+  // restava appesa.
+  if (isLoading || !data) return <p className="card-hint">Caricamento della catena…</p>;
+  if (data.length === 0) {
     return (
       <p className="card-hint">
         Nessuna regola attiva: ogni notifica riceve la severity di default del receiver.
@@ -435,16 +442,19 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
                         <span>{index + 1}</span>
                         {canManage && (
                           <>
+                            {/* Ferme mentre un'altra modifica e' in volo: il
+                                secondo click calcolerebbe il nuovo ordine da
+                                quello vecchio e annullerebbe il primo. */}
                             <button
                               aria-label={`Sposta su ${rule.pattern}`}
-                              disabled={index === 0}
+                              disabled={index === 0 || busy !== null}
                               onClick={() => move(index, -1)}
                             >
                               ↑
                             </button>
                             <button
                               aria-label={`Sposta giù ${rule.pattern}`}
-                              disabled={index === ordered.length - 1}
+                              disabled={index === ordered.length - 1 || busy !== null}
                               onClick={() => move(index, 1)}
                             >
                               ↓
@@ -470,6 +480,7 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
                             type="checkbox"
                             checked={rule.enabled}
                             aria-label={`Attiva ${rule.pattern}`}
+                            disabled={busy !== null}
                             onChange={() =>
                               void mutate(
                                 () =>

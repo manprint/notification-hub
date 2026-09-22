@@ -1,8 +1,9 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import ReceiverNotificationsTable from "../ReceiverNotificationsTable";
+import { setRefreshToken } from "../../api/client";
 import {
   fixtureNotificationsPage1,
   fixtureReceiver,
@@ -20,7 +21,20 @@ function renderTable(filters = { group_id: "g1" }) {
   );
 }
 
+const viewerMe = {
+  id: "u9",
+  email: "viewer@acme.test",
+  role: "viewer",
+  tenant_id: "t1",
+  tenant_name: "ACME",
+};
+
 describe("ReceiverNotificationsTable", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setRefreshToken("refresh-token-fixture"); // fixtureMe di default ha ruolo owner
+  });
+
   it("T-RCV1 chiede solo le notifiche del proprio receiver", async () => {
     let capturedUrl: URL | null = null;
     server.use(
@@ -108,7 +122,7 @@ describe("ReceiverNotificationsTable", () => {
 
     await screen.findByRole("table");
     await user.click(
-      screen.getByRole("button", { name: "Segna tutte come lette: Backup notturno" }),
+      await screen.findByRole("button", { name: "Segna tutte come lette: Backup notturno" }),
     );
 
     await waitFor(() => {
@@ -149,7 +163,7 @@ describe("ReceiverNotificationsTable", () => {
     const user = userEvent.setup();
 
     const tabella = within(await screen.findByRole("table"));
-    await user.click(tabella.getAllByRole("button", { name: "Segna come letta" })[0]);
+    await user.click((await tabella.findAllByRole("button", { name: "Segna come letta" }))[0]);
 
     // Il messaggio compare due volte, e deve: il toast lo dice subito, il
     // banner dentro la tabella resta e dice quale tabella ha fallito.
@@ -169,6 +183,71 @@ describe("ReceiverNotificationsTable", () => {
     renderTable();
 
     expect(await screen.findByText("Nessuna notifica trovata.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Backup notturno" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Backup notturno" })).toBeInTheDocument();
+  });
+
+  it("T-RCV9 'segna tutte come lette' manda anche lo stato e il testo filtrati", async () => {
+    let body: Record<string, unknown> | null = null;
+    server.use(
+      http.post("/api/v1/notifications/bulk-read", async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ marked_read: 1 });
+      }),
+    );
+
+    renderTable({ group_id: "g1", status: "unread", q: "backup" } as never);
+    const user = userEvent.setup();
+
+    await user.click(
+      await screen.findByRole("button", { name: "Segna tutte come lette: Backup notturno" }),
+    );
+
+    await waitFor(() => expect(body).not.toBeNull());
+    expect(body).toMatchObject({
+      group_id: "g1",
+      receiver_id: "r1",
+      status: "unread",
+      q: "backup",
+    });
+  });
+
+  it("T-RCV10 con il filtro 'solo lette' non propone di segnarle tutte come lette", async () => {
+    renderTable({ group_id: "g1", status: "read" } as never);
+
+    const tabella = within(await screen.findByRole("table"));
+    // La sessione e' caricata (le azioni di riga ci sono), il pulsante no.
+    expect(
+      (await tabella.findAllByRole("button", { name: "Segna come non letta" })).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("button", { name: /Segna tutte come lette/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("T-RCV11 il viewer vede le notifiche ma non le azioni ne' il link al receiver", async () => {
+    server.use(http.get("/api/v1/auth/me", () => HttpResponse.json(viewerMe)));
+    let meCaricato = false;
+    server.events.on("response:mocked", ({ request }) => {
+      if (new URL(request.url).pathname === "/api/v1/auth/me") meCaricato = true;
+    });
+
+    try {
+      renderTable();
+
+      await screen.findByRole("table");
+      await waitFor(() => expect(meCaricato).toBe(true));
+      // Il profilo e' arrivato: si lascia a React il giro per applicarlo, cosi'
+      // le assenze qui sotto non passano solo perche' la sessione carica ancora.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Il backend risponderebbe 403 (require_member) e /receivers/:id e'
+      // chiusa al viewer da RequireRole: niente pulsanti, nome come testo.
+      expect(screen.getByRole("heading", { name: "Backup notturno" })).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Backup notturno" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Segna come/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Segna tutte/ })).not.toBeInTheDocument();
+    } finally {
+      server.events.removeAllListeners();
+    }
   });
 });

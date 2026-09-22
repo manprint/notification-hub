@@ -1,6 +1,7 @@
 import { apiGetFile } from "../api/client";
 import { useAction } from "../hooks/useAction";
 import type { AuditFilters } from "../hooks/useAuditEvents";
+import { UTF8_BOM, saveBlob } from "../lib/download";
 import ErrorBanner from "./ErrorBanner";
 
 /** Esporta esattamente cio' che i filtri a schermo selezionano: l'export che
@@ -25,12 +26,10 @@ export default function AuditExportButton({
         `/api/v1/audit/export?${query.toString()}`,
         "audit.csv",
       );
-      const url = URL.createObjectURL(new Blob([content], { type: "text/csv" }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      link.click();
-      URL.revokeObjectURL(url);
+      // Il backend manda UTF-8 senza BOM (e se un giorno lo mandasse,
+      // response.text() lo toglie decodificando): lo si rimette qui, se no
+      // Excel apre il file con la codifica di sistema e rovina gli accenti.
+      saveBlob(new Blob([UTF8_BOM, content], { type: "text/csv;charset=utf-8" }), filename);
     });
   }
 

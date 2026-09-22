@@ -1,17 +1,21 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import type { ApiError } from "../api/types";
 import ErrorBanner from "../components/ErrorBanner";
 import Field, { RequiredLegend, fieldAria } from "../components/Field";
 import { useSession } from "../hooks/useSession";
+import { safeRedirectTarget } from "../lib/redirect";
 
 export default function LoginPage() {
-  const { login } = useSession();
+  const { user, loading, login } = useSession();
   const navigate = useNavigate();
+  const location = useLocation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<ApiError | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Messo da RequireAuth: la pagina chiesta prima del redirect al login.
+  const target = safeRedirectTarget((location.state as { from?: unknown } | null)?.from);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -19,13 +23,21 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await login(email, password);
-      navigate("/", { replace: true });
+      navigate(target, { replace: true });
     } catch (err) {
       setError(err as ApiError);
     } finally {
       setSubmitting(false);
     }
   }
+
+  // Mentre si ricarica una sessione salvata il form non si mostra: un login
+  // fatto in quel momento si incrocerebbe col refresh della sessione di prima.
+  if (loading) return <div className="empty-state">Caricamento…</div>;
+  // Chi è già dentro non rientra come un altro utente sopra la sessione
+  // aperta: token e cache di A resterebbero sotto il nome di B. Per cambiare
+  // utente si passa da "Esci", che revoca la sessione e svuota la cache.
+  if (user && !submitting) return <Navigate to={target} replace />;
 
   const rateLimited = error?.status === 429;
   const retryAfterSeconds =

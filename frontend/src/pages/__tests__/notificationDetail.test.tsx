@@ -42,15 +42,48 @@ describe("NotificationDetailPage", () => {
     setRefreshToken("refresh-token-fixture"); // fixtureMe di default: owner
   });
 
-  it("T-UI10 test_payload_offloaded_mostra_download: storage_backend object mostra il download, non il corpo", async () => {
+  // T-UI10 chiedeva che il corpo non finisse a video, verificandolo con "nessun
+  // <pre> e nessuna anteprima". Il requisito vero (piano fase 10, 9.7) e'
+  // "nessun tentativo di renderizzare 20MB nel DOM": il corpo intero si
+  // scarica. content_preview sono i primi 4096 caratteri, gia' nella risposta
+  // e gia' usati da ricerca e inoltri (spec 5 e 9.5): mostrarli, dichiarati come
+  // parziali, non porta il payload nel DOM e evita di scaricare il file per
+  // capire di cosa parla. Il test ora verifica questo: download presente,
+  // corpo completo mai chiesto, anteprima dichiarata come tale.
+  it("T-UI10 test_payload_offloaded_mostra_download: storage_backend object mostra il download e l'anteprima, non il corpo", async () => {
+    let contenutoChiesto = false;
+    server.use(
+      http.get("/api/v1/notifications/n4/content", () => {
+        contenutoChiesto = true;
+        return HttpResponse.text("z".repeat(10_000));
+      }),
+    );
     renderDetail("n4");
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Scarica contenuto completo" })).toBeInTheDocument();
     });
 
-    expect(screen.queryByText(fixtureNotificationDetailObject.content_preview)).not.toBeInTheDocument();
-    expect(document.querySelector("pre")).not.toBeInTheDocument();
+    const anteprima = document.querySelector("pre");
+    expect(anteprima?.textContent).toBe(fixtureNotificationDetailObject.content_preview);
+    expect(anteprima?.textContent).toHaveLength(4096);
+    expect(screen.getByText(/primi 4096 caratteri — contenuto completo da scaricare/)).toBeInTheDocument();
+    // Il corpo intero non si scarica da solo: solo col pulsante.
+    expect(contenutoChiesto).toBe(false);
+  });
+
+  it("un contenuto normalizzato in ingestion lo dichiara", async () => {
+    serviDettaglio({ ...fixtureNotificationDetailInline, content_normalized: true });
+    renderDetail("n1");
+
+    expect(await screen.findByText("contenuto normalizzato")).toBeInTheDocument();
+  });
+
+  it("un contenuto non normalizzato non porta la pill", async () => {
+    renderDetail("n1");
+    await screen.findByText("Origine della severity");
+
+    expect(screen.queryByText("contenuto normalizzato")).not.toBeInTheDocument();
   });
 
   it("T-UI11 test_origine_severity_mostrata: con severity_source rule compare il pattern vincente", async () => {
@@ -59,6 +92,20 @@ describe("NotificationDetailPage", () => {
     await waitFor(() => {
       expect(screen.getByText(fixtureNotificationDetailInline.matched_pattern)).toBeInTheDocument();
     });
+  });
+
+  it("anche una regola arrivata da un preset mostra il pattern vincente", async () => {
+    serviDettaglio({
+      ...fixtureNotificationDetailInline,
+      severity_source: "preset_rule",
+      matched_pattern: "No space left on device",
+    });
+    renderDetail("n1");
+
+    await waitFor(() => {
+      expect(campo("Origine della severity")).toContain("pattern vincente");
+    });
+    expect(screen.getByText("No space left on device")).toBeInTheDocument();
   });
 
   it("mostra i fatti dell'esecuzione: origine, durata, exit code, fase, sorgente", async () => {
@@ -146,10 +193,8 @@ describe("NotificationDetailPage", () => {
   it("T-DET1 il dettaglio mostra entrambi i toggle e la pill di verifica", async () => {
     renderDetail("n1");
 
-    await waitFor(() => {
-      expect(screen.getByText("Origine della severity")).toBeInTheDocument();
-    });
-    expect(screen.getByRole("button", { name: "Segna come letta" })).toBeInTheDocument();
+    // I pulsanti dipendono dal ruolo, che arriva da /auth/me: si aspettano.
+    expect(await screen.findByRole("button", { name: "Segna come letta" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Segna come non verificata" })).toBeInTheDocument();
     expect(screen.getByText("Verificata")).toBeInTheDocument();
   });
@@ -185,10 +230,12 @@ describe("NotificationDetailPage", () => {
     Object.defineProperty(URL, "createObjectURL", { value: createObjectURL, configurable: true });
     Object.defineProperty(URL, "revokeObjectURL", { value: vi.fn(), configurable: true });
     const clicked: string[] = [];
+    const connessa: boolean[] = [];
     const clickSpy = vi
       .spyOn(HTMLAnchorElement.prototype, "click")
       .mockImplementation(function (this: HTMLAnchorElement) {
         clicked.push(this.download);
+        connessa.push(this.isConnected);
       });
     let contenutoChiesto = false;
 
@@ -212,6 +259,10 @@ describe("NotificationDetailPage", () => {
       await user.click(screen.getByRole("button", { name: "Scarica contenuto completo" }));
 
       await waitFor(() => expect(clicked).toEqual(["notifica-n1.txt"]));
+      // Ancora attaccata al documento al momento del click (Firefox ignora le
+      // altre) e URL non revocato subito (vedi lib/download.ts).
+      expect(connessa).toEqual([true]);
+      expect(URL.revokeObjectURL).not.toHaveBeenCalled();
       // Un <a href download> partirebbe senza header Authorization e prenderebbe
       // 401: il contenuto passa dal client API (che aggiunge il Bearer e sa
       // rinfrescarlo) e finisce in un blob.
@@ -254,17 +305,23 @@ describe("NotificationDetailPage", () => {
     expect(await screen.findByText("elenco notifiche")).toBeInTheDocument();
   });
 
-  it("il viewer legge ma non elimina", async () => {
+  // Prima il viewer vedeva "Segna come letta" e la verifica ("non tocca il
+  // contenuto"), ma il backend le riserva a member e superiori: il viewer
+  // prendeva un 403 a ogni clic. Ora i pulsanti seguono il ruolo, come
+  // "Ri-accoda" nelle consegne.
+  it("il viewer legge ma non elimina ne' cambia lo stato", async () => {
+    let sessioneServita = false;
     server.use(
-      http.get("/api/v1/auth/me", () =>
-        HttpResponse.json({
+      http.get("/api/v1/auth/me", () => {
+        sessioneServita = true;
+        return HttpResponse.json({
           id: "u1",
           email: "viewer@acme.test",
           role: "viewer",
           tenant_id: "t1",
           tenant_name: "ACME",
-        }),
-      ),
+        });
+      }),
       http.get("/api/v1/notifications/n1", () =>
         HttpResponse.json(fixtureNotificationDetailInline),
       ),
@@ -274,10 +331,33 @@ describe("NotificationDetailPage", () => {
     await waitFor(() => {
       expect(screen.getByText("Origine della severity")).toBeInTheDocument();
     });
+    // Il ruolo arriva da /auth/me: si aspetta che la sessione sia caricata
+    // prima di controllare cio' che manca.
+    await waitFor(() => expect(sessioneServita).toBe(true));
+    await screen.findByText("Dettaglio notifica");
     expect(screen.queryByRole("button", { name: "Elimina" })).not.toBeInTheDocument();
-    // Segnare come letta resta permesso: non tocca il contenuto.
-    expect(screen.getByRole("button", { name: "Segna come letta" })).toBeInTheDocument();
-    // Anche il toggle di verifica non e' un'azione distruttiva: il viewer lo vede.
+    expect(screen.queryByRole("button", { name: "Segna come letta" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /verificata/ })).not.toBeInTheDocument();
+    // Lo stato si legge comunque.
+    expect(screen.getByText("Non letta")).toBeInTheDocument();
+    expect(screen.getByText("Verificata")).toBeInTheDocument();
+  });
+
+  it("il member cambia lettura e verifica", async () => {
+    server.use(
+      http.get("/api/v1/auth/me", () =>
+        HttpResponse.json({
+          id: "u2",
+          email: "member@acme.test",
+          role: "member",
+          tenant_id: "t1",
+          tenant_name: "ACME",
+        }),
+      ),
+    );
+    renderDetail("n1");
+
+    expect(await screen.findByRole("button", { name: "Segna come letta" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Segna come non verificata" })).toBeInTheDocument();
   });
 

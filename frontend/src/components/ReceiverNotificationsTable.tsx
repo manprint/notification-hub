@@ -9,7 +9,9 @@ import type {
 } from "../api/types";
 import { useAction } from "../hooks/useAction";
 import { type NotificationFilters, useNotifications } from "../hooks/useNotifications";
+import { useSession } from "../hooks/useSession";
 import { formatDate, formatTime } from "../lib/format";
+import { MEMBER_ROLES, hasRole } from "../lib/roles";
 import { isSurveillanceSource, phaseLabel, severitySourceLabel } from "../lib/severitySource";
 import DataTable, { type DataTableColumn } from "./DataTable";
 import ErrorBanner from "./ErrorBanner";
@@ -37,6 +39,15 @@ export default function ReceiverNotificationsTable({
 }) {
   const queryClient = useQueryClient();
   const { busy: busyAction, error: actionError, run } = useAction();
+  const { role } = useSession();
+  // Segnare letta/verificata e aprire la pagina del receiver sono da member in
+  // su (require_member nel backend, RequireRole sulla rotta /receivers/:id): al
+  // viewer si mostrano i dati, non pulsanti che risponderebbero 403 o un link
+  // verso una pagina che non puo' aprire.
+  const canManage = hasRole(role, MEMBER_ROLES);
+  // Con il filtro "solo lette" non c'e' niente da segnare come letto: il
+  // pulsante sparisce invece di restare li' a non fare niente.
+  const canBulkRead = canManage && filters.status !== "read";
 
   const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useNotifications({ ...filters, receiver_id: receiver.id });
@@ -78,9 +89,10 @@ export default function ReceiverNotificationsTable({
     await run(
       async () => {
         await apiPost("/api/v1/notifications/bulk-read", {
+          // Tutti i filtri della tabella, stato compreso, piu' il suo receiver:
+          // il pulsante non deve toccare cio' che la tabella sta tenendo fuori
+          // dalla vista.
           ...filters,
-          // Gli stessi filtri della tabella piu' il suo receiver: il pulsante non
-          // deve toccare cio' che la tabella sta tenendo fuori dalla vista.
           receiver_id: receiver.id,
         });
         await queryClient.invalidateQueries({ queryKey: ["notifications"] });
@@ -156,7 +168,9 @@ export default function ReceiverNotificationsTable({
         </span>
       ),
     },
-    {
+  ];
+  if (canManage) {
+    columns.push({
       key: "actions",
       header: "",
       render: (n) => (
@@ -172,26 +186,28 @@ export default function ReceiverNotificationsTable({
           </button>
         </div>
       ),
-    },
-  ];
+    });
+  }
 
   return (
     <section className="card receiver-table" aria-label={`Notifiche di ${receiver.name}`}>
       <div className="receiver-table-header">
         <h3>
-          <Link to={`/receivers/${receiver.id}`}>{receiver.name}</Link>
+          {canManage ? <Link to={`/receivers/${receiver.id}`}>{receiver.name}</Link> : receiver.name}
           {receiver.status === "disabled" && <span className="status-pill warn">disabilitato</span>}
         </h3>
         {/* Il testo resta quello del pulsante di gruppo, ma il nome accessibile
             dice su quale receiver agisce: due pulsanti identici nella stessa
             pagina, con scope diverso, sono indistinguibili da tastiera. */}
-        <button
-          aria-label={`Segna tutte come lette: ${receiver.name}`}
-          disabled={busyAction !== null}
-          onClick={() => void bulkRead()}
-        >
-          {busyAction === "bulk" ? "Aggiornamento…" : "Segna tutte come lette"}
-        </button>
+        {canBulkRead && (
+          <button
+            aria-label={`Segna tutte come lette: ${receiver.name}`}
+            disabled={busyAction !== null}
+            onClick={() => void bulkRead()}
+          >
+            {busyAction === "bulk" ? "Aggiornamento…" : "Segna tutte come lette"}
+          </button>
+        )}
       </div>
 
       {error && <ErrorBanner error={error} />}

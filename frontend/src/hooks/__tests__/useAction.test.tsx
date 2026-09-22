@@ -2,9 +2,10 @@
 // differenza fra "salvato" e "non è successo niente" non si vede da nessuna
 // parte dell'interfaccia.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import type { ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApiError } from "../../api/types";
 import SaveIndicator from "../../components/SaveIndicator";
 import { useAction } from "../useAction";
@@ -99,5 +100,133 @@ describe("useAction", () => {
     // prima invece scade da sé, non viene ritirato.
     await waitFor(() => expect(screen.getByText(/Salvato/)).toBeInTheDocument());
     expect(document.querySelector(".error-banner")).toBeNull();
+  });
+
+  describe("più salvataggi", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function wrapper({ children }: { children: ReactNode }) {
+      return <ToastProvider>{children}</ToastProvider>;
+    }
+
+    /** Un'azione che finisce quando lo decide il test. */
+    function inSospeso() {
+      let finisci: () => void = () => undefined;
+      const promessa = new Promise<void>((resolve) => {
+        finisci = resolve;
+      });
+      return { azione: () => promessa, finisci };
+    }
+
+    it("il ritorno a «idle» del salvataggio precedente non cancella quello nuovo", async () => {
+      vi.useFakeTimers();
+      const { result } = renderHook(() => useAction(), { wrapper });
+
+      await act(async () => {
+        await result.current.run(() => Promise.resolve());
+      });
+      expect(result.current.saveState).toBe("saved");
+
+      // Secondo salvataggio entro i 2,5 secondi del primo.
+      act(() => vi.advanceTimersByTime(2000));
+      const secondo = inSospeso();
+      let esito: Promise<boolean> = Promise.resolve(false);
+      act(() => {
+        esito = result.current.run(secondo.azione);
+      });
+
+      // Qui scadeva il timer del primo e l'indicatore diceva "idle" a metà.
+      act(() => vi.advanceTimersByTime(1000));
+      expect(result.current.saveState).toBe("saving");
+
+      await act(async () => {
+        secondo.finisci();
+        await esito;
+      });
+      expect(result.current.saveState).toBe("saved");
+      act(() => vi.advanceTimersByTime(2000));
+      expect(result.current.saveState).toBe("saved");
+      act(() => vi.advanceTimersByTime(600));
+      expect(result.current.saveState).toBe("idle");
+    });
+
+    it("con due operazioni in corso, la prima che finisce non libera busy", async () => {
+      const { result } = renderHook(() => useAction(), { wrapper });
+      const prima = inSospeso();
+      const seconda = inSospeso();
+      let esiti: Promise<boolean>[] = [];
+
+      act(() => {
+        esiti = [
+          result.current.run(prima.azione, { name: "prima" }),
+          result.current.run(seconda.azione, { name: "seconda" }),
+        ];
+      });
+      expect(result.current.busy).toBe("seconda");
+
+      await act(async () => {
+        prima.finisci();
+        await esiti[0];
+      });
+      // Prima: busy tornava null e "Salvato" compariva mentre la seconda
+      // scriveva ancora.
+      expect(result.current.busy).toBe("seconda");
+      expect(result.current.saveState).toBe("saving");
+
+      await act(async () => {
+        seconda.finisci();
+        await esiti[1];
+      });
+      expect(result.current.busy).toBeNull();
+      expect(result.current.saveState).toBe("saved");
+    });
+
+    it("se una delle operazioni concorrenti fallisce, l'esito finale è «non salvato»", async () => {
+      const guasto: ApiError = {
+        status: 500,
+        type: "/problems/internal-error",
+        title: "Errore",
+        detail: "Guasto.",
+        extra: {},
+      };
+      const { result } = renderHook(() => useAction(), { wrapper });
+      const seconda = inSospeso();
+      let esiti: Promise<boolean>[] = [];
+
+      act(() => {
+        esiti = [
+          result.current.run(() => Promise.reject(guasto), { name: "prima" }),
+          result.current.run(seconda.azione, { name: "seconda" }),
+        ];
+      });
+      await act(async () => {
+        await esiti[0];
+      });
+      expect(result.current.saveState).toBe("saving");
+
+      await act(async () => {
+        seconda.finisci();
+        await esiti[1];
+      });
+      expect(result.current.saveState).toBe("failed");
+      expect(result.current.error?.detail).toBe("Guasto.");
+    });
+
+    it("smontato il componente, il timer di ritorno a «idle» viene annullato", async () => {
+      vi.useFakeTimers();
+      const clearTimeout = vi.spyOn(window, "clearTimeout");
+      const { result, unmount } = renderHook(() => useAction(), { wrapper });
+      await act(async () => {
+        await result.current.run(() => Promise.resolve());
+      });
+      clearTimeout.mockClear();
+
+      unmount();
+
+      expect(clearTimeout).toHaveBeenCalled();
+      clearTimeout.mockRestore();
+    });
   });
 });

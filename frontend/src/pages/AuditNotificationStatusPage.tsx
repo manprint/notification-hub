@@ -6,7 +6,14 @@ import ErrorBanner from "../components/ErrorBanner";
 import ResourceLocation from "../components/ResourceLocation";
 import SettingsTabs from "../components/SettingsTabs";
 import { type AuditFilters, useAuditEvents } from "../hooks/useAuditEvents";
-import { NOTIFICATION_STATUS_ACTIONS, actionLabel, affectedCount } from "../lib/audit";
+import {
+  NOTIFICATION_STATUS_ACTIONS,
+  actionLabel,
+  affectedCount,
+  endOfDay,
+  shortLabel,
+  startOfDay,
+} from "../lib/audit";
 import { formatDateTime } from "../lib/format";
 
 /** Vista dedicata a "segna come letta" e "segna come verificata": la stessa
@@ -14,12 +21,16 @@ import { formatDateTime } from "../lib/format";
  * ricorrente — chi ha gestito questa notifica. */
 export default function AuditNotificationStatusPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  // Nell'URL il giorno scelto, all'API l'intervallo di quel giorno nel fuso di
+  // chi guarda: vedi startOfDay/endOfDay.
+  const fromDay = searchParams.get("from") ?? "";
+  const toDay = searchParams.get("to") ?? "";
 
   const filters: AuditFilters = {
     notification_id: searchParams.get("notification_id") ?? undefined,
     action: searchParams.get("action") ?? undefined,
-    from: searchParams.get("from") ?? undefined,
-    to: searchParams.get("to") ?? undefined,
+    from: startOfDay(fromDay),
+    to: endOfDay(toDay),
   };
 
   const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } =
@@ -59,8 +70,14 @@ export default function AuditNotificationStatusPage() {
     {
       key: "notification",
       header: "Notifica",
-      // Un link "Apri", non il testo del messaggio: il corpo si legge nella
-      // notifica, come nell'elenco delle notifiche e nelle consegne.
+      // `resource_label` e' la fotografia della notifica al momento del fatto
+      // (spec 9.6, righe autosufficienti): resta leggibile anche quando la
+      // notifica non c'e' piu'. Accorciata, perche' il corpo di un messaggio
+      // non allarghi la tabella; il testo intero sta nel title. "Apri" solo se
+      // la notifica esiste ancora: il backend risolve la posizione seguendo la
+      // notifica (services/audit_location.py), e dopo la purge o
+      // l'eliminazione receiver_id torna nullo. Un link a una notifica
+      // cancellata porterebbe a un 404.
       render: (event) => {
         if (event.action === "notification.bulk_marked_read") {
           return (
@@ -73,7 +90,16 @@ export default function AuditNotificationStatusPage() {
         if (!event.resource_id) return "—";
         return (
           <div className="cell-preview">
-            <Link to={`/notifications/${event.resource_id}`}>Apri</Link>
+            <span title={event.resource_label ?? undefined}>
+              {event.resource_label ? shortLabel(event.resource_label) : "(vuota)"}
+            </span>
+            <div className="cell-diagnostics">
+              {event.receiver_id !== null ? (
+                <Link to={`/notifications/${event.resource_id}`}>Apri</Link>
+              ) : (
+                "notifica non più presente"
+              )}
+            </div>
           </div>
         );
       },
@@ -134,7 +160,7 @@ export default function AuditNotificationStatusPage() {
             <input
               id="audit-status-from"
               type="date"
-              value={filters.from ?? ""}
+              value={fromDay}
               onChange={(event) => setParam("from", event.target.value)}
             />
           </div>
@@ -143,7 +169,7 @@ export default function AuditNotificationStatusPage() {
             <input
               id="audit-status-to"
               type="date"
-              value={filters.to ?? ""}
+              value={toDay}
               onChange={(event) => setParam("to", event.target.value)}
             />
           </div>

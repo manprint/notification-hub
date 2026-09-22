@@ -22,12 +22,17 @@ import {
 import {
   DURATION_UNIT_LABELS,
   type DurationUnit,
+  INT4_MAX,
   formatDurationSeconds,
   formatIntervalSeconds,
+  maxAmount,
+  parseDurationInput,
+  parseIntegerInput,
   splitDuration,
-  toSeconds,
 } from "../lib/duration";
+import { saveBlob } from "../lib/download";
 import { formatBytes, formatInstantOr } from "../lib/format";
+import { invalidateReceiverLists } from "../lib/receiverCache";
 import { ADMIN_ROLES, MEMBER_ROLES, hasRole } from "../lib/roles";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
@@ -56,6 +61,50 @@ function initialExpectedMode(receiver: ReceiverOut): ExpectedMode {
   if (receiver.expected_every_seconds !== null) return "interval";
   return "off";
 }
+
+/** I cinque campi della sorveglianza come li scrive la PATCH. */
+interface ExpectedPayload {
+  expected_every_seconds: number | null;
+  expected_cron: string | null;
+  expected_timezone: string | null;
+  expected_grace_seconds: number | null;
+  missing_severity: Severity | null;
+}
+
+/** La politica salvata, con il fuso come lo valuta il backend: un cron senza
+ *  fuso e' un cron in UTC, quindi "UTC" scritto nel form non e' una modifica. */
+function storedExpectation(receiver: ReceiverOut): ExpectedPayload {
+  return {
+    expected_every_seconds: receiver.expected_every_seconds,
+    expected_cron: receiver.expected_cron,
+    expected_timezone:
+      receiver.expected_cron !== null ? (receiver.expected_timezone ?? DEFAULT_TIMEZONE) : null,
+    expected_grace_seconds: receiver.expected_grace_seconds,
+    missing_severity: receiver.missing_severity,
+  };
+}
+
+function sameExpectation(a: ExpectedPayload, b: ExpectedPayload): boolean {
+  return (
+    a.expected_every_seconds === b.expected_every_seconds &&
+    a.expected_cron === b.expected_cron &&
+    a.expected_timezone === b.expected_timezone &&
+    a.expected_grace_seconds === b.expected_grace_seconds &&
+    a.missing_severity === b.missing_severity
+  );
+}
+
+/** Fuso da preselezionare. Con un cron gia' salvato vale il fuso salvato, e se
+ *  manca UTC: e' come lo valuta il backend. Proporre il fuso del browser a un
+ *  cron salvato senza fuso vorrebbe dire spostarlo di qualche ora al primo
+ *  salvataggio, senza che nessuno l'abbia chiesto. Il fuso del browser resta il
+ *  suggerimento per chi il cron lo sta scrivendo adesso. */
+function initialTimezone(receiver: ReceiverOut): string {
+  if (receiver.expected_cron !== null) return receiver.expected_timezone ?? DEFAULT_TIMEZONE;
+  return browserTimezone() ?? DEFAULT_TIMEZONE;
+}
+
+type FieldKey = "body" | "rate" | "duration" | "interval" | "grace";
 
 /** Tutti i fusi noti a questo browser. `Intl.supportedValuesOf` non esiste in
  *  ogni runtime, quindi l'assenza va gestita: senza elenco restano comunque
@@ -134,8 +183,10 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
   const { busy, error, run } = useAction();
   const [name, setName] = useState(receiver.name);
   const [defaultSeverity, setDefaultSeverity] = useState<Severity>(receiver.default_severity);
-  const [maxBodyBytes, setMaxBodyBytes] = useState(receiver.max_body_bytes);
-  const [rateLimitPerMin, setRateLimitPerMin] = useState(receiver.rate_limit_per_min);
+  // Testo e non numero: con `Number(value)` nello stato, svuotare il campo lo
+  // faceva diventare 0 e il rate limit vuoto si salvava come "nessun limite".
+  const [maxBodyBytes, setMaxBodyBytes] = useState(String(receiver.max_body_bytes));
+  const [rateLimitPerMin, setRateLimitPerMin] = useState(String(receiver.rate_limit_per_min));
   const [exitCodeSeverity, setExitCodeSeverity] = useState<string>(
     receiver.exit_code_severity ?? EXIT_CODE_DISABLED,
   );
@@ -152,9 +203,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
     receiver.expected_every_seconds === null ? "g" : initialInterval.unit,
   );
   const [cron, setCron] = useState(receiver.expected_cron ?? "");
-  const [timezone, setTimezone] = useState(
-    receiver.expected_timezone ?? browserTimezone() ?? DEFAULT_TIMEZONE,
-  );
+  const [timezone, setTimezone] = useState(() => initialTimezone(receiver));
   const initialGrace = splitDuration(receiver.expected_grace_seconds ?? DEFAULT_GRACE_SECONDS);
   const [graceAmount, setGraceAmount] = useState(initialGrace.amount);
   const [graceUnit, setGraceUnit] = useState<DurationUnit>(initialGrace.unit);
@@ -163,6 +212,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
   );
   const [nameError, setNameError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<FieldKey, string>>>({});
 
   // Validazione dell'espressione cron mentre si scrive: bloccante al salvataggio
   // e mostrata sotto il campo. Vale solo nel modo cron.
@@ -176,18 +226,58 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     setFormError(null);
-    setNameError(null);
 
-    if (name.trim() === "") {
-      setNameError("Il nome del receiver è obbligatorio.");
-      return;
+    // Ogni campo numerico si controlla qui, prima della richiesta: vuoto,
+    // decimale, infinito (`1e308`) o oltre il massimo intero del backend
+    // (2147483647, dopo la conversione in secondi) hanno un messaggio sul campo
+    // invece di un 422 generico, o peggio di un valore salvato per sbaglio.
+    const errors: Partial<Record<FieldKey, string>> = {};
+    const body = parseIntegerInput(maxBodyBytes, {
+      min: 1,
+      empty: "Indica il limite del corpo in byte.",
+    });
+    if (!body.ok) errors.body = body.error;
+    const rate = parseIntegerInput(rateLimitPerMin, {
+      min: 0,
+      empty: "Indica il rate limit: 0 se non vuoi nessun limite.",
+    });
+    if (!rate.ok) errors.rate = rate.error;
+
+    const hasAmount = durationAmount.trim() !== "";
+    let thresholdSeconds: number | null = null;
+    if (hasAmount) {
+      const threshold = parseDurationInput(durationAmount, durationUnit, { minSeconds: 1 });
+      if (threshold.ok) thresholdSeconds = threshold.value;
+      else errors.duration = threshold.error;
     }
+
+    let intervalSeconds: number | null = null;
+    if (expectedMode === "interval") {
+      const interval = parseDurationInput(intervalAmount, intervalUnit, {
+        minSeconds: 1,
+        empty: "Indica ogni quanto ti aspetti un invio.",
+      });
+      if (interval.ok) intervalSeconds = interval.value;
+      else errors.interval = interval.error;
+    }
+    let graceSeconds: number | null = null;
+    if (expectedMode !== "off") {
+      const grace = parseDurationInput(graceAmount, graceUnit, {
+        minSeconds: 0,
+        empty: "Indica la tolleranza sul ritardo (anche zero, se il job è puntuale).",
+      });
+      if (grace.ok) graceSeconds = grace.value;
+      else errors.grace = grace.error;
+    }
+
+    const nameMissing = name.trim() === "";
+    setNameError(nameMissing ? "Il nome del receiver è obbligatorio." : null);
+    setFieldErrors(errors);
+    if (nameMissing || Object.keys(errors).length > 0 || !body.ok || !rate.ok) return;
 
     // Soglia e severity vanno insieme: il backend rifiuta con 422 la coppia
     // mezza configurata, ma dirlo qui costa un giro di rete in meno e spiega
     // meglio quale dei due campi manca.
-    const amount = Number(durationAmount);
-    const hasAmount = durationAmount.trim() !== "" && Number.isFinite(amount) && amount > 0;
     const hasSeverity = durationSeverity !== DURATION_DISABLED;
     if (hasAmount !== hasSeverity) {
       setFormError(
@@ -198,20 +288,6 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
       return;
     }
 
-    // Sorveglianza dell'attesa: i campi che contano dipendono dal modo scelto,
-    // e un cron vuoto o un intervallo a zero non e' una politica.
-    const graceValue = Number(graceAmount);
-    const graceOk =
-      graceAmount.trim() !== "" && Number.isFinite(graceValue) && graceValue >= 0;
-    const intervalValue = Number(intervalAmount);
-    if (expectedMode !== "off" && !graceOk) {
-      setFormError("Indica la tolleranza sul ritardo (anche zero, se il job e' puntuale).");
-      return;
-    }
-    if (expectedMode === "interval" && !(Number.isFinite(intervalValue) && intervalValue > 0)) {
-      setFormError("Indica ogni quanto ti aspetti un invio, come numero maggiore di zero.");
-      return;
-    }
     if (expectedMode === "cron") {
       const err = validateCronExpression(cron);
       if (err !== null) {
@@ -225,7 +301,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
       }
     }
 
-    const expected =
+    const expected: ExpectedPayload =
       expectedMode === "off"
         ? {
             expected_every_seconds: null,
@@ -235,29 +311,40 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
             missing_severity: null,
           }
         : {
-            expected_every_seconds:
-              expectedMode === "interval" ? toSeconds(intervalValue, intervalUnit) : null,
+            expected_every_seconds: intervalSeconds,
             expected_cron: expectedMode === "cron" ? cron.trim() : null,
             expected_timezone: expectedMode === "cron" ? timezone.trim() || "UTC" : null,
-            expected_grace_seconds: toSeconds(graceValue, graceUnit),
+            expected_grace_seconds: graceSeconds,
             missing_severity: missingSeverity,
           };
+    // La sorveglianza si manda solo se e' cambiata. La PATCH distingue il campo
+    // omesso (resta quello salvato) dal null (spegne), e il backend rivaluta la
+    // politica appena uno dei cinque campi e' presente: rimandarli uguali a
+    // ogni rinomina riscriverebbe il fuso di un cron salvato senza fuso e
+    // farebbe fallire il salvataggio di un nome per un cron salvato con regole
+    // piu' vecchie di quelle attuali.
+    const expectedChanges = sameExpectation(expected, storedExpectation(receiver)) ? {} : expected;
 
     const ok = await run(
       async () => {
         await apiPatch(`/api/v1/receivers/${receiver.id}`, {
           name: name.trim(),
           default_severity: defaultSeverity,
-          max_body_bytes: maxBodyBytes,
-          rate_limit_per_min: rateLimitPerMin,
+          max_body_bytes: body.value,
+          rate_limit_per_min: rate.value,
           // null e' un valore, non "campo assente": disattiva la politica.
           exit_code_severity:
             exitCodeSeverity === EXIT_CODE_DISABLED ? null : exitCodeSeverity,
-          duration_threshold_seconds: hasAmount ? toSeconds(amount, durationUnit) : null,
+          duration_threshold_seconds: thresholdSeconds,
           duration_severity: hasSeverity ? durationSeverity : null,
-          ...expected,
+          ...expectedChanges,
         });
         await queryClient.invalidateQueries({ queryKey: ["receiver", receiver.id] });
+        // Nome e stato compaiono negli elenchi; severity di default, exit code e
+        // soglia di durata cambiano il risultato della prova sulle notifiche
+        // gia' arrivate.
+        await invalidateReceiverLists(queryClient, receiver.group_id);
+        await queryClient.invalidateQueries({ queryKey: ["severity-replay", receiver.id] });
       },
       { success: "Impostazioni del receiver salvate." },
     );
@@ -265,7 +352,10 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
   }
 
   return (
-    <form onSubmit={(event) => void handleSubmit(event)}>
+    // noValidate: i controlli li fa handleSubmit, con messaggi in italiano sul
+    // campo giusto, invece del fumetto del browser (diverso per ogni browser e
+    // muto su valori come 1e308).
+    <form noValidate onSubmit={(event) => void handleSubmit(event)}>
       {error && <ErrorBanner error={error} />}
       <RequiredLegend />
 
@@ -292,24 +382,37 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
             ))}
           </select>
         </Field>
-        <Field id="receiver-edit-body" label="Limite corpo (byte)" required>
+        <Field
+          id="receiver-edit-body"
+          label="Limite corpo (byte)"
+          required
+          error={fieldErrors.body}
+        >
           <input
-            {...fieldAria("receiver-edit-body")}
+            {...fieldAria("receiver-edit-body", { error: fieldErrors.body })}
             type="number"
             min={1}
+            max={INT4_MAX}
             required
             value={maxBodyBytes}
-            onChange={(event) => setMaxBodyBytes(Number(event.target.value))}
+            onChange={(event) => setMaxBodyBytes(event.target.value)}
           />
         </Field>
-        <Field id="receiver-edit-rate" label="Rate limit (al minuto)" required>
+        <Field
+          id="receiver-edit-rate"
+          label="Rate limit (al minuto)"
+          required
+          error={fieldErrors.rate}
+          hint="Invii accettati al minuto su questo receiver: oltre, risposta 429. 0 = nessun limite."
+        >
           <input
-            {...fieldAria("receiver-edit-rate")}
+            {...fieldAria("receiver-edit-rate", { hint: true, error: fieldErrors.rate })}
             type="number"
             min={0}
+            max={INT4_MAX}
             required
             value={rateLimitPerMin}
-            onChange={(event) => setRateLimitPerMin(Number(event.target.value))}
+            onChange={(event) => setRateLimitPerMin(event.target.value)}
           />
         </Field>
       </div>
@@ -335,12 +438,18 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
               ))}
             </select>
           </Field>
-          <Field id="receiver-edit-duration-threshold" label="Soglia di durata">
+          <Field
+            id="receiver-edit-duration-threshold"
+            label="Soglia di durata"
+            error={fieldErrors.duration}
+          >
             <div className="input-with-unit">
               <input
-                {...fieldAria("receiver-edit-duration-threshold")}
+                {...fieldAria("receiver-edit-duration-threshold", { error: fieldErrors.duration })}
                 type="number"
                 min={1}
+                max={maxAmount(durationUnit)}
+                step="any"
                 placeholder="nessuna"
                 value={durationAmount}
                 onChange={(event) => setDurationAmount(event.target.value)}
@@ -404,12 +513,19 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
         </Field>
 
         {expectedMode === "interval" && (
-          <Field id="receiver-edit-expected-interval" label="Mi aspetto un invio ogni" required>
+          <Field
+            id="receiver-edit-expected-interval"
+            label="Mi aspetto un invio ogni"
+            required
+            error={fieldErrors.interval}
+          >
             <div className="input-with-unit">
               <input
-                {...fieldAria("receiver-edit-expected-interval")}
+                {...fieldAria("receiver-edit-expected-interval", { error: fieldErrors.interval })}
                 type="number"
                 min={1}
+                max={maxAmount(intervalUnit)}
+                step="any"
                 required
                 value={intervalAmount}
                 onChange={(event) => setIntervalAmount(event.target.value)}
@@ -493,13 +609,19 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
               id="receiver-edit-expected-grace"
               label="Tolleranza sul ritardo"
               required
+              error={fieldErrors.grace}
               hint="Quanto si aspetta dopo l'orario previsto prima di gridare."
             >
               <div className="input-with-unit">
                 <input
-                  {...fieldAria("receiver-edit-expected-grace", { hint: true })}
+                  {...fieldAria("receiver-edit-expected-grace", {
+                    hint: true,
+                    error: fieldErrors.grace,
+                  })}
                   type="number"
                   min={0}
+                  max={maxAmount(graceUnit)}
+                  step="any"
                   required
                   value={graceAmount}
                   onChange={(event) => setGraceAmount(event.target.value)}
@@ -563,14 +685,10 @@ function DownloadWrapperButton({ receiver }: { receiver: ReceiverOut }) {
         `/api/v1/receivers/${receiver.id}/wrapper-script`,
         "notifyhub-run.sh",
       );
-      const url = URL.createObjectURL(new Blob([content], { type: "text/x-shellscript" }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      // saveBlob e non un'ancora fatta qui: revocare l'URL subito dopo il click
+      // fa fallire lo scaricamento su Firefox e Safari, che lo avviano in modo
+      // asincrono.
+      saveBlob(new Blob([content], { type: "text/x-shellscript" }), filename);
     });
   }
 
@@ -586,6 +704,15 @@ function DownloadWrapperButton({ receiver }: { receiver: ReceiverOut }) {
 
 export default function ReceiverDetailPage() {
   const { id } = useParams<{ id: string }>();
+  // Una pagina per receiver. Passando da un receiver all'altro (Indietro e
+  // Avanti del browser, un link) React riusava lo stesso componente: il modulo
+  // di modifica restava aperto con i valori del receiver precedente e il
+  // salvataggio li scriveva sul nuovo. Con la key tutto lo stato locale
+  // (modifica aperta, conferme, esito delle azioni) riparte da zero.
+  return <ReceiverDetail key={id} id={id} />;
+}
+
+function ReceiverDetail({ id }: { id: string | undefined }) {
   const { role } = useSession();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -610,7 +737,7 @@ export default function ReceiverDetailPage() {
     await run(
       async () => {
         await apiPost(`/api/v1/receivers/${id}/rotate-slug`);
-        await queryClient.invalidateQueries({ queryKey: ["receiver", id] });
+        await refreshReceiver();
       },
       { name: "rotate", success: "Slug rigenerato: aggiorna i job che inviano qui." },
     );
@@ -621,7 +748,7 @@ export default function ReceiverDetailPage() {
     await run(
       async () => {
         await apiPatch(`/api/v1/receivers/${id}`, { status: disable ? "disabled" : "active" });
-        await queryClient.invalidateQueries({ queryKey: ["receiver", id] });
+        await refreshReceiver();
       },
       {
         name: "status",
@@ -632,13 +759,27 @@ export default function ReceiverDetailPage() {
     );
   }
 
+  /** La pagina del receiver e ogni elenco in cui compare: nome, stato e slug
+   *  si leggono anche nella pagina del gruppo e nelle notifiche. */
+  async function refreshReceiver() {
+    await queryClient.invalidateQueries({ queryKey: ["receiver", id] });
+    if (receiver) await invalidateReceiverLists(queryClient, receiver.group_id);
+  }
+
   async function removeReceiver() {
     setConfirming(null);
+    if (!receiver) return;
+    const groupId = receiver.group_id;
     const ok = await run(async () => apiDelete(`/api/v1/receivers/${id}`), {
       name: "delete",
       success: "Receiver eliminato.",
     });
-    if (ok) navigate("/groups", { replace: true });
+    if (!ok) return;
+    // Si torna al gruppo da cui si era arrivati, non all'elenco dei gruppi.
+    navigate(`/groups/${groupId}`, { replace: true });
+    // Il receiver sparisce dagli elenchi e con lui le sue notifiche.
+    void invalidateReceiverLists(queryClient, groupId);
+    void queryClient.invalidateQueries({ queryKey: ["notifications"] });
   }
 
   if (isLoading) return <EmptyState message="Caricamento…" />;
@@ -668,7 +809,7 @@ export default function ReceiverDetailPage() {
                 Modifica receiver
               </button>
             )}
-            <DownloadWrapperButton receiver={receiver} />
+            <DownloadWrapperButton key={receiver.id} receiver={receiver} />
             {hasRole(role, ADMIN_ROLES) && (
               <button disabled={busy !== null} onClick={() => setConfirming("rotate")}>
                 Rigenera slug
@@ -698,7 +839,11 @@ export default function ReceiverDetailPage() {
           <div className="card-header">
             <h2>Modifica receiver</h2>
           </div>
-          <EditReceiverForm receiver={receiver} onDone={() => setEditing(false)} />
+          <EditReceiverForm
+            key={receiver.id}
+            receiver={receiver}
+            onDone={() => setEditing(false)}
+          />
         </div>
       ) : (
         <>
@@ -806,8 +951,10 @@ export default function ReceiverDetailPage() {
         </>
       )}
 
-      <ReceiverPresetsPanel receiverId={receiver.id} />
-      <SeverityRulesPanel receiver={receiver} />
+      {/* key: stato interno (esito della prova, conferme, modifica di una
+          regola) legato a questo receiver, mai ereditato da un altro. */}
+      <ReceiverPresetsPanel key={`presets-${receiver.id}`} receiverId={receiver.id} />
+      <SeverityRulesPanel key={`rules-${receiver.id}`} receiver={receiver} />
 
       {confirming === "rotate" && (
         <ConfirmDialog

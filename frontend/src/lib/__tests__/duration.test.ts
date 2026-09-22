@@ -12,7 +12,11 @@ import {
   type DurationUnit,
   formatDurationMs,
   formatDurationSeconds,
+  INT4_MAX,
   formatIntervalSeconds,
+  maxAmount,
+  parseDurationInput,
+  parseIntegerInput,
   splitDuration,
   toSeconds,
 } from "../duration";
@@ -119,5 +123,82 @@ describe("etichette delle origini", () => {
     expect(phaseLabel(null)).toBeNull();
     expect(phaseLabel("start")).toBe("avvio");
     expect(phaseLabel("end")).toBe("conclusione");
+  });
+});
+
+// I campi interi del receiver finiscono in colonne integer di PostgreSQL: il
+// backend li chiude a 2147483647 (contratto C8). Il modulo deve fermarsi prima,
+// con un messaggio, invece di mandare un 422 o salvare 0 al posto del vuoto.
+describe("parseIntegerInput", () => {
+  it.each([
+    ["60", 60],
+    [" 0 ", 0],
+    ["2147483647", INT4_MAX],
+  ])("accetta %j", (raw, atteso) => {
+    expect(parseIntegerInput(raw, { min: 0 })).toEqual({ ok: true, value: atteso });
+  });
+
+  it.each([
+    ["", /Campo obbligatorio/],
+    ["abc", /Non è un numero valido/],
+    ["2147483648", /massimo è 2147483647/],
+    ["1e308", /massimo è 2147483647/],
+    ["Infinity", /massimo è 2147483647/],
+    ["-Infinity", /Non è un numero valido/],
+    ["1.5", /intero/],
+    ["-1", /minimo è 0/],
+  ])("rifiuta %j", (raw, messaggio) => {
+    const esito = parseIntegerInput(raw, { min: 0 });
+    expect(esito.ok).toBe(false);
+    if (!esito.ok) expect(esito.error).toMatch(messaggio);
+  });
+
+  it("usa il messaggio del chiamante per il campo vuoto", () => {
+    expect(parseIntegerInput("  ", { min: 0, empty: "Indica il rate limit." })).toEqual({
+      ok: false,
+      error: "Indica il rate limit.",
+    });
+  });
+});
+
+describe("parseDurationInput", () => {
+  it.each([
+    ["1.5", "h", 5400],
+    ["0.7", "m", 42],
+    ["24855", "g", 24855 * 86400],
+    ["2147483647", "s", INT4_MAX],
+    ["0", "s", 0],
+  ] as [string, DurationUnit, number][])("%s %s = %d secondi", (raw, unita, atteso) => {
+    expect(parseDurationInput(raw, unita, { minSeconds: 0 })).toEqual({ ok: true, value: atteso });
+  });
+
+  it.each([
+    ["30000", "g", /massimo è 24855 giorni \(2147483647 secondi\)/],
+    ["1e308", "s", /Troppo grande/],
+    ["0.5", "s", /numero intero di secondi/],
+    ["", "m", /Campo obbligatorio/],
+    ["x", "m", /Non è un numero valido/],
+  ] as [string, DurationUnit, RegExp][])("rifiuta %s %s", (raw, unita, messaggio) => {
+    const esito = parseDurationInput(raw, unita, { minSeconds: 0 });
+    expect(esito.ok).toBe(false);
+    if (!esito.ok) expect(esito.error).toMatch(messaggio);
+  });
+
+  it("dice il minimo in forma leggibile", () => {
+    expect(parseDurationInput("0", "m", { minSeconds: 1 })).toEqual({
+      ok: false,
+      error: "Il minimo è 1s.",
+    });
+    expect(parseDurationInput("-1", "m", { minSeconds: 0 })).toEqual({
+      ok: false,
+      error: "Non può essere negativa.",
+    });
+  });
+
+  it("il massimo per unita' non supera mai INT4_MAX secondi", () => {
+    for (const unita of ["s", "m", "h", "g"] as DurationUnit[]) {
+      expect(toSeconds(maxAmount(unita), unita)).toBeLessThanOrEqual(INT4_MAX);
+      expect(toSeconds(maxAmount(unita) + 1, unita)).toBeGreaterThan(INT4_MAX);
+    }
   });
 });

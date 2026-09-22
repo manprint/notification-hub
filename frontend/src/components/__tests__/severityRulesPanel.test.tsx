@@ -4,6 +4,7 @@ import { HttpResponse, http } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
 import SeverityRulesPanel from "../SeverityRulesPanel";
 import { setRefreshToken } from "../../api/client";
+import { fixtureSeverityChain, fixtureSeverityReplay } from "../../api/mocks/handlers";
 import { server } from "../../api/mocks/server";
 import { renderWithProviders } from "../../pages/__tests__/testUtils";
 import type { ReceiverOut, SeverityRuleOut } from "../../api/types";
@@ -131,6 +132,80 @@ describe("SeverityRulesPanel", () => {
     await user.click(screen.getByLabelText("Sposta giù ERRORE"));
 
     await waitFor(() => expect(inviato).toEqual({ rule_ids: ["sr2", "sr1"] }));
+  });
+
+  it("T-ORD1 le frecce restano ferme finche' un riordino e' in volo", async () => {
+    const user = userEvent.setup();
+    let chiamate = 0;
+    let sblocca: () => void = () => undefined;
+    server.use(
+      http.put("/api/v1/receivers/r1/severity-rules/order", async () => {
+        chiamate += 1;
+        await new Promise<void>((resolve) => {
+          sblocca = resolve;
+        });
+        return HttpResponse.json([]);
+      }),
+    );
+    renderPanel();
+
+    await waitFor(() => expect(screen.getByText("ERRORE")).toBeInTheDocument());
+    await user.click(screen.getByLabelText("Sposta giù ERRORE"));
+    await waitFor(() => expect(chiamate).toBe(1));
+
+    // Un secondo click adesso calcolerebbe l'ordine da quello vecchio e
+    // annullerebbe il primo spostamento.
+    expect(screen.getByLabelText("Sposta su attenzione")).toBeDisabled();
+    expect(screen.getByLabelText("Sposta giù ERRORE")).toBeDisabled();
+    await user.click(screen.getByLabelText("Sposta su attenzione"));
+
+    sblocca();
+    await waitFor(() => expect(screen.getByLabelText("Sposta giù ERRORE")).toBeEnabled());
+    expect(chiamate).toBe(1);
+  });
+
+  it("T-REP1 dopo una nuova regola la prova sulle ultime notifiche si ricalcola", async () => {
+    const user = userEvent.setup();
+    let ricalcoli = 0;
+    server.use(
+      http.get("/api/v1/receivers/r1/severity-rules/replay", () => {
+        ricalcoli += 1;
+        return HttpResponse.json(fixtureSeverityReplay);
+      }),
+      http.post("/api/v1/receivers/r1/severity-rules", () =>
+        HttpResponse.json({ ...twoRules[0], id: "sr3", pattern: "PANIC" }, { status: 201 }),
+      ),
+    );
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /ultime notifiche/i }));
+    await waitFor(() => expect(ricalcoli).toBe(1));
+
+    await user.type(screen.getByLabelText("Pattern RE2"), "PANIC");
+    await user.click(screen.getByRole("button", { name: "Aggiungi regola" }));
+
+    await waitFor(() => expect(ricalcoli).toBe(2));
+  });
+
+  it("T-CHAIN1 mentre la catena effettiva carica non dice 'nessuna regola attiva'", async () => {
+    let rispondi: () => void = () => undefined;
+    server.use(
+      http.get("/api/v1/receivers/r1/severity-chain", async () => {
+        await new Promise<void>((resolve) => {
+          rispondi = resolve;
+        });
+        return HttpResponse.json(fixtureSeverityChain);
+      }),
+    );
+    renderPanel();
+
+    expect(await screen.findByText(/Caricamento della catena/)).toBeInTheDocument();
+    expect(screen.queryByText(/Nessuna regola attiva/)).not.toBeInTheDocument();
+
+    rispondi();
+    await waitFor(() =>
+      expect(screen.queryByText(/Caricamento della catena/)).not.toBeInTheDocument(),
+    );
   });
 
   it("la prima regola non si puo spostare piu in su", async () => {

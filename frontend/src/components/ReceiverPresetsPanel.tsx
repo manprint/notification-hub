@@ -18,21 +18,32 @@ export default function ReceiverPresetsPanel({ receiverId }: { receiverId: strin
   const queryClient = useQueryClient();
   const { busy, error, run } = useAction();
 
-  const { data: applied, error: appliedError } = useQuery<ReceiverPresetOut[], ApiError>({
+  const {
+    data: applied,
+    error: appliedError,
+    isLoading: appliedLoading,
+  } = useQuery<ReceiverPresetOut[], ApiError>({
     queryKey: ["receiver-presets", receiverId],
     queryFn: () => apiGet<ReceiverPresetOut[]>(`/api/v1/receivers/${receiverId}/presets`),
   });
 
-  const { data: all } = useQuery<SeverityPresetOut[], ApiError>({
+  const { data: all, error: allError } = useQuery<SeverityPresetOut[], ApiError>({
     queryKey: ["presets"],
     queryFn: () => apiGet<SeverityPresetOut[]>("/api/v1/severity-presets"),
   });
 
+  // Ogni azione manda l'elenco completo: senza l'elenco applicato letto davvero
+  // (in caricamento, o con l'ultima lettura fallita) "Applica X" mandava [X] e
+  // staccava in silenzio tutti gli altri preset. Finche' non e' affidabile, le
+  // azioni restano ferme.
+  const ready = applied !== undefined && !appliedError;
   const appliedList = applied ?? [];
   const appliedIds = appliedList.map((p) => p.preset_id);
   const available = (all ?? []).filter((p) => !appliedIds.includes(p.id));
+  const locked = busy !== null || !ready;
 
   async function save(presetIds: string[], messaggio: string) {
+    if (!ready) return;
     await run(
       async () => {
         await apiPut(`/api/v1/receivers/${receiverId}/presets`, { preset_ids: presetIds });
@@ -68,9 +79,12 @@ export default function ReceiverPresetsPanel({ receiverId }: { receiverId: strin
         tutto quello che viene dopo.
       </p>
       {appliedError && <ErrorBanner error={appliedError} />}
+      {allError && <ErrorBanner error={allError} />}
       {error && <ErrorBanner error={error} />}
 
-      {appliedList.length === 0 ? (
+      {appliedLoading ? (
+        <p className="card-hint">Caricamento dei preset applicati…</p>
+      ) : applied === undefined ? null : appliedList.length === 0 ? (
         <p className="card-hint">Nessun preset applicato: valgono solo le regole qui sotto.</p>
       ) : (
         <ol className="chain-list" aria-label="Preset applicati">
@@ -82,20 +96,20 @@ export default function ReceiverPresetsPanel({ receiverId }: { receiverId: strin
                 <div className="row-actions">
                   <button
                     aria-label={`Sposta su ${preset.name}`}
-                    disabled={index === 0 || busy !== null}
+                    disabled={index === 0 || locked}
                     onClick={() => move(index, -1)}
                   >
                     ↑
                   </button>
                   <button
                     aria-label={`Sposta giù ${preset.name}`}
-                    disabled={index === appliedList.length - 1 || busy !== null}
+                    disabled={index === appliedList.length - 1 || locked}
                     onClick={() => move(index, 1)}
                   >
                     ↓
                   </button>
                   <button
-                    disabled={busy !== null}
+                    disabled={locked}
                     onClick={() =>
                       void save(
                         appliedIds.filter((id) => id !== preset.preset_id),
@@ -112,7 +126,7 @@ export default function ReceiverPresetsPanel({ receiverId }: { receiverId: strin
         </ol>
       )}
 
-      {canManage && available.length > 0 && (
+      {canManage && ready && available.length > 0 && (
         <>
           <h4>Preset disponibili</h4>
           <ul className="check-list" aria-label="Preset disponibili">
@@ -123,7 +137,7 @@ export default function ReceiverPresetsPanel({ receiverId }: { receiverId: strin
                     type="checkbox"
                     checked={false}
                     aria-label={`Applica ${preset.name}`}
-                    disabled={busy !== null}
+                    disabled={locked}
                     onChange={() =>
                       void save([...appliedIds, preset.id], `Preset «${preset.name}» applicato.`)
                     }

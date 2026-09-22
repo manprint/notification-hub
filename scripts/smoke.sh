@@ -91,13 +91,13 @@ bootstrap_output=$(docker compose run --rm -T migrate \
         --email "$USER_EMAIL" \
         --password "$USER_PASSWORD" 2>&1 || echo "BOOTSTRAP_FAILED")
 
-if echo "$bootstrap_output" | grep -q "BOOTSTRAP_FAILED"; then
+if grep -q "BOOTSTRAP_FAILED" <<<"$bootstrap_output"; then
     echo -e "${COLOR_RED}✗${COLOR_NC} Bootstrap failed"
     echo "$bootstrap_output"
     exit 1
 fi
 
-if ! echo "$bootstrap_output" | grep -q "Tenant created"; then
+if ! grep -q "Tenant created" <<<"$bootstrap_output"; then
     echo -e "${COLOR_RED}✗${COLOR_NC} Bootstrap did not report tenant creation"
     echo "$bootstrap_output"
     exit 1
@@ -183,6 +183,10 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} Receiver created (slug: $receiver_slug)"
 # Step 5b: wrapper script precompilato
 echo ""
 echo "Step 5b: Download wrapper script..."
+# Qui e sotto `grep -q <<<"$var"` e non `echo "$var" | grep -q`: con pipefail,
+# grep -q che esce al primo match chiude la pipe mentre echo sta ancora
+# scrivendo un corpo grande (lo script e' oltre 20KB), echo muore di SIGPIPE e
+# la pipeline risulta fallita anche se il testo c'era.
 script_response=$(curl -s -w "\n%{http_code}" -D /tmp/notifyhub-smoke-headers \
     http://localhost/api/v1/receivers/$receiver_id/wrapper-script \
     -H "Authorization: Bearer $access_token")
@@ -196,12 +200,12 @@ if ! grep -qi 'content-disposition: attachment; filename="notifyhub-run-backup-n
     exit 1
 fi
 
-if ! echo "$script_body" | grep -qF "SLUG=\"\${NOTIFYHUB_SLUG:-$receiver_slug}\""; then
+if ! grep -qF "SLUG=\"\${NOTIFYHUB_SLUG:-$receiver_slug}\"" <<<"$script_body"; then
     echo -e "${COLOR_RED}✗${COLOR_NC} Wrapper script should carry the receiver slug"
     exit 1
 fi
 
-if ! echo "$script_body" | grep -qF 'URL="${NOTIFYHUB_URL:-http://localhost}"'; then
+if ! grep -qF 'URL="${NOTIFYHUB_URL:-http://localhost}"' <<<"$script_body"; then
     echo -e "${COLOR_RED}✗${COLOR_NC} Wrapper script should carry the public base URL"
     exit 1
 fi
@@ -262,7 +266,7 @@ body=$(echo "$channel_response" | head -n -1)
 
 assert_http_code 201 "$http_code" "Create channel should return 201"
 
-if echo "$body" | grep -q "8899/hook"; then
+if grep -q "8899/hook" <<<"$body"; then
     echo -e "${COLOR_RED}✗${COLOR_NC} Channel response contains webhook URL in plain text"
     exit 1
 fi

@@ -1,16 +1,19 @@
+import { QueryClient } from "@tanstack/react-query";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ReceiverDetailPage from "../ReceiverDetailPage";
 import { setRefreshToken } from "../../api/client";
 import {
   fixtureReceiver,
+  fixtureSeverityReplay,
   fixtureTestSeverityRule,
   fixtureWrapperScript,
 } from "../../api/mocks/handlers";
 import { server } from "../../api/mocks/server";
+import { REVOKE_DELAY_MS } from "../../lib/download";
 import { renderWithProviders } from "./testUtils";
 
 /** Testo completo di una cella della griglia dei dettagli: l'etichetta e il
@@ -131,7 +134,9 @@ describe("ReceiverDetailPage", () => {
   });
 
   it("scarica lo script wrapper col nome scelto dal server", async () => {
-    const user = userEvent.setup();
+    // Timer finti: l'URL del blob si revoca dopo REVOKE_DELAY_MS, non subito.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const createObjectURL = vi.fn((_blob: Blob) => "blob:notifyhub");
     const revokeObjectURL = vi.fn();
     // jsdom non implementa le due: senza stub il download esploderebbe qui e non
@@ -140,11 +145,15 @@ describe("ReceiverDetailPage", () => {
     Object.defineProperty(URL, "revokeObjectURL", { value: revokeObjectURL, configurable: true });
     // Un click vero su <a download> in jsdom prova a navigare: si intercetta il
     // click e si ispeziona l'ancora costruita dalla pagina.
-    const clicked: { download: string; href: string }[] = [];
+    const clicked: { download: string; href: string; inDom: boolean }[] = [];
     const clickSpy = vi
       .spyOn(HTMLAnchorElement.prototype, "click")
       .mockImplementation(function (this: HTMLAnchorElement) {
-        clicked.push({ download: this.download, href: this.href });
+        clicked.push({
+          download: this.download,
+          href: this.href,
+          inDom: document.body.contains(this),
+        });
       });
 
     try {
@@ -156,6 +165,12 @@ describe("ReceiverDetailPage", () => {
       await waitFor(() => expect(clicked).toHaveLength(1));
       expect(clicked[0].download).toBe("notifyhub-run-backup-notturno.sh");
       expect(clicked[0].href).toBe("blob:notifyhub");
+      // Firefox ignora il click su un'ancora fuori dal documento, e Firefox e
+      // Safari scaricano in modo asincrono: revocare l'URL subito dopo il click
+      // faceva fallire lo scaricamento.
+      expect(clicked[0].inDom).toBe(true);
+      expect(revokeObjectURL).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(REVOKE_DELAY_MS);
       expect(revokeObjectURL).toHaveBeenCalledWith("blob:notifyhub");
 
       // Il contenuto passato al Blob e' quello servito dal backend, slug e URL
@@ -173,6 +188,7 @@ describe("ReceiverDetailPage", () => {
       expect(blob.type).toBe("text/x-shellscript");
     } finally {
       clickSpy.mockRestore();
+      vi.useRealTimers();
     }
   });
 
@@ -626,5 +642,331 @@ describe("ReceiverDetailPage", () => {
       expect(screen.getByText("Slug")).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: "Rigenera slug" })).not.toBeInTheDocument();
+  });
+  it("T-NAV1 passando a un altro receiver lo stato della pagina riparte da zero", async () => {
+    const user = userEvent.setup();
+    const receiverB = { ...fixtureReceiver, id: "r2", name: "Pulizia log", rate_limit_per_min: 5 };
+    let patchSuB: Record<string, unknown> | null = null;
+    server.use(
+      http.get("/api/v1/receivers/r2", () => HttpResponse.json(receiverB)),
+      http.get("/api/v1/receivers/r2/severity-rules", () => HttpResponse.json([])),
+      http.patch("/api/v1/receivers/r2", async ({ request }) => {
+        patchSuB = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ ...receiverB, ...patchSuB });
+      }),
+    );
+    function VaiAB() {
+      const navigate = useNavigate();
+      return <button onClick={() => navigate("/receivers/r2")}>Vai a B</button>;
+    }
+
+    setRefreshToken("refresh-token-fixture");
+    renderWithProviders(
+      <>
+        <VaiAB />
+        <Routes>
+          <Route path="/receivers/:id" element={<ReceiverDetailPage />} />
+        </Routes>
+      </>,
+      ["/receivers/r1"],
+    );
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+
+    // Stato di A: una prova di severity eseguita e il modulo aperto e toccato.
+    await user.type(screen.getByLabelText(/contenuto di prova/i), "Backup FALLITO");
+    await user.click(screen.getByRole("button", { name: "Esegui prova" }));
+    expect(await screen.findByText(/Severity risolta/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+    await user.clear(screen.getByLabelText("Nome"));
+    await user.type(screen.getByLabelText("Nome"), "Nome scritto su A");
+
+    await user.click(screen.getByRole("button", { name: "Vai a B" }));
+
+    expect(await screen.findByRole("heading", { name: "Pulizia log" })).toBeInTheDocument();
+    // Niente di A resta addosso a B: modulo chiuso, prova azzerata.
+    expect(screen.getByRole("button", { name: "Modifica receiver" })).toBeInTheDocument();
+    expect(screen.queryByText(/Severity risolta/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+    expect(screen.getByLabelText("Nome")).toHaveValue("Pulizia log");
+    expect(screen.getByLabelText("Rate limit (al minuto)")).toHaveValue(5);
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+    await waitFor(() => expect(patchSuB).not.toBeNull());
+    expect(patchSuB).toMatchObject({ name: "Pulizia log", rate_limit_per_min: 5 });
+  });
+
+  it("T-TZ1 un cron salvato senza fuso resta in UTC e una rinomina non lo riscrive", async () => {
+    const user = userEvent.setup();
+    const inviati: Record<string, unknown>[] = [];
+    const receiverCron = {
+      ...fixtureReceiver,
+      expected_every_seconds: null,
+      expected_cron: "0 3 * * *",
+      expected_timezone: null,
+    };
+    server.use(
+      http.get("/api/v1/receivers/r1", () => HttpResponse.json(receiverCron)),
+      http.patch("/api/v1/receivers/r1", async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        inviati.push(body);
+        return HttpResponse.json({ ...receiverCron, ...body });
+      }),
+    );
+    // Browser in un fuso diverso da UTC: prima il form lo preselezionava e al
+    // salvataggio spostava il cron di qualche ora.
+    const opzioniVere = Intl.DateTimeFormat.prototype.resolvedOptions;
+    const spia = vi
+      .spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions")
+      .mockImplementation(function (this: Intl.DateTimeFormat) {
+        return { ...opzioniVere.call(this), timeZone: "America/New_York" };
+      });
+
+    try {
+      setRefreshToken("refresh-token-fixture");
+      renderReceiverDetail();
+      await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+
+      await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+      expect(screen.getByLabelText("Fuso dell'espressione")).toHaveValue("UTC");
+
+      // Solo il nome: la sorveglianza non cambia e non viaggia nella PATCH.
+      await user.clear(screen.getByLabelText("Nome"));
+      await user.type(screen.getByLabelText("Nome"), "Backup rinominato");
+      await user.click(screen.getByRole("button", { name: "Salva" }));
+      await waitFor(() => expect(inviati).toHaveLength(1));
+      expect(inviati[0]).toMatchObject({ name: "Backup rinominato" });
+      for (const campo of [
+        "expected_every_seconds",
+        "expected_cron",
+        "expected_timezone",
+        "expected_grace_seconds",
+        "missing_severity",
+      ]) {
+        expect(inviati[0]).not.toHaveProperty(campo);
+      }
+
+      // Cambiando la tolleranza la politica si manda intera, col fuso esplicito
+      // UTC: lo stesso con cui il backend la valutava prima.
+      await user.click(await screen.findByRole("button", { name: "Modifica receiver" }));
+      await user.clear(screen.getByLabelText("Tolleranza sul ritardo"));
+      await user.type(screen.getByLabelText("Tolleranza sul ritardo"), "45");
+      await user.click(screen.getByRole("button", { name: "Salva" }));
+      await waitFor(() => expect(inviati).toHaveLength(2));
+      expect(inviati[1]).toMatchObject({
+        expected_cron: "0 3 * * *",
+        expected_timezone: "UTC",
+        expected_grace_seconds: 2700,
+      });
+    } finally {
+      spia.mockRestore();
+    }
+  });
+
+  it("T-REP2 salvare il receiver ricalcola la prova sulle ultime notifiche", async () => {
+    const user = userEvent.setup();
+    let ricalcoli = 0;
+    server.use(
+      http.get("/api/v1/receivers/r1/severity-rules/replay", () => {
+        ricalcoli += 1;
+        return HttpResponse.json(fixtureSeverityReplay);
+      }),
+      http.patch("/api/v1/receivers/r1", async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ ...fixtureReceiver, ...body });
+      }),
+    );
+
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: /ultime notifiche/i }));
+    await waitFor(() => expect(ricalcoli).toBe(1));
+
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+    await user.selectOptions(screen.getByLabelText("Severity di default"), "warning");
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+
+    await waitFor(() => expect(ricalcoli).toBe(2));
+  });
+
+  it("T-LIM1 rifiuta valori oltre il massimo intero, infiniti o decimali", async () => {
+    const user = userEvent.setup();
+    let chiamate = 0;
+    server.use(
+      http.patch("/api/v1/receivers/r1", () => {
+        chiamate += 1;
+        return HttpResponse.json(fixtureReceiver);
+      }),
+    );
+
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+
+    const scrivi = async (etichetta: string, valore: string) => {
+      await user.clear(screen.getByLabelText(etichetta));
+      await user.type(screen.getByLabelText(etichetta), valore);
+    };
+    await scrivi("Limite corpo (byte)", "2147483648");
+    await scrivi("Rate limit (al minuto)", "1e308");
+    // 30000 giorni stanno nel campo ma sono 2,59 miliardi di secondi.
+    await scrivi("Mi aspetto un invio ogni", "30000");
+    await scrivi("Soglia di durata", "1.5");
+    await user.selectOptions(screen.getByLabelText("Unita della soglia di durata"), "s");
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+
+    expect(screen.getByLabelText("Limite corpo (byte)")).toHaveAccessibleDescription(
+      /massimo è 2147483647/,
+    );
+    expect(screen.getByLabelText("Rate limit (al minuto)")).toHaveAccessibleDescription(
+      /Troppo grande/,
+    );
+    expect(screen.getByLabelText("Mi aspetto un invio ogni")).toHaveAccessibleDescription(
+      /massimo è 24855 giorni/,
+    );
+    expect(screen.getByLabelText("Soglia di durata")).toHaveAccessibleDescription(
+      /numero intero di secondi/,
+    );
+    expect(chiamate).toBe(0);
+  });
+
+  it("T-LIM2 i decimali che fanno secondi interi vanno bene", async () => {
+    const user = userEvent.setup();
+    let inviato: Record<string, unknown> | null = null;
+    server.use(
+      http.patch("/api/v1/receivers/r1", async ({ request }) => {
+        inviato = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ ...fixtureReceiver, ...inviato });
+      }),
+    );
+
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+
+    await user.clear(screen.getByLabelText("Mi aspetto un invio ogni"));
+    await user.type(screen.getByLabelText("Mi aspetto un invio ogni"), "1.5");
+    await user.selectOptions(screen.getByLabelText("Unita dell'intervallo atteso"), "h");
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+
+    await waitFor(() => expect(inviato).not.toBeNull());
+    expect(inviato).toMatchObject({ expected_every_seconds: 5400 });
+  });
+
+  it("T-RATE1 il rate limit vuoto e' un errore, lo zero esplicito vuol dire nessun limite", async () => {
+    const user = userEvent.setup();
+    const inviati: Record<string, unknown>[] = [];
+    server.use(
+      http.patch("/api/v1/receivers/r1", async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        inviati.push(body);
+        return HttpResponse.json({ ...fixtureReceiver, ...body });
+      }),
+    );
+
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+
+    const rate = screen.getByLabelText("Rate limit (al minuto)");
+    await user.clear(rate);
+    // Il campo resta vuoto: prima diventava 0 da solo e si salvava "nessun
+    // limite" senza che nessuno l'avesse scritto.
+    expect(rate).toHaveValue(null);
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+    expect(rate).toHaveAccessibleDescription(/0 se non vuoi nessun limite/);
+    expect(inviati).toHaveLength(0);
+
+    await user.type(rate, "0");
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+    await waitFor(() => expect(inviati).toHaveLength(1));
+    expect(inviati[0]).toMatchObject({ rate_limit_per_min: 0 });
+  });
+
+  it("T-INV1 rinomina, stato e slug aggiornano anche gli elenchi dei receiver", async () => {
+    const user = userEvent.setup();
+    const invalida = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    server.use(
+      http.patch("/api/v1/receivers/r1", async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ ...fixtureReceiver, ...body });
+      }),
+      http.post("/api/v1/receivers/r1/rotate-slug", () => HttpResponse.json(fixtureReceiver)),
+    );
+    const chiaviInvalidate = () =>
+      invalida.mock.calls.map(([filtro]) => JSON.stringify(filtro?.queryKey));
+    const elenchi = [
+      JSON.stringify(["receivers", "g1"]),
+      JSON.stringify(["group-receivers", "g1"]),
+      JSON.stringify(["receivers-all"]),
+    ];
+
+    try {
+      setRefreshToken("refresh-token-fixture");
+      renderReceiverDetail();
+      await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+
+      for (const azione of ["status", "rotate", "rename"] as const) {
+        invalida.mockClear();
+        if (azione === "status") {
+          await user.click(screen.getByRole("button", { name: "Disabilita receiver" }));
+          await user.click(
+            within(screen.getByRole("dialog")).getByRole("button", { name: "Disabilita receiver" }),
+          );
+        } else if (azione === "rotate") {
+          await user.click(await screen.findByRole("button", { name: "Rigenera slug" }));
+          await user.click(
+            within(screen.getByRole("dialog")).getByRole("button", { name: "Rigenera slug" }),
+          );
+        } else {
+          await user.click(await screen.findByRole("button", { name: "Modifica receiver" }));
+          await user.click(screen.getByRole("button", { name: "Salva" }));
+        }
+        await waitFor(() => expect(chiaviInvalidate()).toEqual(expect.arrayContaining(elenchi)));
+      }
+    } finally {
+      invalida.mockRestore();
+    }
+  });
+
+  it("T-INV2 dopo l'eliminazione torna al gruppo del receiver e aggiorna gli elenchi", async () => {
+    const user = userEvent.setup();
+    const invalida = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+    server.use(
+      http.delete("/api/v1/receivers/r1", () => new HttpResponse(null, { status: 204 })),
+    );
+
+    try {
+      setRefreshToken("refresh-token-fixture");
+      renderWithProviders(
+        <Routes>
+          <Route path="/receivers/:id" element={<ReceiverDetailPage />} />
+          <Route path="/groups/:id" element={<p>Pagina del gruppo</p>} />
+          <Route path="/groups" element={<p>Elenco dei gruppi</p>} />
+        </Routes>,
+        ["/receivers/r1"],
+      );
+      await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+
+      await user.click(screen.getByRole("button", { name: "Elimina receiver" }));
+      const dialogo = screen.getByRole("dialog");
+      await user.type(within(dialogo).getByLabelText(/per confermare/), "Backup notturno");
+      await user.click(within(dialogo).getByRole("button", { name: "Elimina receiver" }));
+
+      expect(await screen.findByText("Pagina del gruppo")).toBeInTheDocument();
+      const chiavi = invalida.mock.calls.map(([filtro]) => JSON.stringify(filtro?.queryKey));
+      expect(chiavi).toEqual(
+        expect.arrayContaining([
+          JSON.stringify(["receivers", "g1"]),
+          JSON.stringify(["group-receivers", "g1"]),
+          JSON.stringify(["receivers-all"]),
+        ]),
+      );
+    } finally {
+      invalida.mockRestore();
+    }
   });
 });

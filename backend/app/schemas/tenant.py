@@ -2,7 +2,7 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.db.types import TenantStatus
+from app.db.types import INT4_MAX, TenantStatus
 
 
 class TenantOut(BaseModel):
@@ -25,7 +25,7 @@ class TenantOut(BaseModel):
 class TenantUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     max_body_bytes: int | None = Field(default=None, ge=1, le=20_971_520)
-    max_notifications_per_day: int | None = Field(default=None, ge=1)
+    max_notifications_per_day: int | None = Field(default=None, ge=1, le=INT4_MAX)
     max_storage_bytes: int | None = Field(default=None, ge=1)
-    retention_days: int | None = Field(default=None, ge=1)
-    audit_retention_days: int | None = Field(default=None, ge=1)
+    retention_days: int | None = Field(default=None, ge=1, le=INT4_MAX)
+    audit_retention_days: int | None = Field(default=None, ge=1, le=INT4_MAX)

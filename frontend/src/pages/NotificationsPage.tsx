@@ -18,6 +18,8 @@ import ReceiverNotificationsTable, {
 } from "../components/ReceiverNotificationsTable";
 import { useAction } from "../hooks/useAction";
 import { useDebounced } from "../hooks/useDebounced";
+import { useSession } from "../hooks/useSession";
+import { MEMBER_ROLES, hasRole } from "../lib/roles";
 import { SEVERITY_SOURCE_LABELS } from "../lib/severitySource";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
@@ -43,6 +45,7 @@ export default function NotificationsPage() {
   const debouncedQ = useDebounced(q);
   const { busy, error: actionError, run } = useAction();
   const queryClient = useQueryClient();
+  const { role } = useSession();
 
   const groupId = searchParams.get("group_id") ?? undefined;
   const receiverId = searchParams.get("receiver_id") ?? undefined;
@@ -113,13 +116,21 @@ export default function NotificationsPage() {
 
   const visibleReceivers = (receivers ?? []).filter((r) => !receiverId || r.id === receiverId);
 
+  // Segnare come lette richiede member (backend: require_member): il viewer
+  // prenderebbe 403, quindi il pulsante non gli si mostra.
+  const canBulkRead = hasRole(role, MEMBER_ROLES);
+  // Con "Solo lette" la vista non contiene niente da segnare: il pulsante
+  // resta visibile ma spento, e dice perche'.
+  const nothingToMark = status === "read";
+
   async function bulkRead() {
     await run(
       async () => {
         await apiPost("/api/v1/notifications/bulk-read", {
+          // `...filters` porta anche `status`: lo stesso filtro della vista,
+          // perche' "segna tutte come lette" non tocchi cio' che i filtri
+          // tengono fuori, receiver compreso.
           ...filters,
-          // Lo stesso filtro della vista: "segna tutte come lette" non deve toccare
-          // cio' che i filtri stanno tenendo fuori, receiver compreso.
           receiver_id: receiverId,
         });
         await queryClient.invalidateQueries({ queryKey: ["notifications"] });
@@ -164,11 +175,18 @@ export default function NotificationsPage() {
           Notifiche <span className="title-separator">/</span>{" "}
           <span className="title-context">{currentGroup?.name ?? "Gruppo"}</span>
         </h1>
-        <div className="page-header-actions">
-          <button className="primary" disabled={busy !== null} onClick={() => void bulkRead()}>
-            {busy === "bulk" ? "Aggiornamento…" : "Segna tutte come lette"}
-          </button>
-        </div>
+        {canBulkRead && (
+          <div className="page-header-actions">
+            <button
+              className="primary"
+              disabled={busy !== null || nothingToMark}
+              title={nothingToMark ? "Il filtro mostra solo notifiche già lette" : undefined}
+              onClick={() => void bulkRead()}
+            >
+              {busy === "bulk" ? "Aggiornamento…" : "Segna tutte come lette"}
+            </button>
+          </div>
+        )}
       </div>
       {currentGroup?.description && <p className="page-subtitle">{currentGroup.description}</p>}
       {receiversError && <ErrorBanner error={receiversError} />}

@@ -17,6 +17,7 @@ import Field, { RequiredLegend, fieldAria } from "../components/Field";
 import SeverityBadge from "../components/SeverityBadge";
 import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
+import { useToast } from "../hooks/useToast";
 import { ADMIN_ROLES, hasRole } from "../lib/roles";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
@@ -189,16 +190,19 @@ function PresetRules({ presetId, canManage }: { presetId: string; canManage: boo
                         <span>{index + 1}</span>
                         {canManage && (
                           <>
+                            {/* Ferme mentre un'altra modifica e' in volo: il
+                                secondo click calcolerebbe il nuovo ordine da
+                                quello vecchio e annullerebbe il primo. */}
                             <button
                               aria-label={`Sposta su ${rule.pattern}`}
-                              disabled={index === 0}
+                              disabled={index === 0 || busy !== null}
                               onClick={() => move(index, -1)}
                             >
                               ↑
                             </button>
                             <button
                               aria-label={`Sposta giù ${rule.pattern}`}
-                              disabled={index === rules.length - 1}
+                              disabled={index === rules.length - 1 || busy !== null}
                               onClick={() => move(index, 1)}
                             >
                               ↓
@@ -221,6 +225,7 @@ function PresetRules({ presetId, canManage }: { presetId: string; canManage: boo
                             type="checkbox"
                             checked={rule.enabled}
                             aria-label={`Attiva ${rule.pattern}`}
+                            disabled={busy !== null}
                             onChange={() =>
                               void mutate(
                                 () =>
@@ -298,8 +303,12 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  // Bozza del modulo "Rinomina": si riempie dal preset ogni volta che il modulo
+  // si apre. Inizializzata una volta sola al montaggio, dopo un "Ripristina i
+  // valori predefiniti" o un Annulla ripartiva dal testo vecchio.
   const [name, setName] = useState(preset.name);
   const [description, setDescription] = useState(preset.description);
+  const [nameError, setNameError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const { busy, error, run } = useAction();
 
@@ -312,12 +321,37 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
     }, { success });
   }
 
+  function openRename() {
+    setName(preset.name);
+    setDescription(preset.description);
+    setNameError(null);
+    setRenaming(true);
+  }
+
+  function cancelRename() {
+    // La bozza si scarta: riaprendo si riparte dal preset com'e' adesso.
+    setRenaming(false);
+    setNameError(null);
+  }
+
   async function saveRename(event: React.FormEvent) {
     event.preventDefault();
+    // Nome ripulito dagli spazi: "   " non e' un nome, e "Foo " passava il
+    // controllo dei duplicati del backend accanto a un "Foo" esistente.
+    const cleanName = name.trim();
+    if (cleanName === "") {
+      setNameError("Il nome del preset è obbligatorio.");
+      return;
+    }
+    setNameError(null);
     // Il modulo resta aperto se il salvataggio fallisce (nome duplicato → 409):
     // chiuderlo comunque farebbe sparire il testo insieme all'errore.
     const ok = await mutate(
-      () => apiPatch(`/api/v1/severity-presets/${preset.id}`, { name, description }),
+      () =>
+        apiPatch(`/api/v1/severity-presets/${preset.id}`, {
+          name: cleanName,
+          description: description.trim(),
+        }),
       "Preset rinominato.",
     );
     if (ok) setRenaming(false);
@@ -330,9 +364,9 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
       {renaming ? (
         <form onSubmit={(event) => void saveRename(event)}>
           <RequiredLegend />
-          <Field id={`preset-name-${preset.id}`} label="Nome" required>
+          <Field id={`preset-name-${preset.id}`} label="Nome" required error={nameError}>
             <input
-              {...fieldAria(`preset-name-${preset.id}`)}
+              {...fieldAria(`preset-name-${preset.id}`, { error: nameError })}
               required
               maxLength={120}
               value={name}
@@ -351,7 +385,7 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
             <button type="submit" className="primary" disabled={busy !== null}>
               {busy !== null ? "Salvataggio…" : "Salva"}
             </button>
-            <button type="button" onClick={() => setRenaming(false)}>
+            <button type="button" onClick={cancelRename}>
               Annulla
             </button>
           </div>
@@ -377,7 +411,7 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
         </button>
         {canManage && !renaming && (
           <>
-            <button onClick={() => setRenaming(true)}>Rinomina</button>
+            <button onClick={openRename}>Rinomina</button>
             {preset.builtin_key && (
               <button
                 disabled={busy !== null}
@@ -491,29 +525,27 @@ function NewPresetForm() {
 
 function MissingBuiltins({ missing }: { missing: BuiltinPresetOut[] }) {
   const queryClient = useQueryClient();
-  const [installed, setInstalled] = useState<string[] | null>(null);
+  const toast = useToast();
   const { busy, error, run } = useAction();
 
   async function install() {
-    await run(
-      async () => {
-        const result = await apiPost<SyncBuiltinPresetsOut>(
-          "/api/v1/severity-presets/sync-builtin",
-        );
-        setInstalled(result.installed);
-        await queryClient.invalidateQueries({ queryKey: ["presets"] });
-        await queryClient.invalidateQueries({ queryKey: ["presets-catalog"] });
-      },
-      { success: "Preset predefiniti installati nel tenant." },
-    );
-  }
-
-  if (installed !== null) {
-    return (
-      <div className="card">
-        <p>Preset installati: {installed.length > 0 ? installed.join(", ") : "nessuno"}.</p>
-      </div>
-    );
+    let installed: string[] = [];
+    const ok = await run(async () => {
+      const result = await apiPost<SyncBuiltinPresetsOut>("/api/v1/severity-presets/sync-builtin");
+      installed = result.installed;
+      await queryClient.invalidateQueries({ queryKey: ["presets"] });
+      await queryClient.invalidateQueries({ queryKey: ["presets-catalog"] });
+    });
+    // L'esito va nel toast e non in questa scheda: appena il catalogo si
+    // aggiorna non manca piu' niente, la pagina smonta la scheda e un messaggio
+    // scritto qui non si vedeva mai.
+    if (ok) {
+      toast.success(
+        installed.length > 0
+          ? `Preset installati: ${installed.join(", ")}.`
+          : "Nessun preset da installare: erano già tutti presenti.",
+      );
+    }
   }
 
   return (

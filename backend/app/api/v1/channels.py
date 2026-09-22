@@ -6,10 +6,11 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import delete as sql_delete
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_claims, db, require_admin, require_member
+from app.api.v1.notifications import _decode_cursor, _encode_cursor
 from app.core.config import get_settings
 from app.core.crypto import decrypt_secret, encrypt_secret, mask_webhook
 from app.core.errors import PROBLEM_TYPES, Problem
@@ -25,6 +26,7 @@ from app.schemas.delivery import (
     DeliveryChannelOut,
     DeliveryChannelTestOut,
     DeliveryChannelUpdate,
+    DeliveryListOut,
     DeliveryOut,
 )
 from app.schemas.group import (
@@ -424,18 +426,23 @@ def _delivery_out(
 _DELIVERY_ROW = (Delivery, DeliveryChannel.name, Receiver.name, Notification, Receiver.group_id)
 
 
-@router.get("/deliveries", response_model=list[DeliveryOut])
+@router.get("/deliveries", response_model=DeliveryListOut)
 async def list_deliveries(
     status_filter: DeliveryStatus | None = Query(default=None, alias="status"),  # noqa: B008
     channel_id: uuid.UUID | None = Query(default=None),  # noqa: B008
     limit: int = Query(default=100, ge=1, le=500),  # noqa: B008
+    cursor: str | None = Query(default=None),  # noqa: B008
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
-) -> list[DeliveryOut]:
+) -> DeliveryListOut:
     """Storico degli inoltri verso i canali, per diagnosticare i fallimenti
     (spec 9.4). Ogni riga porta con se il canale di destinazione, il receiver
     e l'anteprima della notifica inoltrata: senza, la pagina mostrava solo
-    stato e contatori, illeggibili."""
+    stato e contatori, illeggibili.
+
+    Paginazione a cursore su (received_at della notifica, id della delivery)
+    DESC, come la lista notifiche: l'id rende l'ordine totale anche fra le
+    delivery della stessa notifica verso canali diversi."""
     tenant_id = uuid.UUID(claims.tid)
     conditions = [Delivery.tenant_id == tenant_id]
     if status_filter is not None:
@@ -446,8 +453,15 @@ async def list_deliveries(
     allowed = await accessible_group_ids(session, claims)
     if allowed is not None:
         if not allowed:
-            return []
+            return DeliveryListOut(deliveries=[], next_cursor=None)
         conditions.append(Receiver.group_id.in_(allowed))
+
+    if cursor is not None:
+        cursor_received_at, cursor_id = _decode_cursor(cursor)
+        conditions.append(
+            func.row(Notification.received_at, Delivery.id)
+            < func.row(cursor_received_at, cursor_id)
+        )
 
     result = await session.execute(
         select(*_DELIVERY_ROW)
@@ -455,14 +469,24 @@ async def list_deliveries(
         .join(Receiver, Receiver.id == Notification.receiver_id)
         .outerjoin(DeliveryChannel, DeliveryChannel.id == Delivery.channel_id)
         .where(*conditions)
-        .order_by(Notification.received_at.desc(), Delivery.next_attempt_at.desc())
-        .limit(limit)
+        .order_by(Notification.received_at.desc(), Delivery.id.desc())
+        .limit(limit + 1)
     )
+    rows = result.all()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    next_cursor = None
+    if has_more and rows:
+        last_delivery, _channel, _receiver, last_notification, _group = rows[-1]
+        next_cursor = _encode_cursor(last_notification.received_at, last_delivery.id)
 
-    return [
-        _delivery_out(delivery, channel_name, receiver_name, notification)
-        for delivery, channel_name, receiver_name, notification, _group_id in result.all()
-    ]
+    return DeliveryListOut(
+        deliveries=[
+            _delivery_out(delivery, channel_name, receiver_name, notification)
+            for delivery, channel_name, receiver_name, notification, _group_id in rows
+        ],
+        next_cursor=next_cursor,
+    )
 
 
 @router.post("/deliveries/{delivery_id}/retry", response_model=DeliveryOut)

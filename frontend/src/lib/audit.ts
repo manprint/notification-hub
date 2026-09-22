@@ -24,6 +24,10 @@ export const NOTIFICATION_STATUS_ACTIONS = [
   "notification.bulk_marked_read",
 ];
 
+/** Un'etichetta per ogni `resource_type` che il backend scrive: le chiavi di
+ *  RESOURCE_SPECS in backend/app/services/audit.py, piu' "session" per login e
+ *  logout (backend/app/api/v1/auth.py). La tendina dei filtri si costruisce da
+ *  qui: una lista scritta a parte restava indietro a ogni risorsa aggiunta. */
 export const RESOURCE_LABELS: Record<string, string> = {
   notification: "Notifica",
   receiver: "Receiver",
@@ -41,6 +45,9 @@ export const RESOURCE_LABELS: Record<string, string> = {
   tenant: "Impostazioni tenant",
   session: "Sessione",
 };
+
+/** I tipi di risorsa filtrabili, nello stesso ordine delle etichette. */
+export const RESOURCE_TYPES: string[] = Object.keys(RESOURCE_LABELS);
 
 export function actionLabel(action: string): string {
   return ACTION_LABELS[action] ?? action;
@@ -69,4 +76,57 @@ export function describeChanges(event: AuditEventOut): string[] {
 export function affectedCount(event: AuditEventOut): number {
   const count = event.context?.count;
   return typeof count === "number" ? count : 1;
+}
+
+/** Quanto testo di `resource_label` sta in una cella. Per una notifica e' una
+ *  fotografia di `content_preview` (fino a 255 caratteri): intera, un log
+ *  allarga la riga e spinge fuori vista le altre colonne. */
+export const LABEL_MAX_CHARS = 80;
+
+export function shortLabel(label: string, max = LABEL_MAX_CHARS): string {
+  return label.length <= max ? label : `${label.slice(0, max).trimEnd()}…`;
+}
+
+const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+function pad(value: number, width = 2): string {
+  return String(value).padStart(width, "0");
+}
+
+/** L'istante in ISO 8601 con l'offset del fuso del browser
+ *  ("2026-09-22T00:00:00.000+02:00"), non in UTC: chi legge la richiesta vede
+ *  lo stesso giorno che ha scelto. */
+function toLocalIso(date: Date): string {
+  const offset = -date.getTimezoneOffset();
+  const sign = offset >= 0 ? "+" : "-";
+  const abs = Math.abs(offset);
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}` +
+    `.${pad(date.getMilliseconds(), 3)}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
+  );
+}
+
+function dayBoundary(day: string | null | undefined, end: boolean): string | undefined {
+  const match = day ? DAY.exec(day) : null;
+  if (!match) return undefined;
+  const [, year, month, date] = match.map(Number);
+  // Costruita coi campi locali: il cambio dell'ora legale lo gestisce Date.
+  const instant = end
+    ? new Date(year, month - 1, date, 23, 59, 59, 999)
+    : new Date(year, month - 1, date, 0, 0, 0, 0);
+  return toLocalIso(instant);
+}
+
+/** Il giorno di un `<input type="date">` ("YYYY-MM-DD") come inizio del giorno
+ *  nel fuso del browser. Mandato nudo, il backend lo legge come mezzanotte nel
+ *  fuso del server. */
+export function startOfDay(day: string | null | undefined): string | undefined {
+  return dayBoundary(day, false);
+}
+
+/** Come sopra, ma la fine del giorno (23:59:59.999 locali): il backend confronta
+ *  `occurred_at <= to`, e con il giorno nudo "A = oggi" escludeva tutto oggi. */
+export function endOfDay(day: string | null | undefined): string | undefined {
+  return dayBoundary(day, true);
 }

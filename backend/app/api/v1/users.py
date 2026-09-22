@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import current_claims, db, require_admin
+from app.api.deps import db, require_admin
 from app.core.errors import PROBLEM_TYPES, Problem
 from app.core.security import AccessClaims, hash_password
 from app.db.types import UserRole, UserStatus
@@ -58,6 +58,19 @@ def _assert_can_grant_owner(claims: AccessClaims, role: UserRole | None) -> None
             type=PROBLEM_TYPES["forbidden"],
             title="Forbidden",
             detail="Only an owner can grant the owner role.",
+        )
+
+
+def _assert_can_manage(claims: AccessClaims, target: User) -> None:
+    """Un owner lo modifica o lo rimuove solo un altro owner. Il vincolo
+    sull'ultimo owner non bastava: con due owner, un admin poteva declassarne
+    o disabilitarne uno, cioe' agire su un ruolo superiore al proprio."""
+    if target.role == UserRole.OWNER and claims.role != UserRole.OWNER:
+        raise Problem(
+            status=403,
+            type=PROBLEM_TYPES["forbidden"],
+            title="Forbidden",
+            detail="Only an owner can modify an owner.",
         )
 
 
@@ -185,7 +198,9 @@ async def create_user(
 
 @router.get("", response_model=list[UserOut])
 async def list_users(
-    claims: AccessClaims = Depends(current_claims),  # noqa: B008
+    # Elenco membri con le email: admin+ (spec 9.2). La pagina Utenti era gia'
+    # riservata, ma l'API rispondeva a chiunque fosse autenticato.
+    claims: AccessClaims = Depends(require_admin),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> list[UserOut]:
     tenant_id = uuid.UUID(claims.tid)
@@ -212,7 +227,7 @@ async def list_users(
 @router.get("/{user_id}", response_model=UserOut)
 async def get_user(
     user_id: uuid.UUID,
-    claims: AccessClaims = Depends(current_claims),  # noqa: B008
+    claims: AccessClaims = Depends(require_admin),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> UserOut:
     tenant_id = uuid.UUID(claims.tid)
@@ -255,6 +270,7 @@ async def update_user(
             detail="User not found.",
         )
 
+    _assert_can_manage(claims, user)
     _assert_can_grant_owner(claims, body.role)
 
     demoting = body.role is not None and body.role != UserRole.OWNER
@@ -299,6 +315,7 @@ async def remove_user(
             detail="User not found.",
         )
 
+    _assert_can_manage(claims, user)
     if user.role == UserRole.OWNER and user.status == UserStatus.ACTIVE:
         await _assert_not_last_owner(session, tenant_id)
 

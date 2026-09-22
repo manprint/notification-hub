@@ -38,6 +38,13 @@ if TYPE_CHECKING:  # solo per l'annotazione: nessun import a runtime
 DEFAULT_TIMEZONE = "UTC"
 CRON_FIELDS = 5  # minuto ora giorno mese giorno-settimana, come in crontab
 CRON_MAX_CHARS = 100
+# `R` (valore casuale) e `H` (hash) sono estensioni di croniter, non di cron.
+# `R` passa is_valid, ma croniter estrae un valore nuovo a ogni istanza: la
+# scadenza della sorveglianza cambiava a ogni controllo (`R * * * *` dallo
+# stesso istante dava 12:40, poi 12:35, poi 12:17...). Nessun elemento di un
+# cron standard comincia per h o r (numeri, `*`, nomi di mese e di giorno: JAN..
+# DEC, SUN..SAT), quindi basta guardare la prima lettera di ogni elemento.
+_RANDOM_OR_HASH_PREFIXES = ("h", "r")
 
 
 class InvalidScheduleError(ValueError):
@@ -93,6 +100,12 @@ def validate_cron(expression: str) -> str:
             "l'espressione cron deve avere 5 campi (minuto ora giorno mese giorno-settimana), "
             f"come in crontab: ricevuti {len(candidate.split())}"
         )
+    for field in candidate.split():
+        if any(item.lower().startswith(_RANDOM_OR_HASH_PREFIXES) for item in field.split(",")):
+            raise InvalidScheduleError(
+                f"espressione cron non valida: {candidate!r} (H e R non sono cron standard: "
+                "scrivi valori espliciti)"
+            )
     if not croniter.is_valid(candidate):
         raise InvalidScheduleError(f"espressione cron non valida: {candidate!r}")
     try:

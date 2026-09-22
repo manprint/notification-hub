@@ -139,3 +139,172 @@ def test_url_con_slash_finale_non_raddoppia():
     esito = _run("--", "echo", "prova", env={"NOTIFYHUB_URL": "https://notifyhub.com/"})
     assert f"--- POST https://notifyhub.com/ingest/{SLUG}" in esito.stdout
     assert "//ingest" not in esito.stdout
+
+
+# --- Robustezza (review 2026-09) -------------------------------------------
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("opzione", ["-s", "--url", "--timeout", "--max-bytes", "--retries"])
+def test_opzione_senza_valore_in_coda_esce_subito(opzione):
+    """`shift 2` falliva in silenzio con un solo argomento rimasto: il ciclo
+    delle opzioni girava per sempre al 100% di CPU."""
+    esito = subprocess.run(  # noqa: S603
+        ["/bin/bash", str(WRAPPER), opzione],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert esito.returncode == 2
+    assert "richiede un valore" in esito.stderr
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("opzione", "valore"),
+    [
+        ("--max-bytes", "abc"),
+        ("--connect-timeout", "abc"),
+        ("--connect-timeout", "0"),
+        ("--retries", "-1"),
+        ("--timeout", "5x"),
+    ],
+)
+def test_valori_numerici_non_validi_rifiutati_prima_di_eseguire(opzione, valore):
+    esito = _run(opzione, valore, "--", "echo", "NON-DEVE-GIRARE")
+    assert esito.returncode == 2
+    assert "NON-DEVE-GIRARE" not in esito.stdout
+
+
+@pytest.mark.unit
+def test_byte_nul_non_rompono_il_corpo():
+    esito = _run("-q", "--", "printf", "a\\0b\\n")
+    assert esito.returncode == 0
+    assert "ab" in esito.stdout
+    assert "null byte" not in esito.stderr
+
+
+@pytest.mark.unit
+def test_max_bytes_vale_per_il_corpo_intero():
+    """Il taglio contava solo l'output: con --max-bytes uguale al max_body_bytes
+    del receiver, intestazione e righe aggiunte facevano sforare (413)."""
+    esito = _run("-q", "--max-bytes", "2000", "--", "seq", "1", "5000")
+    assert esito.returncode == 0
+    corpo = esito.stdout.split("\n---\n", 1)[1]
+    assert len(corpo.encode()) <= 2000
+    assert "byte omessi" in corpo
+    # Testa e coda restano: sono le parti che spiegano cos'e' successo.
+    assert "\n1\n" in corpo
+    assert corpo.rstrip().endswith("5000")
+
+
+@pytest.mark.unit
+def test_timeout_uccide_anche_chi_ignora_sigterm():
+    esito = subprocess.run(  # noqa: S603
+        [
+            "/bin/bash",
+            str(WRAPPER),
+            "--dry-run",
+            "-q",
+            "--timeout",
+            "1",
+            "--",
+            "bash",
+            "-c",
+            'trap "" TERM; sleep 60',
+        ],
+        capture_output=True,
+        text=True,
+        env={**__import__("os").environ, "NOTIFYHUB_SLUG": SLUG},
+        timeout=30,
+    )
+    assert esito.returncode == 137
+    assert "esito=timeout" in esito.stdout
+
+
+@pytest.mark.unit
+def test_output_senza_a_capo_finale_non_si_attacca_alle_righe_successive():
+    esito = _run("--", "printf", "abc")
+    assert esito.stdout.startswith("abc\n")
+
+
+class _Webhook:
+    """Finto NotifyHub: risponde con la sequenza di codici data e registra le
+    richieste ricevute."""
+
+    def __init__(self, codici: list[int]):
+        import http.server
+        import threading
+
+        self.codici = list(codici)
+        self.richieste: list[dict[str, str]] = []
+        esterno = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                lunghezza = int(self.headers.get("Content-Length", "0"))
+                self.rfile.read(lunghezza)
+                esterno.richieste.append(dict(self.headers))
+                codice = esterno.codici.pop(0) if esterno.codici else 200
+                self.send_response(codice)
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+
+
+def _invia(url: str, *args: str) -> subprocess.CompletedProcess[str]:
+    import os
+
+    return subprocess.run(  # noqa: S603
+        ["/bin/bash", str(WRAPPER), "-u", url, "-s", SLUG, "-q", *args, "--", "true"],
+        capture_output=True,
+        text=True,
+        env={k: v for k, v in os.environ.items() if not k.startswith("NOTIFYHUB_")},
+        timeout=60,
+    )
+
+
+@pytest.mark.unit
+def test_errore_passeggero_ritentato_con_lo_stesso_request_id():
+    webhook = _Webhook([503, 200])
+    try:
+        esito = _invia(webhook.url, "--retries", "2")
+    finally:
+        webhook.close()
+    assert esito.returncode == 0, esito.stderr
+    assert len(webhook.richieste) == 2
+    ids = {r["X-Request-Id"] for r in webhook.richieste}
+    assert len(ids) == 1, "i tentativi devono riusare lo stesso X-Request-Id"
+
+
+@pytest.mark.unit
+def test_errore_definitivo_non_ritentato():
+    webhook = _Webhook([404, 200])
+    try:
+        esito = _invia(webhook.url, "--retries", "2", "--strict")
+    finally:
+        webhook.close()
+    assert esito.returncode == 1
+    assert len(webhook.richieste) == 1
+    assert "http=404" in esito.stderr
+
+
+@pytest.mark.unit
+def test_tentativi_esauriti_restituiscono_comunque_lexit_code_del_comando():
+    webhook = _Webhook([503, 503])
+    try:
+        esito = _invia(webhook.url, "--retries", "1")
+    finally:
+        webhook.close()
+    assert esito.returncode == 0
+    assert len(webhook.richieste) == 2
+    assert "tentativi=2" in esito.stderr
