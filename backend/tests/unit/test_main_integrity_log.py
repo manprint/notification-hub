@@ -29,7 +29,9 @@ async def test_violazione_di_unicita_non_scrive_l_email_nel_log(monkeypatch):
     driver.detail = "Key (email)=(duplicata@example.test) already exists."
     driver.constraint_name = "uq_users_email"
     driver.table_name = "users"
-    orig = RuntimeError("adapter wrapper")
+    # Il wrapper di SQLAlchemy incarta il messaggio completo, DETAIL compreso: la
+    # vecchia riga logava str(exc.orig), quindi l'email arrivava nel log.
+    orig = RuntimeError(f"{driver}\nDETAIL:  {driver.detail}")
     orig.__cause__ = driver
     exc = IntegrityError("INSERT INTO users", {}, orig)
 
