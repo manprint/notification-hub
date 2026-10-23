@@ -117,6 +117,9 @@ services:
     environment:
       <<: *db_env
       NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST: ${NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST:-hooks.slack.com,chat.googleapis.com}
+      # Senza questo uvicorn ignora X-Forwarded-For di nginx, che e' sempre il peer: tutti i client
+      # collassano su un solo IP (rate limit di ingestion e lockout del login condivisi).
+      FORWARDED_ALLOW_IPS: 172.30.250.10
     expose:
       - "8000"
       - "9100"  # /metrics, mai instradata da nginx (spec 10.4)
@@ -175,7 +178,10 @@ services:
     depends_on:
       api:
         condition: service_healthy
-    networks: [notifyhub]
+    networks:
+      notifyhub:
+        # IP fisso: l'API si fida di X-Forwarded-For solo da questo hop (FORWARDED_ALLOW_IPS).
+        ipv4_address: 172.30.250.10
     restart: unless-stopped
 
   mock-webhook:
@@ -198,3 +204,6 @@ volumes:
 networks:
   notifyhub:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.250.0/24
