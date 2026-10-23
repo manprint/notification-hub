@@ -151,6 +151,10 @@ describe("cascata: regole che devono vincere sui pulsanti", () => {
     expect(declared("th", "overflow-wrap")).toBe("break-word");
   });
 
+  it("lo slug va a capo sui trattini: anywhere lo schiaccerebbe a una lettera per riga", () => {
+    expect(declared(".slug-cell code", "overflow-wrap")).toBe("break-word");
+  });
+
   it("gli elementi assoluti dentro una tabella scorrono con lei e non allargano la pagina", () => {
     expect(declared(".table-wrap", "overflow-x")).toBe("auto");
     expect(declared(".table-wrap", "position")).toBe("relative");
