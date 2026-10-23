@@ -6,9 +6,7 @@ import pytest
 
 
 @pytest.mark.e2e
-async def test_elenco_utenti_ha_un_ordine_stabile_per_email(
-    api_client, two_tenants, owner_token
-):
+async def test_elenco_utenti_ha_un_ordine_stabile_per_email(api_client, two_tenants, owner_token):
     tenant_id, _ = two_tenants
     admin = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
     tag = uuid.uuid4().hex[:6]

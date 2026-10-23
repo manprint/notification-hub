@@ -297,9 +297,7 @@ async def refresh(body: RefreshIn) -> TokenPairOut:
     tenant_id = uuid.UUID(refresh_token_identity.tenant_id)
     async with tenant_session(tenant_id) as session:
         # Lock di tenant e utente prima del token: stesso ordine di logout e rimozione.
-        await lock_user_token_scope(
-            session, tenant_id, uuid.UUID(refresh_token_identity.user_id)
-        )
+        await lock_user_token_scope(session, tenant_id, uuid.UUID(refresh_token_identity.user_id))
         refresh_result = await session.execute(
             select(RefreshToken)
             .where(RefreshToken.id == uuid.UUID(refresh_token_identity.id))

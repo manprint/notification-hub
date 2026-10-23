@@ -54,9 +54,7 @@ async def _refresh_row(tenant_id: uuid.UUID, plain: str) -> RefreshToken:
 
 
 @pytest.mark.e2e
-async def test_disabilitare_con_patch_revoca_il_refresh_token(
-    api_client, two_tenants, owner_token
-):
+async def test_disabilitare_con_patch_revoca_il_refresh_token(api_client, two_tenants, owner_token):
     tenant_id, _ = two_tenants
     admin = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
     member_id, member_email = await _utente(tenant_id, UserRole.MEMBER)
@@ -120,9 +118,7 @@ async def test_logout_tutte_le_sessioni_non_lascia_vivo_il_successore_concorrent
 
 
 @pytest.mark.e2e
-async def test_refresh_e_rimozione_concorrenti_non_si_bloccano_a_vicenda(
-    api_client, two_tenants
-):
+async def test_refresh_e_rimozione_concorrenti_non_si_bloccano_a_vicenda(api_client, two_tenants):
     """Rimozione dell'owner: il tenant e bloccato FOR UPDATE, poi serve il
     refresh token. Un refresh che tenesse il token prima del tenant entrerebbe
     in deadlock (40P01) con questa transazione."""
@@ -131,9 +127,7 @@ async def test_refresh_e_rimozione_concorrenti_non_si_bloccano_a_vicenda(
     tokens = await _login(api_client, email)
 
     async with tenant_session(tenant_id) as rimozione:
-        await rimozione.execute(
-            select(Tenant.id).where(Tenant.id == tenant_id).with_for_update()
-        )
+        await rimozione.execute(select(Tenant.id).where(Tenant.id == tenant_id).with_for_update())
         refresh = asyncio.create_task(
             api_client.post("/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]})
         )

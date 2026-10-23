@@ -72,7 +72,8 @@ def create_app() -> FastAPI:
         # Solo vincolo e tabella: il messaggio di Postgres (DETAIL) riporta il valore
         # duplicato, per esempio l'email, e nei log non deve finire. L'eccezione
         # del driver asyncpg e' la causa di quella che SQLAlchemy incarta in orig.
-        driver = exc.orig.__cause__ or exc.orig
+        orig = exc.orig
+        driver = (orig.__cause__ if orig is not None else None) or orig
         logger.warning(
             "integrity_error",
             constraint=getattr(driver, "constraint_name", None),

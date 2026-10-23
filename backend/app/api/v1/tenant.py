@@ -43,9 +43,7 @@ async def update_tenant(
     tenant_id = uuid.UUID(claims.tid)
     # FOR UPDATE: un receiver creato o modificato in parallelo legge il cap sotto
     # lo stesso lock, altrimenti il controllo qui sotto non vedrebbe il suo valore.
-    result = await session.execute(
-        select(Tenant).where(Tenant.id == tenant_id).with_for_update()
-    )
+    result = await session.execute(select(Tenant).where(Tenant.id == tenant_id).with_for_update())
     tenant = result.scalar_one()
 
     if body.max_body_bytes is not None and body.max_body_bytes < tenant.max_body_bytes:
