@@ -119,7 +119,9 @@ Tutte le tabelle (tranne `tenants` e `pending_object_deletions`) hanno `tenant_i
 |---|:-:|:-:|:-:|:-:|
 | Gestire tenant (retention, cap body, quote) | ✅ | ❌ | ❌ | ❌ |
 | Invitare / rimuovere utenti, cambiare ruoli (su un owner: solo owner) | ✅ | ✅ | ❌ | ❌ |
-| CRUD Group / Receiver / Channel / SeverityRule | ✅ | ✅ | ✅ | ❌ |
+| CRUD Group, Channel, binding gruppo-canale e override receiver-canale | ✅ | ✅ | ❌ | ❌ |
+| CRUD Receiver e SeverityRule (il member solo sui gruppi a cui è associato) | ✅ | ✅ | ✅ | ❌ |
+| CRUD SeverityPreset e relative regole | ✅ | ✅ | ❌ | ❌ |
 | Rigenerare lo slug di un Receiver | ✅ | ✅ | ❌ | ❌ |
 | Vedere l'elenco dei DeliveryChannel (URL mascherato) | ✅ | ✅ | ✅ | ❌ |
 | Consultare `/deliveries` (diagnostica inoltri) | ✅ | ✅ | ✅ | ✅ |
