@@ -197,12 +197,17 @@ async def _ingest(
             extra={"retry_after": 1},
         )
 
-    # 6. Normalizzazione, severity, storage backend, scrittura + outbox nella
-    # stessa transazione (spec 8.2).
+    # 6. Normalizzazione, severity, storage backend, scrittura + outbox (spec 8.2).
+    # Il PUT su MinIO sta FUORI dalle transazioni: tenere una connessione del pool
+    # (e il lock di quota, se c'e) per tutta la durata dell'upload fermerebbe
+    # l'istanza se lo storage rallenta. La chiave dell'oggetto dipende solo dall'id
+    # gia generato in prepare_notification (spec 6.5).
     try:
         async with tenant_session(receiver.tenant_id) as session:
             # Quota giornaliera e di storage (spec 4.1, enforcement F7): colonne
-            # presenti da subito, applicate qui. NULL = illimitata.
+            # presenti da subito, applicate qui. NULL = illimitata. Questo controllo
+            # evita il PUT per una richiesta gia destinata al rifiuto; quello che
+            # conta sta nella transazione di scrittura.
             await enforce_tenant_quotas(session, receiver.tenant_id, len(raw_body))
 
             prepared = await prepare_notification(
@@ -221,19 +226,26 @@ async def _ingest(
                 phase=parse_phase(x_phase),
             )
 
-            if prepared.use_object_storage:
-                from app.services.storage import upload_object
+        if prepared.use_object_storage:
+            from app.services.storage import upload_object
 
-                assert prepared.storage_key is not None
-                try:
-                    await upload_object(prepared.storage_key, raw_body)
-                except Exception as exc:
-                    raise Problem(
-                        status=503,
-                        type=PROBLEM_TYPES["storage_unavailable"],
-                        title="Service Unavailable",
-                        detail="Object storage unreachable.",
-                    ) from exc
+            assert prepared.storage_key is not None
+            try:
+                await upload_object(prepared.storage_key, raw_body)
+            except Exception as exc:
+                raise Problem(
+                    status=503,
+                    type=PROBLEM_TYPES["storage_unavailable"],
+                    title="Service Unavailable",
+                    detail="Object storage unreachable.",
+                ) from exc
+
+        async with tenant_session(receiver.tenant_id) as session:
+            # Quota riverificata sotto FOR UPDATE nella transazione che scrive: fra il
+            # pre-controllo e questo punto un'altra richiesta puo aver consumato la
+            # quota. Un rifiuto qui lascia un oggetto orfano, che purge_orphan_objects
+            # recupera (spec 6.5).
+            await enforce_tenant_quotas(session, receiver.tenant_id, len(raw_body))
 
             await persist_notification(
                 session,
