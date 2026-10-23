@@ -33,13 +33,26 @@ function CaricamentoPagina() {
 }
 
 /** Le pagine autenticate si caricano pigre dentro il layout: l'attesa sta nel
- *  riquadro della pagina, così il menu non sparisce mentre arriva il chunk. */
+ *  riquadro della pagina, così il menu non sparisce mentre arriva il chunk.
+ *  Lo stesso vale per un errore di una pagina: il suo confine sta qui dentro,
+ *  e il menu resta a schermo per tornare altrove. */
 function AttesaPagina() {
+  const location = useLocation();
   return (
-    <Suspense fallback={<div className="empty-state">Caricamento…</div>}>
-      <Outlet />
-    </Suspense>
+    <ErrorBoundary resetKey={location.pathname}>
+      <Suspense fallback={<div className="empty-state">Caricamento…</div>}>
+        <Outlet />
+      </Suspense>
+    </ErrorBoundary>
   );
+}
+
+/** Un admin che apre Impostazioni arriva all'audit, la sola scheda che gli
+ *  spetta: una pagina senza scheda selezionata non diceva dove andare. */
+function ImpostazioniIndice() {
+  const { role } = useSession();
+  if (role === "admin") return <Navigate to="/settings/audit" replace />;
+  return <SettingsPage />;
 }
 
 /** Il server non ha risposto all'avvio: la sessione salvata resta, e chi la
@@ -93,8 +106,9 @@ export default function App() {
   const location = useLocation();
   return (
     <SessionProvider>
-      {/* Un errore su una schermata non si porta dietro la successiva: al cambio
-          di indirizzo il confine riparte pulito (senza smontare il layout). */}
+      {/* Confine esterno: copre login, invito e il layout stesso. Gli errori
+          delle pagine li prende quello in AttesaPagina, così il menu resta
+          montato. Al cambio di indirizzo il confine riparte pulito. */}
       <ErrorBoundary resetKey={location.pathname}>
       <Suspense fallback={<CaricamentoPagina />}>
         <Routes>
@@ -156,7 +170,7 @@ export default function App() {
             path="/settings"
             element={
               <RequireRole allowed={["owner", "admin"]}>
-                <SettingsPage />
+                <ImpostazioniIndice />
               </RequireRole>
             }
           />
