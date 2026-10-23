@@ -98,6 +98,8 @@ describe("AcceptInvitePage", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Il collegamento non è valido: chiedi a chi ti ha invitato un nuovo invito.",
     );
+    // Il sottotitolo promette una password da scegliere: senza token non c'è.
+    expect(screen.queryByText(/Scegli la password del tuo account/)).not.toBeInTheDocument();
     expect(chiamate).toBe(0);
   });
 

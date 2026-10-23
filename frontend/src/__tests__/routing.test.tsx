@@ -3,9 +3,10 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import AcceptInvitePage from "../pages/AcceptInvitePage";
+import { fixtureStatsSummary } from "../api/mocks/handlers";
 import { server } from "../api/mocks/server";
 import { setRefreshToken } from "../api/client";
 
@@ -51,7 +52,7 @@ describe("routing", () => {
     renderApp("/channels");
 
     await waitFor(() => {
-      expect(screen.getByText(/accesso negato/i)).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Accesso negato" })).toBeInTheDocument();
     });
     expect(screen.queryByRole("link", { name: "Canali" })).not.toBeInTheDocument();
   });
@@ -107,5 +108,50 @@ describe("routing", () => {
     expect(new URL(capturedUrl).searchParams.get("token")).toBeNull();
 
     window.location.hash = "";
+  });
+
+  describe("impostazioni e errori di pagina", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("un admin che apre Impostazioni atterra sull'audit, non su una pagina vuota", async () => {
+      server.use(
+        http.get("/api/v1/auth/me", () =>
+          HttpResponse.json({ id: "u2", email: "admin@acme.test", role: "admin", tenant_id: "t1", tenant_name: "ACME" }),
+        ),
+      );
+      setRefreshToken("refresh-token-fixture");
+
+      renderApp("/settings");
+
+      expect(await screen.findByRole("heading", { name: "Audit" })).toBeInTheDocument();
+      expect(screen.queryByText(/riservate all'owner/i)).not.toBeInTheDocument();
+    });
+
+    it("l'owner che apre Impostazioni resta sulla pagina delle impostazioni", async () => {
+      setRefreshToken("refresh-token-fixture");
+
+      renderApp("/settings");
+
+      expect(await screen.findByRole("heading", { name: "Impostazioni" })).toBeInTheDocument();
+    });
+
+    it("un errore di rendering di una pagina lascia il menu a schermo", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => undefined);
+      // Senza by_severity la pagina riepilogo non può disegnarsi e lancia.
+      server.use(
+        http.get("/api/v1/stats/summary", () =>
+          HttpResponse.json({ ...fixtureStatsSummary, by_severity: undefined }),
+        ),
+      );
+      setRefreshToken("refresh-token-fixture");
+
+      renderApp("/");
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("Questa pagina non si è caricata");
+      expect(screen.getByRole("navigation", { name: "Navigazione principale" })).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Canali" })).toBeInTheDocument();
+    });
   });
 });

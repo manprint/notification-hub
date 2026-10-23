@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { describe, expect, it } from "vitest";
 import HomePage from "../HomePage";
-import { fixtureStatsSummary } from "../../api/mocks/handlers";
+import { fixtureMe, fixtureStatsSummary } from "../../api/mocks/handlers";
 import { server } from "../../api/mocks/server";
 import { renderWithProviders } from "./testUtils";
 
@@ -105,7 +105,7 @@ describe("HomePage", () => {
     expect(receiver).toHaveAttribute("href", "/notifications?group_id=g1&receiver_id=r1");
     // Un receiver che non ha mai scritto resta in elenco, marcato come disabilitato.
     expect(screen.getByRole("link", { name: "Job mai partito" })).toBeInTheDocument();
-    expect(screen.getByText("disabilitato")).toBeInTheDocument();
+    expect(screen.getByText("Disabilitato")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /nascondi i receiver di server produzione/i }));
     await waitFor(() => {
@@ -130,6 +130,8 @@ describe("HomePage", () => {
     renderWithProviders(<HomePage />);
 
     await screen.findByRole("link", { name: "Backup" });
+    // Stessa etichetta della colonna di Audit: "Gruppo / Receiver".
+    expect(screen.getByRole("columnheader", { name: "Gruppo / Receiver" })).toBeInTheDocument();
     for (const nome of ["Totale", "Non lette"]) {
       expect(screen.getByRole("columnheader", { name: nome })).toHaveClass("num");
     }
@@ -173,4 +175,44 @@ describe("HomePage", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "Totale" })).not.toBeInTheDocument();
   });
+
+  it("le consegne morte dicono di ri-accodarle solo a chi può farlo", async () => {
+    const sessione = conRuolo("owner");
+    renderWithProviders(<HomePage />);
+
+    expect(await screen.findByRole("link", { name: "Tentativi esauriti, da ri-accodare" })).toHaveAttribute(
+      "href",
+      "/deliveries?status=dead",
+    );
+    expect(sessione.chiamato()).toBe(true);
+  });
+
+  it("il viewer vede le consegne morte senza l'invito a ri-accodare", async () => {
+    const sessione = conRuolo("viewer");
+    renderWithProviders(<HomePage />);
+
+    await waitFor(() => expect(sessione.chiamato()).toBe(true));
+    // Il ruolo arriva con la risposta di /auth/me, dopo la chiamata: un giro di
+    // eventi prima di leggere il link, altrimenti si legge quello senza ruolo.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(await screen.findByRole("link", { name: "Tentativi esauriti" })).toHaveAttribute(
+      "href",
+      "/deliveries?status=dead",
+    );
+    expect(screen.queryByText(/ri-accodare/)).not.toBeInTheDocument();
+  });
 });
+
+/** Una sessione salvata col ruolo dato: /auth/me risponde con quel ruolo. */
+function conRuolo(role: "owner" | "viewer"): { chiamato: () => boolean } {
+  let chiamato = false;
+  localStorage.clear();
+  localStorage.setItem("notifyhub.refresh_token", "refresh-salvato");
+  server.use(
+    http.get("/api/v1/auth/me", () => {
+      chiamato = true;
+      return HttpResponse.json({ ...fixtureMe, role });
+    }),
+  );
+  return { chiamato: () => chiamato };
+}

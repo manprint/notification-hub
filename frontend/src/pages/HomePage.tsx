@@ -6,7 +6,9 @@ import type { ApiError, Severity, StatsSummaryOut } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import ErrorBanner from "../components/ErrorBanner";
 import SeverityBadge from "../components/SeverityBadge";
+import { useSession } from "../hooks/useSession";
 import { formatTime } from "../lib/format";
+import { MEMBER_ROLES, hasRole } from "../lib/roles";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
 const POLL_INTERVAL_MS = 30_000;
@@ -17,6 +19,7 @@ export default function HomePage() {
     queryFn: () => apiGet<StatsSummaryOut>("/api/v1/stats/summary"),
     refetchInterval: POLL_INTERVAL_MS,
   });
+  const { role } = useSession();
   // Gruppi aperti: lo stato sta qui e non nell'URL perche' e' una preferenza di
   // lettura momentanea, non una vista da condividere. Il polling ogni 30s
   // riscrive i numeri ma non richiude quel che l'operatore ha aperto.
@@ -94,7 +97,11 @@ export default function HomePage() {
             {data.deliveries_dead}
           </span>
           <span className="kpi-note">
-            <Link to="/deliveries?status=dead">Tentativi esauriti, da ri-accodare</Link>
+            {/* Ri-accodare è un'azione dei member in su: al viewer si dice solo
+                cosa è successo, senza un invito a fare ciò che non può fare. */}
+            <Link to="/deliveries?status=dead">
+              {hasRole(role, MEMBER_ROLES) ? "Tentativi esauriti, da ri-accodare" : "Tentativi esauriti"}
+            </Link>
           </span>
         </div>
       </div>
@@ -121,11 +128,11 @@ export default function HomePage() {
             tabella, come negli altri elenchi vuoti. */}
         {data.by_group.length > 0 && (
         <div className="table-wrap">
-          <table>
+          <table className="home-groups">
             <thead>
               <tr>
                 <th className="stats-toggle-col"></th>
-                <th>Gruppo / receiver</th>
+                <th>Gruppo / Receiver</th>
                 <th className="num">Totale</th>
                 <th className="num">Non lette</th>
               </tr>
@@ -173,7 +180,7 @@ export default function HomePage() {
                                 {receiver.receiver_name}
                               </Link>
                               {receiver.status === "disabled" && (
-                                <span className="status-pill warn">disabilitato</span>
+                                <span className="status-pill warn">Disabilitato</span>
                               )}
                             </span>
                           </td>
