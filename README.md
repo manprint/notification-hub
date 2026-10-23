@@ -43,7 +43,8 @@ containerizzato: 22/22 assert, exit 0.
 
 ```bash
 cp .env.example .env
-# generare una chiave vera prima di qualunque uso non locale
+# generare una chiave vera prima di qualunque uso non locale: l'app non parte con il valore
+# di esempio change-me... di .env.example, e la chiave di .env e' solo per lo sviluppo
 sed -i "s/^NOTIFYHUB_SECRET_KEY=.*/NOTIFYHUB_SECRET_KEY=$(openssl rand -hex 32)/" .env
 make up
 ```

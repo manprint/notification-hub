@@ -48,6 +48,13 @@ class Settings(BaseSettings):
     def validate_secret_key(cls, v: str) -> str:
         if len(v) < 32:
             raise ValueError("notifyhub_secret_key must be at least 32 characters long")
+        # Il valore di esempio di .env.example e' pubblico: chi lo conosce firma JWT validi.
+        # Basta il prefisso, che copre il valore di esempio e le sue varianti.
+        if v.lower().startswith("change-me"):
+            raise ValueError(
+                "notifyhub_secret_key is the example placeholder: generate one with "
+                "`openssl rand -hex 32`"
+            )
         return v
 
     @property
