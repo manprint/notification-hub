@@ -194,17 +194,19 @@ export default function AuditPage() {
         </div>
       </div>
 
-      <DataTable
-        columns={columns}
-        rows={rows}
-        rowKey={(event) => event.id}
-        loading={isLoading}
-        error={error}
-        emptyMessage="Nessun evento con questi filtri."
-        hasMore={hasNextPage}
-        onLoadMore={() => void fetchNextPage()}
-        loadingMore={isFetchingNextPage}
-      />
+      <div className="card">
+        <DataTable
+          columns={columns}
+          rows={rows}
+          rowKey={(event) => event.id}
+          loading={isLoading}
+          error={error}
+          emptyMessage="Nessun evento con questi filtri."
+          hasMore={hasNextPage}
+          onLoadMore={() => void fetchNextPage()}
+          loadingMore={isFetchingNextPage}
+        />
+      </div>
     </div>
   );
 }

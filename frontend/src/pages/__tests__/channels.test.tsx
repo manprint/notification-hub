@@ -101,7 +101,7 @@ describe("ChannelsPage override", () => {
       await screen.findByLabelText(/^receiver$/i),
       await screen.findByRole("option", { name: "Server Produzione / Backup notturno" }),
     );
-    expect(await screen.findByText("silenziato")).toBeInTheDocument();
+    expect(await screen.findByText("Silenziato", { selector: "td" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Elimina" }));
     const dialogo = screen.getByRole("dialog");
@@ -111,7 +111,7 @@ describe("ChannelsPage override", () => {
     // Il backend ha cancellato l'override a cascata: la riga non resta con
     // l'UUID del canale al posto del nome.
     expect(await screen.findByText(/Nessun override per questo receiver/)).toBeInTheDocument();
-    expect(screen.queryByText("silenziato")).not.toBeInTheDocument();
+    expect(screen.queryByText("Silenziato", { selector: "td" })).not.toBeInTheDocument();
   });
 
   it("la soglia di un override si legge come il badge della severity", async () => {
@@ -130,7 +130,9 @@ describe("ChannelsPage override", () => {
       await screen.findByLabelText(/^receiver$/i),
       await screen.findByRole("option", { name: "Server Produzione / Backup notturno" }),
     );
-    const cella = (await screen.findByText("soglia sostituita")).closest("tr") as HTMLElement;
+    const cella = (
+      await screen.findByText("Soglia sostituita", { selector: "td" })
+    ).closest("tr") as HTMLElement;
     expect(within(cella).getByText("Critica")).toHaveClass("severity-badge", "severity-critical");
   });
 
@@ -278,5 +280,57 @@ describe("ChannelsPage override", () => {
     expect(screen.queryByText(/Nessun override per questo receiver/)).not.toBeInTheDocument();
     rispondi();
     expect(await screen.findByText(/Nessun override per questo receiver/)).toBeInTheDocument();
+  });
+});
+
+describe("ChannelsPage moduli e severity", () => {
+  it("la tendina della soglia dell'override usa le etichette della severity, non i valori grezzi", async () => {
+    setRefreshToken("refresh-token-fixture");
+    renderWithProviders(<ChannelsPage />);
+
+    const soglia = await screen.findByLabelText("Soglia minima");
+    expect(within(soglia).getByRole("option", { name: "Critica" })).toBeInTheDocument();
+    expect(within(soglia).queryByRole("option", { name: "critical" })).not.toBeInTheDocument();
+  });
+
+  it("creare un canale senza nome mostra il messaggio in italiano e non invia nulla", async () => {
+    setRefreshToken("refresh-token-fixture");
+    let inviati = 0;
+    server.use(
+      http.post("/api/v1/channels", () => {
+        inviati += 1;
+        return HttpResponse.json({}, { status: 201 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<ChannelsPage />);
+
+    await user.click(await screen.findByRole("button", { name: "Crea canale" }));
+
+    expect(await screen.findByText("Il nome del canale è obbligatorio.")).toBeInTheDocument();
+    expect(inviati).toBe(0);
+  });
+
+  it("modificare un canale senza nome mostra il messaggio in italiano e non invia nulla", async () => {
+    setRefreshToken("refresh-token-fixture");
+    let inviati = 0;
+    server.use(
+      http.patch("/api/v1/channels/c1", () => {
+        inviati += 1;
+        return HttpResponse.json({});
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<ChannelsPage />);
+
+    await user.click(await screen.findByRole("button", { name: "Modifica" }));
+    const dialogo = await screen.findByRole("dialog");
+    await user.clear(within(dialogo).getByLabelText("Nome"));
+    await user.click(within(dialogo).getByRole("button", { name: "Salva" }));
+
+    expect(
+      await within(dialogo).findByText("Il nome del canale è obbligatorio."),
+    ).toBeInTheDocument();
+    expect(inviati).toBe(0);
   });
 });

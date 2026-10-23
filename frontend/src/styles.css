@@ -450,6 +450,12 @@ tbody tr:last-child td {
   min-width: 100%;
 }
 
+/* Audit: le colonne prendono la larghezza del contenuto e la tabella scorre
+   dentro .table-wrap, invece di stringere email e ruolo a capo a metà. */
+.audit-table .table-wrap table {
+  min-width: max-content;
+}
+
 .row-disabled td {
   opacity: 0.55;
 }
@@ -478,6 +484,16 @@ tbody tr:last-child td {
 
 .cell-preview {
   max-width: 28rem;
+}
+
+.audit-table .audit-chi {
+  max-width: none;
+  white-space: nowrap;
+}
+
+/* Le informazioni di Origine e Ricevuta, che sotto i 760px stanno nel contenuto. */
+.receiver-narrow-info {
+  display: none;
 }
 
 /* --- guscio dell'applicazione -------------------------------------------- */
@@ -980,6 +996,13 @@ fieldset.form-row {
 
 .filters .form-row.grow {
   flex: 1 1 220px;
+}
+
+/* Le tendine dei filtri hanno una larghezza fissa: senza, il nome più lungo tra
+   le opzioni (un canale, per esempio) allargava la sua casella a metà riga. */
+.filters .form-row select {
+  width: 16rem;
+  max-width: 100%;
 }
 
 .filters-actions {
@@ -1769,6 +1792,22 @@ button.stats-toggle:hover:not(:disabled) {
 
   .filters .form-row {
     min-width: 100%;
+  }
+
+  /* Elenco delle notifiche di un receiver: le colonne 3 (Origine) e 5 (Ricevuta)
+     sono le stesse nell'ordine fisso di ReceiverNotificationsTable. */
+  .receiver-notifications .table-wrap th:nth-child(3),
+  .receiver-notifications .table-wrap td:nth-child(3),
+  .receiver-notifications .table-wrap th:nth-child(5),
+  .receiver-notifications .table-wrap td:nth-child(5) {
+    display: none;
+  }
+
+  .receiver-narrow-info {
+    display: block;
+    margin-top: var(--space-1);
+    color: var(--color-text-muted);
+    font-size: var(--text-xs);
   }
 
   .filters-actions {

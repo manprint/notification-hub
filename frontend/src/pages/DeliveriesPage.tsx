@@ -31,6 +31,19 @@ const STATUS_HELP: Record<DeliveryStatus, string> = {
 // morta non ritenta piu' da sola, una in invio lo sta gia' facendo.
 const WAITING_RETRY: DeliveryStatus[] = ["pending", "failed"];
 
+// Una morta per 4xx non ritenta mai: il webhook l'ha rifiutata al primo colpo, con
+// attempts che può anche essere 0. Il 429 invece si ritenta, quindi resta fuori.
+function motivoStato(d: DeliveryOut): string {
+  const codice = d.response_code;
+  if (d.status === "dead" && codice !== null && codice >= 400 && codice < 500 && codice !== 429) {
+    return (
+      `rifiutata dal webhook (HTTP ${codice}), nessun tentativo ripetuto; ` +
+      "serve un ri-accodamento manuale"
+    );
+  }
+  return STATUS_HELP[d.status] ?? "stato non riconosciuto da questa versione";
+}
+
 const PAGE_SIZE = 100;
 
 // Canali che compaiono nelle consegne caricate, per il filtro del viewer. Se il
@@ -183,7 +196,7 @@ export default function DeliveriesPage() {
         <div className="cell-preview">
           <StatusPill status={d.status} />
           <div className="cell-diagnostics">
-            {STATUS_HELP[d.status] ?? "stato non riconosciuto da questa versione"}
+            {motivoStato(d)}
           </div>
         </div>
       ),
@@ -208,12 +221,20 @@ export default function DeliveriesPage() {
     {
       key: "last_error",
       header: "Esito",
-      render: (d) => (
-        <div className="cell-diagnostics">
-          {d.response_code ? `HTTP ${d.response_code}` : "—"}
-          {d.last_error && <div>{d.last_error}</div>}
-        </div>
-      ),
+      render: (d) => {
+        const codice = d.response_code ? `HTTP ${d.response_code}` : null;
+        // Il messaggio del backend comincia spesso con "HTTP 404: ...": il codice non si ripete.
+        const giaNelErrore =
+          codice !== null &&
+          d.last_error !== null &&
+          (d.last_error === codice || d.last_error.startsWith(`${codice}:`));
+        return (
+          <div className="cell-diagnostics">
+            {!giaNelErrore && (codice ?? "—")}
+            {d.last_error && <div>{d.last_error}</div>}
+          </div>
+        );
+      },
     },
     {
       key: "received_at",
@@ -247,8 +268,8 @@ export default function DeliveriesPage() {
       <p className="page-subtitle">
         Storico degli inoltri verso Slack e Google Chat: una riga per ogni notifica spedita a un
         canale. Serve a capire perché un messaggio non è arrivato — codice HTTP, errore e
-        tentativi. Le consegne in stato «morta» hanno esaurito i 5 tentativi e si ri-accodano a
-        mano.
+        tentativi. Le consegne in stato «morta» sono finite dopo i tentativi o perché rifiutate dal
+        webhook, e si ri-accodano a mano.
       </p>
       {error && <ErrorBanner error={error} />}
       {actionError && <ErrorBanner error={actionError} />}
@@ -298,23 +319,25 @@ export default function DeliveriesPage() {
         {channelsError && <ErrorBanner error={channelsError} />}
       </div>
 
-      <DataTable
-        columns={columns}
-        rows={rows}
-        rowKey={(d) => d.id}
-        loading={isLoading}
-        error={error}
-        // Con un filtro attivo la frase sulla soglia non c'entra: il messaggio
-        // dice che il filtro non trova nulla, non che il sistema è fermo.
-        emptyMessage={
-          filtriAttivi > 0
-            ? "Nessuna consegna con questi filtri."
-            : "Nessuna consegna trovata: nessuna notifica ha ancora superato la soglia di un canale."
-        }
-        hasMore={hasNextPage}
-        onLoadMore={() => void fetchNextPage()}
-        loadingMore={isFetchingNextPage}
-      />
+      <div className="card">
+        <DataTable
+          columns={columns}
+          rows={rows}
+          rowKey={(d) => d.id}
+          loading={isLoading}
+          error={error}
+          // Con un filtro attivo la frase sulla soglia non c'entra: il messaggio
+          // dice che il filtro non trova nulla, non che il sistema è fermo.
+          emptyMessage={
+            filtriAttivi > 0
+              ? "Nessuna consegna con questi filtri."
+              : "Nessuna consegna trovata: nessuna notifica ha ancora superato la soglia di un canale."
+          }
+          hasMore={hasNextPage}
+          onLoadMore={() => void fetchNextPage()}
+          loadingMore={isFetchingNextPage}
+        />
+      </div>
     </div>
   );
 }

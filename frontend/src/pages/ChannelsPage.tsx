@@ -21,7 +21,7 @@ import Modal from "../components/Modal";
 import SeverityBadge from "../components/SeverityBadge";
 import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
-import { channelTypeLabel, formatDateTime } from "../lib/format";
+import { channelTypeLabel, formatDateTime, severityLabel } from "../lib/format";
 import { ADMIN_ROLES, hasRole } from "../lib/roles";
 
 const CHANNEL_TYPES: ChannelType[] = ["slack", "google_chat"];
@@ -86,7 +86,7 @@ function CreateChannelForm() {
         L'URL viene cifrato e non viene più mostrato per intero.
       </p>
       {error && <ErrorBanner error={error} />}
-      <form className="form-stacked" onSubmit={(event) => void handleSubmit(event)}>
+      <form className="form-stacked" noValidate onSubmit={(event) => void handleSubmit(event)}>
         <RequiredLegend />
         <Field id="channel-name" label="Nome" required error={fieldErrors.name}>
           <input
@@ -176,7 +176,7 @@ function EditChannelForm({ channel, onClose }: { channel: DeliveryChannelOut; on
 
   return (
     <Modal title={`Modifica «${channel.name}»`} onClose={onClose} busy={busy !== null}>
-      <form onSubmit={(event) => void handleSubmit(event)}>
+      <form noValidate onSubmit={(event) => void handleSubmit(event)}>
         {error && <ErrorBanner error={error} />}
         <RequiredLegend />
         <Field id={nameId} label="Nome" required error={fieldErrors.name}>
@@ -198,7 +198,6 @@ function EditChannelForm({ channel, onClose }: { channel: DeliveryChannelOut; on
           <input
             {...fieldAria(webhookId, { hint: true, error: fieldErrors.webhook })}
             type="password"
-            placeholder="lascia vuoto per non cambiarlo"
             value={webhookUrl}
             onChange={(event) => setWebhookUrl(event.target.value)}
           />
@@ -381,7 +380,7 @@ function ReceiverOverridesPanel({
     {
       key: "mode",
       header: "Modalità",
-      render: (o) => (o.mode === "mute" ? "silenziato" : "soglia sostituita"),
+      render: (o) => (o.mode === "mute" ? "Silenziato" : "Soglia sostituita"),
     },
     {
       key: "severity",
@@ -529,8 +528,8 @@ function ReceiverOverrideForm({
               value={mode}
               onChange={(event) => setMode(event.target.value as OverrideMode)}
             >
-              <option value="override">sostituisci la soglia</option>
-              <option value="mute">silenzia</option>
+              <option value="override">Soglia sostituita</option>
+              <option value="mute">Silenziato</option>
             </select>
           </Field>
           {mode === "override" && (
@@ -542,7 +541,7 @@ function ReceiverOverrideForm({
               >
                 {SEVERITIES.map((s) => (
                   <option key={s} value={s}>
-                    {s}
+                    {severityLabel(s)}
                   </option>
                 ))}
               </select>

@@ -177,6 +177,29 @@ describe("cascata: regole che devono vincere sui pulsanti", () => {
     expect(desktop?.decls["margin-top"]).toBe("var(--space-4)");
   });
 
+  it("le tendine dei filtri hanno una larghezza fissa, il nome piu' lungo non le allarga", () => {
+    expect(declared(".filters .form-row select", "width")).toBe("16rem");
+    expect(declared(".filters .form-row select", "max-width")).toBe("100%");
+  });
+
+  it("la tabella dell'audit prende la larghezza del contenuto e il nome in «Chi» non va a capo", () => {
+    expect(declared(".audit-table .table-wrap table", "min-width")).toBe("max-content");
+    expect(declared(".audit-table .audit-chi", "white-space")).toBe("nowrap");
+  });
+
+  it("sotto i 760px Origine e Ricevuta si nascondono e il riepilogo nel contenuto diventa visibile", () => {
+    expect(declared(".receiver-notifications .table-wrap th:nth-child(3)", "display")).toBe("none");
+    expect(declared(".receiver-notifications .table-wrap td:nth-child(5)", "display")).toBe("none");
+    const base = rules.some(
+      (r) => r.selectors.includes(".receiver-narrow-info") && r.decls.display === "none",
+    );
+    expect(base).toBe(true);
+    const mobile = rules.find(
+      (r) => r.selectors.includes(".receiver-narrow-info") && r.decls.display === "block",
+    );
+    expect(mobile).toBeDefined();
+  });
+
   it("il menu mobile e' una testata su due righe, non una colonna alta un quinto dello schermo", () => {
     const mobile = rules.filter((r) => r.selectors.includes(".app-sidebar"));
     expect(mobile.some((r) => r.decls["grid-template-columns"] === "minmax(0, 1fr) auto")).toBe(true);
