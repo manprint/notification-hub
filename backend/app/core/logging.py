@@ -1,3 +1,4 @@
+import logging
 import uuid
 from typing import Any
 
@@ -20,13 +21,20 @@ def configure_logging() -> None:
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.JSONRenderer(),
         ],
-        wrapper_class=structlog.make_filtering_bound_logger(
-            int(getattr(structlog.stdlib, settings.log_level, 20))
-        ),
+        wrapper_class=structlog.make_filtering_bound_logger(_livello_log(settings.log_level)),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )
+
+
+def _livello_log(nome: str) -> int:
+    # Nomi come in logging (INFO, WARNING, WARN...). Un valore sconosciuto blocca l'avvio:
+    # ignorarlo in silenzio farebbe credere all'operatore che LOG_LEVEL funzioni.
+    livelli = logging.getLevelNamesMapping()
+    if nome.upper() not in livelli:
+        raise ValueError(f"LOG_LEVEL non valido: {nome!r}")
+    return livelli[nome.upper()]
 
 
 def _redact_secrets(logger: Any, method_name: str, event_dict: dict[str, Any]) -> dict[str, Any]:
