@@ -6,7 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   apiGet,
   getAccessToken,
@@ -24,15 +24,17 @@ function jwtFor(sub: string): string {
 }
 
 function Sonda() {
-  const { user, loading, login, logout, reloadProfile } = useSession();
+  const { user, loading, unreachable, login, logout, reloadProfile, retryProfile } = useSession();
   return (
     <div>
       <p>{loading ? "caricamento" : user ? `utente:${user.email}:${user.role}` : "nessuno"}</p>
+      {unreachable && <p>server giu</p>}
       <button onClick={() => void login("owner@acme.test", "password-lunga-123").catch(() => {})}>
         entra
       </button>
       <button onClick={() => void logout()}>esci</button>
       <button onClick={() => void reloadProfile()}>ricarica</button>
+      <button onClick={() => retryProfile()}>riprova</button>
     </div>
   );
 }
@@ -211,5 +213,55 @@ describe("useSession", () => {
     // Il backend autorizza col ruolo dentro l'access token: senza un refresh la
     // UI direbbe "admin" e il server continuerebbe a trattarlo da owner.
     expect(refreshCalls).toBe(refreshBefore + 1);
+  });
+
+  it("un server giù all'avvio non butta fuori: la sessione resta e si può riprovare", async () => {
+    setRefreshToken("refresh-che-resta");
+    // Il primo passo è il refresh: nginx risponde 502 finché l'api riparte.
+    let serverSu = false;
+    server.use(
+      http.post("/api/v1/auth/refresh", () =>
+        serverSu
+          ? HttpResponse.json({ ...fixtureTokenPair, refresh_token: "refresh-nuovo" })
+          : new HttpResponse(null, { status: 502 }),
+      ),
+      http.get("/api/v1/auth/me", () =>
+        serverSu ? HttpResponse.json(fixtureMe) : new HttpResponse(null, { status: 502 }),
+      ),
+    );
+    renderSession();
+
+    await screen.findByText("server giu");
+    // Niente login: il refresh token c'è ancora, la sessione non è scaduta.
+    expect(getRefreshToken()).toBe("refresh-che-resta");
+    expect(screen.getByText("nessuno")).toBeInTheDocument();
+
+    serverSu = true;
+    await userEvent.setup().click(screen.getByRole("button", { name: "riprova" }));
+    await screen.findByText("utente:owner@acme.test:owner");
+    expect(screen.queryByText("server giu")).toBeNull();
+  });
+
+  it("un login il cui profilo non si legge non scrive il refresh token in localStorage", async () => {
+    server.use(
+      http.get("/api/v1/auth/me", () =>
+        HttpResponse.json(
+          { type: "/problems/internal-error", title: "Errore", status: 503, detail: "" },
+          { status: 503 },
+        ),
+      ),
+    );
+    renderSession();
+    const scritture = vi.spyOn(Storage.prototype, "setItem");
+
+    await userEvent.setup().click(screen.getByRole("button", { name: "entra" }));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+
+    expect(scritture).not.toHaveBeenCalledWith("notifyhub.refresh_token", expect.anything());
+    expect(getRefreshToken()).toBeNull();
+    expect(getAccessToken()).toBeNull();
+    scritture.mockRestore();
   });
 });
