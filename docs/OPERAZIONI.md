@@ -95,7 +95,7 @@ Elenco completo in `.env.example`. Le principali:
 | `CORS_ORIGINS` | Origin ammessi dalla SPA |
 | `NOTIFYHUB_PUBLIC_BASE_URL` | URL pubblica dell'istanza: inviti, link delle notifiche, URL di ingestion, script wrapper. Vedi "URL pubblica dietro reverse proxy" |
 | `NOTIFYHUB_WRAPPER_SCRIPT_PATH` | Percorso di `notifyhub-run.sh` servito dal pulsante "Scarica lo script". Vuoto = si cerca accanto al codice; serve solo a deploy fuori standard |
-| `TRUSTED_PROXIES` | Solo questi IP autorizzano la lettura di `X-Forwarded-For` |
+| `TRUSTED_PROXIES` | Solo questi IP autorizzano la lettura di `X-Forwarded-For`. Nel compose il nginx incluso e' gia' fidato tramite `FORWARDED_ALLOW_IPS` (IP fisso `172.30.250.10`, subnet `172.30.250.0/24`): lasciare vuoto; cambiare l'IP richiede `docker compose down` prima di `up`, perche' la rete va ricreata |
 | `SMTP_HOST/_PORT/_USER/_PASSWORD/_FROM` | Opzionali: se assenti, l'invito resta un link copiabile |
 
 ## Job di Manutenzione
@@ -392,6 +392,12 @@ L'API espone metriche Prometheus sulla porta interna 9100, mai instradata da ngi
 ```bash
 docker compose exec api curl -s http://localhost:9100/metrics
 ```
+
+Il 9100 somma i valori di API e worker: entrambi scrivono nel volume `metricsdata`
+(`PROMETHEUS_MULTIPROC_DIR`). Il volume resta fra un riavvio e l'altro, quindi i contatori non
+ripartono da zero; per azzerarli serve `docker compose down -v` (cancella anche i dati). Il
+processo di scrittura dei gauge (`notifyhub_tenant_storage_bytes`) e' visibile solo finche' il
+worker che lo ha calcolato e' vivo.
 
 Metriche definite in `app/core/metrics.py`:
 
