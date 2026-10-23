@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -43,6 +43,13 @@ class AuditEvent(Base, UUIDPrimaryKeyMixin):
             "occurred_at",
         ),
         Index("ix_audit_events_tenant_id_action_occurred_at", "tenant_id", "action", "occurred_at"),
+        # GIN sull'array notification_ids del contesto (migrazione 0016): filtro per notifica.
+        Index(
+            "ix_audit_events_context_notification_ids",
+            text("(context -> 'notification_ids')"),
+            postgresql_using="gin",
+            postgresql_ops={"(context -> 'notification_ids')": "jsonb_path_ops"},
+        ),
     )
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)

@@ -117,6 +117,7 @@ services:
     environment:
       <<: *db_env
       NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST: ${NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST:-hooks.slack.com,chat.googleapis.com}
+      NOTIFYHUB_WEBHOOK_INSECURE_HTTP_HOSTS: ${NOTIFYHUB_WEBHOOK_INSECURE_HTTP_HOSTS:-}
     expose:
       - "8000"
       - "9100"  # /metrics, mai instradata da nginx (spec 10.4)

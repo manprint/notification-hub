@@ -11,6 +11,7 @@ import uuid
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_claims, db, require_admin
@@ -37,6 +38,9 @@ from app.services.severity import InvalidPatternError, compile_pattern
 from app.services.severity_presets import (
     BUILTIN_PRESETS,
     PRIORITY_STEP,
+    BuiltinNameTakenError,
+    BuiltinRetiredError,
+    builtin_keys_con_nome_occupato,
     reset_preset_to_builtin,
     sync_builtin_presets,
 )
@@ -203,14 +207,17 @@ async def sync_builtin(
     """Installa i preset del catalogo che mancano a questo tenant.
 
     Non tocca le copie gia presenti, nemmeno se modificate: e un'operazione
-    additiva, ripetibile senza effetti collaterali.
+    additiva, ripetibile senza effetti collaterali. Un predefinito il cui nome
+    e gia usato da un preset del tenant viene saltato e segnalato in `skipped`.
     """
     tenant_id = uuid.UUID(claims.tid)
     before = {spec.key for spec in BUILTIN_PRESETS}
+    saltati = await builtin_keys_con_nome_occupato(session, tenant_id)
     installed = await sync_builtin_presets(session, tenant_id)
     return SyncBuiltinPresetsOut(
         installed=installed,
-        already_present=sorted(before - set(installed)),
+        already_present=sorted(before - set(installed) - set(saltati)),
+        skipped=saltati,
     )
 
 
@@ -276,6 +283,7 @@ async def delete_preset(
     regole, senza restare con un riferimento morto."""
     preset = await _get_preset_or_404(session, uuid.UUID(claims.tid), preset_id)
     await session.delete(preset)
+    await session.flush()
 
 
 @router.post("/severity-presets/{preset_id}/reset", response_model=SeverityPresetDetailOut)
@@ -295,6 +303,23 @@ async def reset_preset(
             type=PROBLEM_TYPES["conflict"],
             title="Conflict",
             detail="This preset was not created from a builtin one: there is nothing to restore.",
+        ) from exc
+    except BuiltinRetiredError as exc:
+        raise Problem(
+            status=409,
+            type=PROBLEM_TYPES["conflict"],
+            title="Conflict",
+            detail=(
+                f"The builtin preset '{exc.args[0]}' is no longer in the catalog: "
+                "there is nothing to restore."
+            ),
+        ) from exc
+    except BuiltinNameTakenError as exc:
+        raise Problem(
+            status=409,
+            type=PROBLEM_TYPES["conflict"],
+            title="Conflict",
+            detail=f"A preset named '{exc.args[0]}' already exists.",
         ) from exc
     return await _detail(session, preset)
 
@@ -349,24 +374,45 @@ async def create_preset_rule(
     _validate_pattern(body.pattern, body.case_insensitive)
 
     if body.priority is None:
-        priority = await _next_rule_priority(session, preset.id)
+        # Priorita automatica: come per le regole dei receiver, un conflitto concorrente
+        # si risolve ricalcolando una volta, senza un 409 per una scelta non fatta.
+        rule = _nuova_regola_preset(
+            tenant_id, preset.id, body, await _next_rule_priority(session, preset.id)
+        )
+        try:
+            async with session.begin_nested():
+                session.add(rule)
+                await session.flush()
+        except IntegrityError:
+            rule = _nuova_regola_preset(
+                tenant_id, preset.id, body, await _next_rule_priority(session, preset.id)
+            )
+            session.add(rule)
+            await session.flush()
     else:
-        priority = body.priority
-        await _assert_rule_priority_free(session, preset.id, priority)
+        await _assert_rule_priority_free(session, preset.id, body.priority)
+        rule = _nuova_regola_preset(tenant_id, preset.id, body, body.priority)
+        session.add(rule)
+        await session.flush()
+    return SeverityPresetRuleOut.model_validate(rule)
 
-    rule = SeverityPresetRule(
+
+def _nuova_regola_preset(
+    tenant_id: uuid.UUID,
+    preset_id: uuid.UUID,
+    body: SeverityPresetRuleCreate,
+    priority: int,
+) -> SeverityPresetRule:
+    return SeverityPresetRule(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
-        preset_id=preset.id,
+        preset_id=preset_id,
         priority=priority,
         pattern=body.pattern,
         case_insensitive=body.case_insensitive,
         severity=body.severity,
         enabled=body.enabled,
     )
-    session.add(rule)
-    await session.flush()
-    return SeverityPresetRuleOut.model_validate(rule)
 
 
 @router.put("/severity-presets/{preset_id}/rules/order", response_model=list[SeverityPresetRuleOut])
@@ -467,3 +513,4 @@ async def delete_preset_rule(
 ) -> None:
     rule = await _get_preset_rule_or_404(session, uuid.UUID(claims.tid), rule_id)
     await session.delete(rule)
+    await session.flush()

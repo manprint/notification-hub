@@ -80,6 +80,7 @@ class ReceiverSeverityPreset(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             "receiver_id",
             "position",
         ),
+        Index("ix_receiver_severity_presets_preset_id", "preset_id"),
     )
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)

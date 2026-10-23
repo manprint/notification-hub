@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import ForeignKey, UniqueConstraint
+from sqlalchemy import ForeignKey, Index, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -13,10 +13,13 @@ class GroupChannelBinding(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         UniqueConstraint(
             "group_id", "channel_id", name="uq_group_channel_bindings_group_id_channel_id"
         ),
+        Index("ix_group_channel_bindings_channel_id", "channel_id"),
     )
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
-    group_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("groups.id"), nullable=False)
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), nullable=False
+    )
     channel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("delivery_channels.id"), nullable=False
     )
@@ -30,10 +33,13 @@ class ReceiverChannelOverride(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         UniqueConstraint(
             "receiver_id", "channel_id", name="uq_receiver_channel_overrides_receiver_id_channel_id"
         ),
+        Index("ix_receiver_channel_overrides_channel_id", "channel_id"),
     )
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
-    receiver_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("receivers.id"), nullable=False)
+    receiver_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("receivers.id", ondelete="CASCADE"), nullable=False
+    )
     channel_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("delivery_channels.id"), nullable=False
     )

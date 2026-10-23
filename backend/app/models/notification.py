@@ -10,6 +10,7 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    desc,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -33,13 +34,29 @@ from app.db.types import (
 class Notification(Base, UUIDPrimaryKeyMixin):
     __tablename__ = "notifications"
     __table_args__ = (
-        Index("ix_notifications_tenant_id_received_at_id", "tenant_id", "received_at", "id"),
+        Index(
+            "ix_notifications_tenant_id_received_at_id",
+            "tenant_id",
+            desc("received_at"),
+            desc("id"),
+        ),
         Index(
             "ix_notifications_tenant_id_receiver_id_received_at_id",
             "tenant_id",
             "receiver_id",
-            "received_at",
-            "id",
+            desc("received_at"),
+            desc("id"),
+        ),
+        # FK di receivers con ON DELETE CASCADE: senza indice in testa a receiver_id
+        # ogni cancellazione di receiver farebbe una sequential scan di notifications.
+        Index("ix_notifications_receiver_id", "receiver_id"),
+        # Ricerca nel contenuto completo (migrazione 0015): GIN trigram sulla stessa
+        # espressione usata dalla query, unica forma che il planner riconosce.
+        Index(
+            "ix_notifications_content_trgm",
+            text("(COALESCE(content, content_preview))"),
+            postgresql_using="gin",
+            postgresql_ops={"(COALESCE(content, content_preview))": "gin_trgm_ops"},
         ),
         Index(
             "ix_notifications_tenant_id_status",

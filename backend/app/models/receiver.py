@@ -13,6 +13,8 @@ class Receiver(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "receivers"
     __table_args__ = (
         Index("ix_receivers_tenant_id_group_id", "tenant_id", "group_id"),
+        # FK con ON DELETE CASCADE: la cancellazione di un gruppo la usa per trovare i receiver.
+        Index("ix_receivers_group_id", "group_id"),
         # Soglia e severity della durata vivono insieme: una soglia senza
         # severity non saprebbe cosa assegnare, una severity senza soglia non
         # scatterebbe mai. Il vincolo tiene fuori dal database lo stato mezzo

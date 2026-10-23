@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_claims, db, require_admin, require_member
@@ -397,6 +398,8 @@ async def delete_receiver(
     receiver = await _get_receiver_or_404(session, uuid.UUID(claims.tid), receiver_id)
     await assert_group_access(session, claims, receiver.group_id, write=True)
     await session.delete(receiver)
+    # Stesso motivo di delete_group: il flush porta gli errori di FK dentro la richiesta.
+    await session.flush()
 
 
 @router.post("/receivers/{receiver_id}/rotate-slug", response_model=ReceiverOut)
@@ -561,12 +564,37 @@ async def create_severity_rule(
         ) from exc
 
     if body.priority is None:
-        priority = await _next_priority(session, tenant_id, receiver_id)
+        # Priorita automatica: una richiesta concorrente puo aver preso lo stesso numero.
+        # Se il vincolo scatta si ricalcola e si riprova una volta, senza un 409 per una
+        # scelta che l'utente non ha fatto.
+        rule = _nuova_regola(
+            tenant_id, receiver_id, body, await _next_priority(session, tenant_id, receiver_id)
+        )
+        try:
+            async with session.begin_nested():
+                session.add(rule)
+                await session.flush()
+        except IntegrityError:
+            rule = _nuova_regola(
+                tenant_id, receiver_id, body, await _next_priority(session, tenant_id, receiver_id)
+            )
+            session.add(rule)
+            await session.flush()
     else:
-        priority = body.priority
-        await _assert_priority_free(session, tenant_id, receiver_id, priority)
+        await _assert_priority_free(session, tenant_id, receiver_id, body.priority)
+        rule = _nuova_regola(tenant_id, receiver_id, body, body.priority)
+        session.add(rule)
+        await session.flush()
+    return SeverityRuleOut.model_validate(rule)
 
-    rule = SeverityRule(
+
+def _nuova_regola(
+    tenant_id: uuid.UUID,
+    receiver_id: uuid.UUID,
+    body: SeverityRuleCreate,
+    priority: int,
+) -> SeverityRule:
+    return SeverityRule(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
         receiver_id=receiver_id,
@@ -576,9 +604,6 @@ async def create_severity_rule(
         severity=body.severity,
         enabled=body.enabled,
     )
-    session.add(rule)
-    await session.flush()
-    return SeverityRuleOut.model_validate(rule)
 
 
 async def _get_rule_or_404(
@@ -703,6 +728,7 @@ async def delete_severity_rule(
     receiver = await _get_receiver_or_404(session, tenant_id, rule.receiver_id)
     await assert_group_access(session, claims, receiver.group_id, write=True)
     await session.delete(rule)
+    await session.flush()
 
 
 @router.post("/receivers/{receiver_id}/test-severity", response_model=TestSeverityOut)
@@ -811,8 +837,15 @@ async def replay_severity_rules(
         # replay li rimette in gioco con le politiche di adesso. Senza, una
         # notifica decisa dall'exit code risulterebbe sempre "cambiata" solo
         # perche il replay non sapeva che il comando era fallito.
+        # Una severity dichiarata dal mittente (X-Severity o ?severity=) vince su ogni
+        # regola, come al momento dell'ingestione: il replay la riprende cosi com'e,
+        # senza far comparire un "cambia" che nessuna regola ha prodotto.
         resolution = await resolve_severity_async(
-            header_severity=None,
+            header_severity=(
+                notification.severity
+                if notification.severity_source == SeveritySource.EXPLICIT
+                else None
+            ),
             query_severity=None,
             rules=rules,
             content=content,
@@ -1002,32 +1035,40 @@ async def group_delete_impact(
     tenant_id = uuid.UUID(claims.tid)
     await assert_group_access(session, claims, group_id, write=False)
 
-    receivers_result = await session.execute(
-        select(Receiver.id).where(Receiver.group_id == group_id, Receiver.tenant_id == tenant_id)
+    # Solo conteggi, in SQL: elencare gli id di ogni notifica del gruppo in Python
+    # e rimandarli come parametri legati supererebbe il limite di 32767 parametri
+    # del protocollo Postgres su un gruppo grande, con un 500 sulla preflight.
+    # I receiver si passano come sottoquery per la stessa ragione.
+    receivers_of_group = select(Receiver.id).where(
+        Receiver.group_id == group_id, Receiver.tenant_id == tenant_id
     )
-    receiver_ids = [row[0] for row in receivers_result.all()]
-
-    if not receiver_ids:
+    receivers_count = await session.scalar(
+        select(func.count()).select_from(receivers_of_group.subquery())
+    )
+    if not receivers_count:
         return DeleteImpactOut(receivers=0, notifications=0, deliveries=0)
 
-    notifications_result = await session.execute(
-        select(Notification.id).where(
-            Notification.receiver_id.in_(receiver_ids), Notification.tenant_id == tenant_id
+    notifications_count = await session.scalar(
+        select(func.count())
+        .select_from(Notification)
+        .where(
+            Notification.receiver_id.in_(receivers_of_group),
+            Notification.tenant_id == tenant_id,
         )
     )
-    notification_ids = [row[0] for row in notifications_result.all()]
-
-    deliveries_count = 0
-    if notification_ids:
-        deliveries_result = await session.execute(
-            select(Delivery.id).where(
-                Delivery.notification_id.in_(notification_ids), Delivery.tenant_id == tenant_id
-            )
+    deliveries_count = await session.scalar(
+        select(func.count())
+        .select_from(Delivery)
+        .join(Notification, Notification.id == Delivery.notification_id)
+        .where(
+            Notification.receiver_id.in_(receivers_of_group),
+            Notification.tenant_id == tenant_id,
+            Delivery.tenant_id == tenant_id,
         )
-        deliveries_count = len(deliveries_result.all())
+    )
 
     return DeleteImpactOut(
-        receivers=len(receiver_ids),
-        notifications=len(notification_ids),
-        deliveries=deliveries_count,
+        receivers=receivers_count,
+        notifications=notifications_count or 0,
+        deliveries=deliveries_count or 0,
     )

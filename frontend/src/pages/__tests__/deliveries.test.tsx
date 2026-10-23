@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import DeliveriesPage from "../DeliveriesPage";
 import { setRefreshToken } from "../../api/client";
 import { fixtureDeliveries } from "../../api/mocks/handlers";
@@ -291,5 +291,55 @@ describe("DeliveriesPage prossimo tentativo", () => {
 
     expect(await screen.findByText("archived", { selector: ".status-pill" })).toBeInTheDocument();
     expect(screen.getByText(/stato non riconosciuto/)).toBeInTheDocument();
+  });
+});
+
+describe("DeliveriesPage filtro canale del viewer", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setRefreshToken("refresh-token-fixture");
+    server.use(
+      http.get("/api/v1/auth/me", () =>
+        HttpResponse.json({
+          id: "u9",
+          email: "viewer@acme.test",
+          role: "viewer",
+          tenant_id: "t1",
+          tenant_name: "ACME",
+        }),
+      ),
+    );
+  });
+
+  afterEach(() => {
+    server.events.removeAllListeners();
+  });
+
+  it("il viewer filtra per canale senza chiedere /api/v1/channels", async () => {
+    let richiesteCanali = 0;
+    server.events.on("request:start", ({ request }) => {
+      if (new URL(request.url).pathname === "/api/v1/channels") richiesteCanali++;
+    });
+
+    renderWithProviders(<DeliveriesPage />);
+    await waitFor(() =>
+      expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument(),
+    );
+
+    const tendina = screen.getByLabelText("Canale", { selector: "select" });
+    expect(within(tendina).getByRole("option", { name: "Slack #ops" })).toBeInTheDocument();
+    expect(richiesteCanali).toBe(0);
+  });
+
+  it("il canale già filtrato resta nella tendina anche senza consegne", async () => {
+    server.use(
+      http.get("/api/v1/deliveries", () => HttpResponse.json({ deliveries: [], next_cursor: null })),
+    );
+
+    renderWithProviders(<DeliveriesPage />, ["/deliveries?channel_id=c9"]);
+    const tendina = await screen.findByLabelText("Canale", { selector: "select" });
+
+    expect(tendina).toHaveValue("c9");
+    expect(within(tendina).getByRole("option", { name: "Canale selezionato" })).toBeInTheDocument();
   });
 });

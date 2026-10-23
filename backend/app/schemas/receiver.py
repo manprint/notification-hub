@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Self
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.db.types import INT4_MAX, ReceiverStatus, Severity
 
@@ -215,6 +215,14 @@ class SeverityRuleReorderIn(BaseModel):
     voluto: il backend rinumera le priorita 10, 20, 30..."""
 
     rule_ids: list[uuid.UUID] = Field(min_length=1)
+
+    @field_validator("rule_ids")
+    @classmethod
+    def _senza_duplicati(cls, valore: list[uuid.UUID]) -> list[uuid.UUID]:
+        # Un id ripetuto supererebbe il controllo sull'insieme e comparirebbe due volte.
+        if len(set(valore)) != len(valore):
+            raise ValueError("ogni regola compare una sola volta")
+        return valore
 
 
 class TestSeverityIn(BaseModel):

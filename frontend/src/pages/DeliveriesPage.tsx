@@ -33,6 +33,22 @@ const WAITING_RETRY: DeliveryStatus[] = ["pending", "failed"];
 
 const PAGE_SIZE = 100;
 
+// Canali che compaiono nelle consegne caricate, per il filtro del viewer. Se il
+// filtro attivo non ha righe, il canale selezionato resta comunque nella tendina.
+function opzioniCanaliDelleConsegne(
+  consegne: DeliveryOut[],
+  canaleSelezionato: string | undefined,
+): { id: string; name: string }[] {
+  const opzioni = new Map<string, string>();
+  for (const d of consegne) {
+    if (!opzioni.has(d.channel_id)) opzioni.set(d.channel_id, d.channel_name);
+  }
+  if (canaleSelezionato && !opzioni.has(canaleSelezionato)) {
+    opzioni.set(canaleSelezionato, "Canale selezionato");
+  }
+  return [...opzioni].map(([id, name]) => ({ id, name }));
+}
+
 export default function DeliveriesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const status = (searchParams.get("status") as DeliveryStatus | null) ?? undefined;
@@ -66,10 +82,17 @@ export default function DeliveriesPage() {
 
   const rows = data?.pages.flatMap((page) => page.deliveries) ?? [];
 
+  // La lista dei canali (URL mascherato, ultimo errore) e' riservata a member e
+  // superiori: il viewer non la chiede, e filtra per i canali delle consegne caricate.
+  const canVedereCanali = hasRole(role, MEMBER_ROLES);
   const { data: channels } = useQuery<DeliveryChannelOut[], ApiError>({
     queryKey: ["channels"],
     queryFn: () => apiGet<DeliveryChannelOut[]>("/api/v1/channels"),
+    enabled: canVedereCanali,
   });
+  const opzioniCanale = canVedereCanali
+    ? (channels ?? []).map((c) => ({ id: c.id, name: c.name }))
+    : opzioniCanaliDelleConsegne(rows, channelId);
 
   function setParam(key: string, value: string) {
     setSearchParams((prev) => {
@@ -216,7 +239,7 @@ export default function DeliveriesPage() {
               onChange={(event) => setParam("channel_id", event.target.value)}
             >
               <option value="">Tutti i canali</option>
-              {channels?.map((c) => (
+              {opzioniCanale.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
                 </option>
