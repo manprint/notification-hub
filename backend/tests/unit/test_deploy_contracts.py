@@ -61,6 +61,21 @@ def test_xff_del_client_arriva_all_app_con_il_nginx_del_compose():
 
 
 @pytest.mark.unit
+def test_uvicorn_legge_il_proxy_fidato_dal_compose(monkeypatch):
+    # Il CLI di uvicorn non passa il valore: lo prende da FORWARDED_ALLOW_IPS, quindi il test
+    # controlla la lettura reale e non solo il middleware costruito a mano.
+    from uvicorn import Config
+
+    fidati = _compose()["services"]["api"]["environment"]["FORWARDED_ALLOW_IPS"]
+    monkeypatch.setenv("FORWARDED_ALLOW_IPS", fidati)
+
+    async def app(scope, receive, send) -> None:  # type: ignore[no-untyped-def]
+        return None
+
+    assert Config(app=app).forwarded_allow_ips == fidati
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("servizio", ["api", "worker"])
 def test_api_e_worker_condividono_la_directory_delle_metriche(servizio):
     compose = _compose()
