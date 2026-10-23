@@ -26,6 +26,11 @@ none() {
     ! compgen -G "$1" >/dev/null
 }
 
+# none_match REGEX FILE: vero se nessuna riga del file corrisponde.
+none_match() {
+    ! grep -Eq "$1" "$2"
+}
+
 # Estrae una funzione da uno script senza eseguirlo (lo script chiamerebbe boot).
 extract_fn() {
     local name="$1" file="$2"
