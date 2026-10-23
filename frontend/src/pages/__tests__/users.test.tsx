@@ -126,6 +126,43 @@ describe("UsersPage", () => {
     });
   });
 
+  it("dopo una modifica le righe restano nell'ordine per email che manda l'API", async () => {
+    // L'API ordina per email: la tabella mostra quell'ordine, anche dopo che una
+    // riga è cambiata e l'elenco è stato riletto.
+    const [owner, member] = fixtureUsers;
+    let ruoloMember = member.role;
+    server.use(
+      http.get("/api/v1/users", () =>
+        HttpResponse.json([
+          { ...member, id: "44444444-4444-4444-4444-444444444444", email: "admin@acme.test", role: "admin" },
+          { ...member, role: ruoloMember },
+          owner,
+          { ...member, id: "55555555-5555-5555-5555-555555555555", email: "viewer@acme.test", role: "viewer" },
+        ]),
+      ),
+      http.patch("/api/v1/users/:id", async ({ request }) => {
+        ruoloMember = ((await request.json()) as { role: string }).role;
+        return HttpResponse.json({});
+      }),
+    );
+    const emailNelleRighe = () =>
+      screen
+        .getAllByRole("row")
+        .map((riga) => riga.textContent?.match(/[\w.]+@acme\.test/)?.[0])
+        .filter(Boolean);
+    const ordine = ["admin@acme.test", "member@acme.test", "owner@acme.test", "viewer@acme.test"];
+    const user = userEvent.setup();
+    await renderComeOwner();
+    expect(emailNelleRighe()).toEqual(ordine);
+
+    await user.selectOptions(screen.getByLabelText("Ruolo di member@acme.test"), "viewer");
+    await waitFor(() => expect(ruoloMember).toBe("viewer"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Ruolo di member@acme.test")).toHaveValue("viewer"),
+    );
+    expect(emailNelleRighe()).toEqual(ordine);
+  });
+
   it("il proprio ruolo si cambia solo dopo una conferma, e poi la sessione si ricarica", async () => {
     const patches: unknown[] = [];
     let meCalls = 0;
