@@ -12,8 +12,8 @@
 # cifra i webhook dei canali. Senza la chiave del backup i canali restano nel
 # database ma non si decifrano. Il ripristino quindi:
 #   - rifiuta se manca l'archivio (--senza-configurazione accetta il rischio);
-#   - rifiuta se NOTIFYHUB_SECRET_KEY e' fissata nell'ambiente del container con
-#     un valore diverso da quello del backup;
+#   - rifiuta se NOTIFYHUB_SECRET_KEY e' fissata nell'ambiente del container o in
+#     overrides.env con un valore diverso da quello del backup;
 #   - riscrive in secrets.env la sola chiave del backup, se diversa.
 # Il container va riavviato dopo un ripristino che cambia la chiave: l'API e i
 # worker hanno ancora in memoria quella vecchia.
@@ -100,10 +100,12 @@ else
     ARCHIVE_KEY="$(secret_value "${CONFIG_WORK}/config/secrets.env" NOTIFYHUB_SECRET_KEY)"
     [ -n "${ARCHIVE_KEY}" ] || die "archivio di configurazione senza NOTIFYHUB_SECRET_KEY: ${CONFIG_ARCHIVE}"
 
-    # Docker exec eredita l'ambiente del container: una chiave fissata li' vince
-    # su secrets.env al riavvio, quindi non si puo' ripristinare quella del backup.
-    if [ -n "${NOTIFYHUB_SECRET_KEY:-}" ] && [ "${NOTIFYHUB_SECRET_KEY}" != "${ARCHIVE_KEY}" ]; then
-        die "NOTIFYHUB_SECRET_KEY e' impostata nell'ambiente del container con un valore diverso da quello del backup: rimuoverla dall'ambiente e riprovare"
+    # Una chiave fissata nell'ambiente del container (docker exec lo eredita) o in
+    # overrides.env vince su secrets.env al riavvio: senza rimuoverla non si
+    # ripristina quella del backup.
+    PINNED_KEY="${NOTIFYHUB_SECRET_KEY:-$(secret_value "${OVERRIDES_FILE}" NOTIFYHUB_SECRET_KEY)}"
+    if [ -n "${PINNED_KEY}" ] && [ "${PINNED_KEY}" != "${ARCHIVE_KEY}" ]; then
+        die "NOTIFYHUB_SECRET_KEY e' fissata nell'ambiente del container o in ${OVERRIDES_FILE} con un valore diverso da quello del backup: rimuoverla e riprovare"
     fi
     if [ "$(secret_value "${SECRETS_FILE}" NOTIFYHUB_SECRET_KEY)" != "${ARCHIVE_KEY}" ]; then
         KEY_CHANGE=1
