@@ -1,7 +1,9 @@
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 
+from app.db.types import ChannelType
 from app.outbound.formatters.duration import duration_note, format_duration_ms
 from app.outbound.formatters.google_chat import GOOGLE_CHAT_BODY_LIMIT, build_google_chat_payload
 from app.outbound.formatters.slack import SLACK_BODY_LIMIT, build_slack_payload
@@ -9,8 +11,46 @@ from app.outbound.sender import (
     MAX_ATTEMPTS,
     MAX_RETRY_AFTER_SECONDS,
     calculate_retry_delay,
+    WebhookResult,
     parse_retry_after,
+    send_webhook_sync,
 )
+
+
+def _invia_con_risposta(
+    monkeypatch: pytest.MonkeyPatch, status: int, corpo: str
+) -> WebhookResult:
+    def _risposta(*args: object, **kwargs: object) -> httpx.Response:
+        return httpx.Response(status, text=corpo)
+
+    monkeypatch.setattr(httpx.Client, "post", _risposta)
+    return send_webhook_sync(
+        ChannelType.SLACK,
+        "https://hooks.slack.com/services/T000/B000/XXXX",
+        receiver_name="r",
+        severity="error",
+        content_preview="boom",
+        content_size=4,
+        notification_url="https://notifyhub.example.com/notifications/x",
+    )
+
+
+@pytest.mark.unit
+def test_esito_di_errore_lungo_dichiara_il_troncamento(monkeypatch):
+    """Prima il corpo del provider veniva tagliato a 200 caratteri senza segno:
+    in Diagnostica l'esito finiva a meta' di un token, sembrava completo."""
+    corpo = "x" * 250
+
+    result = _invia_con_risposta(monkeypatch, 500, corpo)
+
+    assert result.error == "HTTP 500: " + "x" * 200 + "…"
+
+
+@pytest.mark.unit
+def test_esito_di_errore_corto_resta_intero_senza_segno(monkeypatch):
+    result = _invia_con_risposta(monkeypatch, 400, "invalid_payload")
+
+    assert result.error == "HTTP 400: invalid_payload"
 
 
 @pytest.mark.unit
