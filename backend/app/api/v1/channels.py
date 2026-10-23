@@ -115,7 +115,7 @@ async def _get_receiver_or_404(
 
 @router.get("/channels", response_model=list[DeliveryChannelOut])
 async def list_channels(
-    claims: AccessClaims = Depends(current_claims),  # noqa: B008
+    claims: AccessClaims = Depends(require_member),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> list[DeliveryChannelOut]:
     result = await session.execute(
@@ -149,7 +149,7 @@ async def create_channel(
 @router.get("/channels/{channel_id}", response_model=DeliveryChannelOut)
 async def get_channel(
     channel_id: uuid.UUID,
-    claims: AccessClaims = Depends(current_claims),  # noqa: B008
+    claims: AccessClaims = Depends(require_member),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> DeliveryChannelOut:
     channel = await _get_channel_or_404(session, uuid.UUID(claims.tid), channel_id)
