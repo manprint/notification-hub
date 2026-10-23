@@ -81,6 +81,16 @@ STUB_PSQL_STDERR='ERROR:  relation "t_demo" already exists' \
 check "chiave cambiata ed errore SQL: nessun programma riavviato" \
     none_match ' start ' "${SANDBOX}/supervisor.calls"
 
+# Sessioni ancora aperte: il ripristino si ferma prima di caricare il dump. Il database e'
+# quello di prima, quindi la chiave non cambia e i servizi ripartono come sempre.
+reset_case
+STUB_PSQL_COUNT=1 "${RESTORE}" "${DUMP}" --yes >/dev/null 2>&1
+check "sessioni aperte prima del caricamento: esito non zero" [ "$?" -ne 0 ]
+check "sessioni aperte prima del caricamento: servizi riavviati" \
+    grep -q ' start nginx api metrics worker beat$' "${SANDBOX}/supervisor.calls"
+check "sessioni aperte prima del caricamento: chiave locale invariata" secret_is "${SECRETS}" "${K1}"
+check "sessioni aperte prima del caricamento: database non toccato" [ ! -f "${SANDBOX}/psql-input.sql" ]
+
 # --- errore SQL inatteso: il ripristino non deve dichiararsi riuscito --------
 reset_case
 STUB_PSQL_STDERR='ERROR:  relation "t_demo" already exists' \

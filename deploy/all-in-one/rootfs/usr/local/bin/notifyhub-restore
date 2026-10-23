@@ -38,18 +38,22 @@ BENIGN_ERRORS='current user cannot be dropped|role "postgres" already exists'
 
 CONFIG_WORK=""
 SERVICES_STOPPED=0
+# Vero dal momento in cui il dump viene caricato: da qui il database contiene righe
+# ripristinate, e con una chiave diversa i servizi non devono ripartire (vedi sotto).
+DB_LOADED=0
 
 # Riavvia i servizi applicativi se li abbiamo fermati, anche quando il ripristino
 # esce per un errore: altrimenti un die lascerebbe l'applicazione spenta.
-# Con una chiave cambiata non si riavviano: un programma ripartito qui erediterebbe
-# la chiave vecchia dall'ambiente di supervisord, e il worker marcherebbe dead le
-# delivery ripristinate (webhook non decifrabile). Ripartono col container, che
-# rilegge secrets.env all'avvio.
+# Con una chiave cambiata e il database gia' caricato non si riavviano: un programma
+# ripartito qui erediterebbe la chiave vecchia dall'ambiente di supervisord, e il
+# worker marcherebbe dead le delivery ripristinate (webhook non decifrabile). Ripartono
+# col container, che rilegge secrets.env all'avvio. Se il dump non e' stato caricato
+# il database e' ancora quello di prima, con la chiave di prima: si riparte come sempre.
 restart_services() {
     [ "${SERVICES_STOPPED}" = "1" ] || return 0
     SERVICES_STOPPED=0
-    if [ "${KEY_CHANGE:-0}" = "1" ]; then
-        log_warn "servizi applicativi lasciati fermi: riavviare il container per caricare la chiave ripristinata"
+    if [ "${KEY_CHANGE:-0}" = "1" ] && [ "${DB_LOADED}" = "1" ]; then
+        log_warn "servizi applicativi lasciati fermi: il database e' stato ripristinato con una chiave diversa, riavviare il container"
         return 0
     fi
     log_info "riavvio i servizi applicativi"
@@ -174,6 +178,7 @@ fi
 log_info "ripristino da ${DUMP}"
 RESTORE_LOG="${LOG_DIR}/init/restore-$(date -u +%Y%m%dT%H%M%SZ).log"
 RESTORE_ERRORS=0
+DB_LOADED=1
 if ! gzip -dc "${DUMP}" | as_postgres "${PG_BIN}/psql" --no-psqlrc -h "${PG_SOCKET_DIR}" -U postgres -d postgres \
         -v ON_ERROR_STOP=0 -q > "${RESTORE_LOG}" 2>&1; then
     log_error "psql ha segnalato errori"
