@@ -75,7 +75,8 @@ def test_ogni_task_pianificato_o_instradato_ha_una_coda_consumata_dal_worker():
     }
     task_names = set(EXPECTED_TASK_NAMES)
     task_names.update(entry["task"] for entry in celery_app.conf.beat_schedule.values())
-    assert celery_app.conf.task_default_queue in consumed["docker-compose"]
+    for deployment, queues in consumed.items():
+        assert celery_app.conf.task_default_queue in queues, deployment
     for name in sorted(task_names):
         queue = celery_app.amqp.router.route({}, name)["queue"].name
         for deployment, queues in consumed.items():

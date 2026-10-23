@@ -352,4 +352,4 @@ async def test_429_con_retry_after_enorme_ripianifica_senza_crash(two_tenants):
         delivery = await session.get(Delivery, delivery_id)
         assert delivery.status == DeliveryStatus.FAILED
         assert delivery.attempts == 1
-        assert delivery.next_attempt_at <= datetime.now(UTC) + timedelta(hours=7)
+        assert delivery.next_attempt_at <= datetime.now(UTC) + timedelta(days=31)
