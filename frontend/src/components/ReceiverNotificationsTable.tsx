@@ -10,7 +10,7 @@ import type {
 import { useAction } from "../hooks/useAction";
 import { type NotificationFilters, useNotifications } from "../hooks/useNotifications";
 import { useSession } from "../hooks/useSession";
-import { formatDate, formatTime } from "../lib/format";
+import { formatBytes, formatDate, formatTime } from "../lib/format";
 import { MEMBER_ROLES, hasRole } from "../lib/roles";
 import { isSurveillanceSource, phaseLabel, severitySourceLabel } from "../lib/severitySource";
 import DataTable, { type DataTableColumn } from "./DataTable";
@@ -115,7 +115,9 @@ export default function ReceiverNotificationsTable({
           <Link to={`/notifications/${n.id}`}>Apri</Link>
           {n.content_normalized && <span className="status-pill">contenuto normalizzato</span>}
           {n.storage_backend === "object" && (
-            <span className="status-pill">{n.content_size} byte su object storage</span>
+            <span className="status-pill" title={`${n.content_size} byte`}>
+              {formatBytes(n.content_size)} su object storage
+            </span>
           )}
         </div>
       ),

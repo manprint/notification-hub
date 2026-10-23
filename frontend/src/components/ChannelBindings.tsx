@@ -5,7 +5,7 @@ import type { ApiError, GroupChannelBindingOut, DeliveryChannelOut, Severity } f
 import ErrorBanner from "../components/ErrorBanner";
 import SaveIndicator from "./SaveIndicator";
 import { useAction } from "../hooks/useAction";
-import { channelTypeLabel } from "../lib/format";
+import { channelTypeLabel, severityLabel } from "../lib/format";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
 
@@ -137,12 +137,12 @@ export default function ChannelBindings({ groupId, channels }: ChannelBindingsPr
                         <option value="">Non collegato</option>
                         {suspended && (
                           <option value={DISABLED_BINDING} disabled>
-                            Disattivato (soglia {binding.min_severity})
+                            Disattivato (soglia {severityLabel(binding.min_severity)})
                           </option>
                         )}
                         {SEVERITIES.map((s) => (
                           <option key={s} value={s}>
-                            {s}
+                            {severityLabel(s)}
                           </option>
                         ))}
                       </select>

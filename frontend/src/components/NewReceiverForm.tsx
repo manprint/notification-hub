@@ -5,6 +5,7 @@ import type { Severity } from "../api/types";
 import ErrorBanner from "./ErrorBanner";
 import Field, { RequiredLegend, fieldAria } from "./Field";
 import { useAction } from "../hooks/useAction";
+import { severityLabel } from "../lib/format";
 import { invalidateReceiverLists } from "../lib/receiverCache";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
@@ -72,7 +73,7 @@ export default function NewReceiverForm({ groupId }: { groupId: string }) {
           >
             {SEVERITIES.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {severityLabel(s)}
               </option>
             ))}
           </select>

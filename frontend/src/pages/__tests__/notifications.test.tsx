@@ -169,6 +169,17 @@ describe("NotificationsPage", () => {
     });
   });
 
+  it("il filtro per severity elenca le etichette italiane, non i codici dell'API", async () => {
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+
+    const select = await screen.findByLabelText("Severity minima");
+    const nomi = within(select)
+      .getAllByRole("option")
+      .map((opzione) => opzione.textContent);
+    expect(nomi).toEqual(["Qualsiasi severity", "Critica", "Errore", "Attenzione", "Info", "Debug"]);
+    expect(select.querySelector('option[value="critical"]')).not.toBeNull();
+  });
+
   it("T-GRP7 test_bulk_read_rispetta_il_receiver: 'segna tutte come lette' passa il receiver filtrato", async () => {
     let body: Record<string, unknown> | null = null;
     server.use(
@@ -555,7 +566,7 @@ describe("NotificationsPage", () => {
 
     await screen.findByRole("table");
 
-    expect(screen.getByText("Errore").closest(".severity-badge")).not.toBeNull();
+    expect(screen.getByText("Errore", { selector: ".severity-badge" })).not.toBeNull();
 
     const rigaN1 = riga("n1");
     expect(within(rigaN1).getByText("Verificata").closest(".status-cell")).not.toBeNull();

@@ -116,7 +116,7 @@ describe("ChannelBindings", () => {
     const tendina = await within(await screen.findByRole("table")).findByLabelText(
       "Soglia di Slack #ops",
     );
-    expect(tendina).toHaveDisplayValue("Disattivato (soglia error)");
+    expect(tendina).toHaveDisplayValue("Disattivato (soglia Errore)");
     expect(within(rigaDi("Slack #ops")).getByText(/nessun inoltro/)).toBeInTheDocument();
 
     // Scegliere una soglia lo riattiva.

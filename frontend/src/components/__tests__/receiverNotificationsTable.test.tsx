@@ -98,7 +98,8 @@ describe("ReceiverNotificationsTable", () => {
     const cella = screen.getByRole("link", { name: "Apri" }).closest(".content-cell") as HTMLElement;
     expect(cella).not.toBeNull();
     expect(within(cella).getByText("contenuto normalizzato")).toBeInTheDocument();
-    expect(within(cella).getByText("2097152 byte su object storage")).toBeInTheDocument();
+    expect(within(cella).getByText("2 MB su object storage")).toBeInTheDocument();
+    expect(within(cella).getByTitle("2097152 byte")).toBeInTheDocument();
   });
 
   it("T-RCV4 l'intestazione porta il nome del receiver e linka al suo dettaglio", async () => {
