@@ -96,10 +96,8 @@ export default function ConfirmDialog({
             />
           </div>
         )}
+        {/* Stesso ordine dei form: l'azione primaria prima, poi Annulla. */}
         <div className="form-actions">
-          <button type="button" disabled={pending} onClick={onCancel}>
-            Annulla
-          </button>
           <button
             ref={confirmRef}
             type="button"
@@ -108,6 +106,9 @@ export default function ConfirmDialog({
             onClick={() => void handleConfirm()}
           >
             {confirmLabel}
+          </button>
+          <button type="button" disabled={pending} onClick={onCancel}>
+            Annulla
           </button>
         </div>
       </div>

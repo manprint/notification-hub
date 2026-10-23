@@ -133,6 +133,8 @@ export function parseDurationInput(
  *  vuoti e il minuto, che e la scala dei job messi in cron. */
 export function splitDuration(seconds: number | null): { amount: string; unit: DurationUnit } {
   if (seconds === null) return { amount: "", unit: "m" };
+  // Zero si legge come zero secondi: divisibile per ogni unità, ma "0 giorni" è falso.
+  if (seconds === 0) return { amount: "0", unit: "s" };
   if (seconds % 86400 === 0) return { amount: String(seconds / 86400), unit: "g" };
   if (seconds % 3600 === 0) return { amount: String(seconds / 3600), unit: "h" };
   if (seconds % 60 === 0) return { amount: String(seconds / 60), unit: "m" };

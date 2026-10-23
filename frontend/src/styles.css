@@ -932,20 +932,6 @@ fieldset.form-row {
   margin-top: var(--space-2);
 }
 
-.check-list label {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  font-size: var(--text-base);
-}
-
-.check-list input[type="checkbox"] {
-  width: auto;
-  min-height: 0;
-  margin-top: var(--space-1);
-  padding: 0;
-}
-
 /* Barra di filtri e azioni: le voci hanno la propria etichetta, così una
    tendina "Tutti gli stati" si capisce anche quando è su un valore. */
 .toolbar {
@@ -1125,6 +1111,18 @@ fieldset.form-row {
 .error-banner {
   background: var(--color-danger-soft);
   border: 1px solid var(--color-critical);
+  color: var(--color-text);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  margin-bottom: var(--space-3);
+  font-size: var(--text-base);
+}
+
+/* Avviso che non è un errore (stato voluto, non un'operazione fallita): stessa
+   forma del banner di errore, tono giallo dello stato «warn». */
+.warning-banner {
+  background: var(--color-warning-soft);
+  border: 1px solid var(--color-warning-border);
   color: var(--color-text);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius);

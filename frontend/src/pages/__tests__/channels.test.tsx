@@ -165,4 +165,118 @@ describe("ChannelsPage override", () => {
     const values = Array.from(typeField.querySelectorAll("option")).map((o) => o.value);
     expect(values).toEqual(["slack", "google_chat"]);
   });
+
+  it("T-CH4 la modifica non si chiude con Esc mentre il salvataggio è in corso", async () => {
+    setRefreshToken("refresh-token-fixture");
+    const user = userEvent.setup();
+    let rispondi: () => void = () => undefined;
+    server.use(
+      http.patch("/api/v1/channels/c1", async () => {
+        await new Promise<void>((resolve) => {
+          rispondi = resolve;
+        });
+        return HttpResponse.json({});
+      }),
+    );
+    renderWithProviders(<ChannelsPage />);
+
+    await user.click(await screen.findByRole("button", { name: "Modifica" }));
+    const dialogo = await screen.findByRole("dialog");
+    await user.click(within(dialogo).getByRole("button", { name: "Salva" }));
+    await waitFor(() =>
+      expect(within(dialogo).getByRole("button", { name: "Salvataggio…" })).toBeInTheDocument(),
+    );
+    await user.keyboard("{Escape}");
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(within(dialogo).getByRole("button", { name: "Annulla" })).toBeDisabled();
+    rispondi();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("T-CH5 un'eliminazione rifiutata lascia il dialogo aperto con l'errore", async () => {
+    setRefreshToken("refresh-token-fixture");
+    const user = userEvent.setup();
+    server.use(
+      http.delete("/api/v1/channels/c1", () =>
+        HttpResponse.json(
+          { type: "/problems/conflict", title: "Conflict", status: 409, detail: "Canale in uso." },
+          { status: 409 },
+        ),
+      ),
+    );
+    renderWithProviders(<ChannelsPage />);
+
+    await user.click(await screen.findByRole("button", { name: "Elimina" }));
+    const dialogo = screen.getByRole("dialog");
+    await user.type(within(dialogo).getByLabelText(/per confermare/), "Slack #ops");
+    await user.click(within(dialogo).getByRole("button", { name: "Elimina canale" }));
+
+    expect(await within(dialogo).findByText(/Canale in uso/)).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("T-CH6 il webhook di esempio segue il tipo, e il tipo è obbligatorio", async () => {
+    setRefreshToken("refresh-token-fixture");
+    const user = userEvent.setup();
+    renderWithProviders(<ChannelsPage />);
+
+    const tipo = await screen.findByLabelText(/^tipo$/i);
+    const webhook = screen.getByLabelText(/Webhook URL/);
+    expect(tipo).toBeRequired();
+    expect(webhook).toHaveAttribute("placeholder", "https://hooks.slack.com/services/…");
+
+    await user.selectOptions(tipo, "google_chat");
+    expect(webhook).toHaveAttribute("placeholder", "https://chat.googleapis.com/v1/spaces/…");
+  });
+
+  it("T-CH7 lo stato del canale si scrive con la maiuscola come le altre etichette", async () => {
+    setRefreshToken("refresh-token-fixture");
+    renderWithProviders(<ChannelsPage />);
+
+    expect(await screen.findByText("Attivo")).toHaveClass("status-pill");
+    expect(screen.queryByText("attivo")).not.toBeInTheDocument();
+  });
+
+  it("T-CH8 se la lista dei canali non si carica non dice «nessun canale configurato»", async () => {
+    setRefreshToken("refresh-token-fixture");
+    server.use(
+      http.get("/api/v1/channels", () =>
+        HttpResponse.json(
+          { type: "/problems/internal", title: "Internal", status: 500, detail: "Giù." },
+          { status: 500 },
+        ),
+      ),
+    );
+    renderWithProviders(<ChannelsPage />);
+
+    expect(
+      await screen.findByText("Elenco non disponibile per un errore di caricamento."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Nessun canale configurato.")).not.toBeInTheDocument();
+  });
+
+  it("T-CH9 gli override di un receiver in caricamento non dicono «nessun override»", async () => {
+    setRefreshToken("refresh-token-fixture");
+    const user = userEvent.setup();
+    let rispondi: () => void = () => undefined;
+    server.use(
+      http.get("/api/v1/receivers/r1/channels", async () => {
+        await new Promise<void>((resolve) => {
+          rispondi = resolve;
+        });
+        return HttpResponse.json([]);
+      }),
+    );
+    renderWithProviders(<ChannelsPage />);
+
+    await user.selectOptions(
+      await screen.findByLabelText(/^receiver$/i),
+      await screen.findByRole("option", { name: "Server Produzione / Backup notturno" }),
+    );
+    expect(await screen.findByText("Caricamento…")).toBeInTheDocument();
+    expect(screen.queryByText(/Nessun override per questo receiver/)).not.toBeInTheDocument();
+    rispondi();
+    expect(await screen.findByText(/Nessun override per questo receiver/)).toBeInTheDocument();
+  });
 });

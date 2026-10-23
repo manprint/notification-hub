@@ -56,7 +56,7 @@ export default function NewReceiverForm({ groupId }: { groupId: string }) {
           <input
             {...fieldAria("new-receiver-name", { error: nameError })}
             required
-            maxLength={120}
+            maxLength={255}
             value={name}
             onChange={(event) => setName(event.target.value)}
           />

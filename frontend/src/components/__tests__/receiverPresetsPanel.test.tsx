@@ -198,4 +198,47 @@ describe("ReceiverPresetsPanel", () => {
     expect(screen.queryByRole("button", { name: "Togli" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Applica Backup interni")).not.toBeInTheDocument();
   });
+  it("T-RPP1 i preset disponibili sono pulsanti «Applica», non caselle", async () => {
+    renderPanel();
+
+    const elenco = await screen.findByRole("list", { name: "Preset disponibili" });
+    expect(within(elenco).getByRole("button", { name: "Applica Backup interni" })).toBeEnabled();
+    expect(within(elenco).queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("T-RPP2 dopo un'applicazione rifiutata la lista dei preset si rilegge", async () => {
+    const user = userEvent.setup();
+    let letture = 0;
+    server.use(
+      http.get("/api/v1/receivers/r1/presets", () => {
+        letture += 1;
+        return HttpResponse.json([]);
+      }),
+      http.put("/api/v1/receivers/r1/presets", () =>
+        HttpResponse.json(
+          { type: "/problems/not-found", title: "Not Found", status: 404, detail: "Gone." },
+          { status: 404 },
+        ),
+      ),
+    );
+    renderPanel();
+
+    await user.click(await screen.findByLabelText("Applica Backup interni"));
+    await waitFor(() => expect(letture).toBeGreaterThanOrEqual(2));
+  });
+
+  it("T-RPP3 un preset con una sola regola dice «1 regola»", async () => {
+    server.use(
+      http.get("/api/v1/receivers/r1/presets", () =>
+        HttpResponse.json([
+          { preset_id: "p1", name: "Bash generico", description: null, rules_count: 1, position: 0 },
+        ]),
+      ),
+    );
+    renderPanel();
+
+    const elenco = await screen.findByRole("list", { name: "Preset applicati" });
+    expect(elenco.textContent).toContain("1 regola");
+    expect(elenco.textContent).not.toContain("1 regole");
+  });
 });

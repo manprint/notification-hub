@@ -181,6 +181,11 @@ function describeExpectation(receiver: ReceiverOut): string {
 function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone: () => void }) {
   const queryClient = useQueryClient();
   const { busy, error, run } = useAction();
+  // Lo stato letto all'apertura del form: la PATCH manda solo ciò che l'utente
+  // ha cambiato rispetto a questo, non il receiver com'è adesso sul server.
+  // Rimandare i campi non toccati riscriverebbe una modifica fatta da un altro
+  // nel frattempo (severity di default, soglia, exit code...).
+  const [initial] = useState(receiver);
   const [name, setName] = useState(receiver.name);
   const [defaultSeverity, setDefaultSeverity] = useState<Severity>(receiver.default_severity);
   // Testo e non numero: con `Number(value)` nello stato, svuotare il campo lo
@@ -323,20 +328,34 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
     // ogni rinomina riscriverebbe il fuso di un cron salvato senza fuso e
     // farebbe fallire il salvataggio di un nome per un cron salvato con regole
     // piu' vecchie di quelle attuali.
-    const expectedChanges = sameExpectation(expected, storedExpectation(receiver)) ? {} : expected;
+    const expectedChanges = sameExpectation(expected, storedExpectation(initial)) ? {} : expected;
+    // null e' un valore, non "campo assente": disattiva la politica.
+    const exitCodeValue = exitCodeSeverity === EXIT_CODE_DISABLED ? null : exitCodeSeverity;
+    const durationSeverityValue = hasSeverity ? durationSeverity : null;
+    const fieldChanges = {
+      ...(name.trim() !== initial.name ? { name: name.trim() } : {}),
+      ...(defaultSeverity !== initial.default_severity
+        ? { default_severity: defaultSeverity }
+        : {}),
+      ...(body.value !== initial.max_body_bytes ? { max_body_bytes: body.value } : {}),
+      ...(rate.value !== initial.rate_limit_per_min
+        ? { rate_limit_per_min: rate.value }
+        : {}),
+      ...(exitCodeValue !== initial.exit_code_severity
+        ? { exit_code_severity: exitCodeValue }
+        : {}),
+      ...(thresholdSeconds !== initial.duration_threshold_seconds
+        ? { duration_threshold_seconds: thresholdSeconds }
+        : {}),
+      ...(durationSeverityValue !== initial.duration_severity
+        ? { duration_severity: durationSeverityValue }
+        : {}),
+    };
 
     const ok = await run(
       async () => {
         await apiPatch(`/api/v1/receivers/${receiver.id}`, {
-          name: name.trim(),
-          default_severity: defaultSeverity,
-          max_body_bytes: body.value,
-          rate_limit_per_min: rate.value,
-          // null e' un valore, non "campo assente": disattiva la politica.
-          exit_code_severity:
-            exitCodeSeverity === EXIT_CODE_DISABLED ? null : exitCodeSeverity,
-          duration_threshold_seconds: thresholdSeconds,
-          duration_severity: hasSeverity ? durationSeverity : null,
+          ...fieldChanges,
           ...expectedChanges,
         });
         await queryClient.invalidateQueries({ queryKey: ["receiver", receiver.id] });
@@ -364,7 +383,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
           <input
             {...fieldAria("receiver-edit-name", { error: nameError })}
             required
-            maxLength={120}
+            maxLength={255}
             value={name}
             onChange={(event) => setName(event.target.value)}
           />
@@ -372,6 +391,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
         <Field id="receiver-edit-severity" label="Severity di default" required>
           <select
             {...fieldAria("receiver-edit-severity")}
+            required
             value={defaultSeverity}
             onChange={(event) => setDefaultSeverity(event.target.value as Severity)}
           >
@@ -501,6 +521,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
         >
           <select
             {...fieldAria("receiver-edit-expected-mode", { hint: true })}
+            required
             value={expectedMode}
             onChange={(event) => setExpectedMode(event.target.value as ExpectedMode)}
           >
@@ -565,6 +586,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
               <Field id="receiver-edit-expected-timezone" label="Fuso dell'espressione" required>
                 <select
                   {...fieldAria("receiver-edit-expected-timezone")}
+                  required
                   value={timezone}
                   onChange={(event) => setTimezone(event.target.value)}
                 >
@@ -642,6 +664,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
             <Field id="receiver-edit-missing-severity" label="Severity dell'assenza" required>
               <select
                 {...fieldAria("receiver-edit-missing-severity")}
+                required
                 value={missingSeverity}
                 onChange={(event) => setMissingSeverity(event.target.value as Severity)}
               >
@@ -800,7 +823,7 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
       <div className="page-header">
         <h1>
           {receiver.name}
-          {disabled && <span className="status-pill warn">disabilitato</span>}
+          {disabled && <span className="status-pill warn">Disabilitato</span>}
         </h1>
         {!editing && (
           <div className="page-header-actions">
@@ -837,7 +860,7 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
       {editing ? (
         <div className="card">
           <div className="card-header">
-            <h2>Modifica receiver</h2>
+            <h3>Modifica receiver</h3>
           </div>
           <EditReceiverForm
             key={receiver.id}
@@ -849,7 +872,7 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
         <>
           <div className="card">
             <div className="card-header">
-              <h2>Come inviare qui</h2>
+              <h3>Come inviare qui</h3>
             </div>
             <div className="detail-grid">
               <Detail label="Slug">
@@ -876,21 +899,22 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
               scritti in due variabili in cima al file e modificabili a mano.
             </p>
             {disabled && (
-              <div className="error-banner">
-                Receiver disabilitato: {receiver.rejected_last_24h ?? 0} richieste rifiutate nelle
-                ultime 24 ore.
+              <div className="warning-banner" role="status">
+                Receiver disabilitato: {receiver.rejected_last_24h ?? 0}{" "}
+                {(receiver.rejected_last_24h ?? 0) === 1 ? "richiesta rifiutata" : "richieste rifiutate"}{" "}
+                nelle ultime 24 ore.
               </div>
             )}
           </div>
 
           <div className="card">
             <div className="card-header">
-              <h2>Configurazione</h2>
+              <h3>Configurazione</h3>
             </div>
             <div className="detail-grid">
               <Detail label="Stato del receiver">
                 <span className={`status-pill ${disabled ? "warn" : "ok"}`}>
-                  {disabled ? "disabilitato" : "attivo"}
+                  {disabled ? "Disabilitato" : "Attivo"}
                 </span>
               </Detail>
               <Detail label="Severity di default">{receiver.default_severity}</Detail>
@@ -913,7 +937,7 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
 
           <div className="card">
             <div className="card-header">
-              <h2>Sorveglianza dell'attesa</h2>
+              <h3>Sorveglianza dell'attesa</h3>
             </div>
             {receiver.expected_late && (
               <div className="error-banner" role="alert">
@@ -995,7 +1019,7 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
 
       {confirming === "delete" && (
         <ConfirmDialog
-          title={`Elimina receiver "${receiver.name}"`}
+          title={`Elimina receiver «${receiver.name}»`}
           confirmLabel="Elimina receiver"
           expectedText={receiver.name}
           onConfirm={() => void removeReceiver()}

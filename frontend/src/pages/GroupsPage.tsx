@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { apiDelete, apiGet, apiPatch, apiPost } from "../api/client";
 import type { ApiError, DeleteImpactOut, GroupOut } from "../api/types";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -11,6 +11,10 @@ import Modal from "../components/Modal";
 import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
 import { ADMIN_ROLES, hasRole } from "../lib/roles";
+
+/** Limiti del backend (schemas/group.py): il modulo non blocca valori che l'API accetta. */
+const NAME_MAX = 255;
+const DESCRIPTION_MAX = 1024;
 
 function EditGroupForm({ group, onDone }: { group: GroupOut; onDone: () => void }) {
   const queryClient = useQueryClient();
@@ -48,58 +52,71 @@ function EditGroupForm({ group, onDone }: { group: GroupOut; onDone: () => void 
   const descriptionId = `group-edit-description-${group.id}`;
 
   return (
-    <form onSubmit={(event) => void handleSubmit(event)}>
-      {error && <ErrorBanner error={error} />}
-      <RequiredLegend />
-      <Field id={nameId} label="Nome" required error={nameError}>
-        <input
-          {...fieldAria(nameId, { error: nameError })}
-          required
-          maxLength={120}
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-        />
-      </Field>
-      <Field
-        id={descriptionId}
-        label="Descrizione"
-        optional
-        hint="Compare nell'elenco dei gruppi e aiuta chi non li ha creati."
-      >
-        <input
-          {...fieldAria(descriptionId, { hint: true })}
-          maxLength={500}
-          value={description}
-          onChange={(event) => setDescription(event.target.value)}
-        />
-      </Field>
-      <div className="form-actions">
-        <button type="submit" className="primary" disabled={busy !== null}>
-          {busy !== null ? "Salvataggio…" : "Salva"}
-        </button>
-        <button type="button" onClick={onDone}>
-          Annulla
-        </button>
-      </div>
-    </form>
+    <Modal title={`Modifica «${group.name}»`} onClose={onDone} busy={busy !== null}>
+      <form onSubmit={(event) => void handleSubmit(event)}>
+        {error && <ErrorBanner error={error} />}
+        <RequiredLegend />
+        <Field id={nameId} label="Nome" required error={nameError}>
+          <input
+            {...fieldAria(nameId, { error: nameError })}
+            required
+            maxLength={NAME_MAX}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </Field>
+        <Field
+          id={descriptionId}
+          label="Descrizione"
+          optional
+          hint="Compare nell'elenco dei gruppi e aiuta chi non li ha creati."
+        >
+          <input
+            {...fieldAria(descriptionId, { hint: true })}
+            maxLength={DESCRIPTION_MAX}
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+          />
+        </Field>
+        <div className="form-actions">
+          <button type="submit" className="primary" disabled={busy !== null}>
+            {busy !== null ? "Salvataggio…" : "Salva"}
+          </button>
+          <button type="button" disabled={busy !== null} onClick={onDone}>
+            Annulla
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
-function DeleteGroupButton({ group }: { group: GroupOut }) {
+/** Azioni di una riga del gruppo. Il banner dell'errore e la finestra di conferma
+ *  stanno fuori da `.row-actions`: lì il testo non va a capo e allargherebbe la
+ *  colonna (e la tabella) con un messaggio lungo. */
+function GroupRowActions({
+  group,
+  canAdmin,
+  onEdit,
+}: {
+  group: GroupOut;
+  canAdmin: boolean;
+  onEdit: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [impact, setImpact] = useState<DeleteImpactOut | null>(null);
-  const [error, setError] = useState<ApiError | null>(null);
+  const [impactError, setImpactError] = useState<ApiError | null>(null);
   const queryClient = useQueryClient();
-  const { run } = useAction();
+  const { error: deleteError, run } = useAction();
 
   async function openDialog() {
-    setError(null);
+    setImpactError(null);
     try {
       const data = await apiGet<DeleteImpactOut>(`/api/v1/groups/${group.id}/delete-impact`);
       setImpact(data);
       setOpen(true);
     } catch (err) {
-      setError(err as ApiError);
+      setImpactError(err as ApiError);
     }
   }
 
@@ -109,20 +126,30 @@ function DeleteGroupButton({ group }: { group: GroupOut }) {
         await apiDelete(`/api/v1/groups/${group.id}?confirm=${encodeURIComponent(group.name)}`);
         await queryClient.invalidateQueries({ queryKey: ["groups"] });
       },
-      { success: `Gruppo "${group.name}" eliminato.` },
+      { success: `Gruppo «${group.name}» eliminato.` },
     );
     if (ok) setOpen(false);
   }
 
   return (
     <>
-      {error && <ErrorBanner error={error} />}
-      <button className="danger" onClick={() => void openDialog()}>
-        Elimina gruppo
-      </button>
+      <div className="row-actions">
+        <Link className="button-link" to={`/groups/${group.id}`}>
+          Apri
+        </Link>
+        {canAdmin && (
+          <>
+            <button onClick={onEdit}>Modifica gruppo</button>
+            <button className="danger" onClick={() => void openDialog()}>
+              Elimina gruppo
+            </button>
+          </>
+        )}
+      </div>
+      {impactError && <ErrorBanner error={impactError} />}
       {open && impact && (
         <ConfirmDialog
-          title={`Elimina gruppo "${group.name}"`}
+          title={`Elimina gruppo «${group.name}»`}
           expectedText={group.name}
           confirmLabel="Elimina gruppo"
           // La promessa, non `void`: il dialogo resta occupato fino alla risposta,
@@ -130,6 +157,8 @@ function DeleteGroupButton({ group }: { group: GroupOut }) {
           onConfirm={confirmDelete}
           onCancel={() => setOpen(false)}
         >
+          {/* Il motivo del rifiuto resta nel dialogo: il toast scompare dopo pochi secondi. */}
+          {deleteError && <ErrorBanner error={deleteError} />}
           <p>Verranno eliminati in cascata:</p>
           <ul>
             <li>{impact.receivers} receiver</li>
@@ -145,6 +174,7 @@ function DeleteGroupButton({ group }: { group: GroupOut }) {
 function NewGroupForm() {
   const queryClient = useQueryClient();
   const [newName, setNewName] = useState("");
+  const [newDescription, setNewDescription] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
   const { busy, error, run } = useAction();
 
@@ -157,12 +187,18 @@ function NewGroupForm() {
     setNameError(null);
     const ok = await run(
       async () => {
-        await apiPost("/api/v1/groups", { name: newName.trim() });
+        await apiPost("/api/v1/groups", {
+          name: newName.trim(),
+          ...(newDescription.trim() !== "" ? { description: newDescription.trim() } : {}),
+        });
         await queryClient.invalidateQueries({ queryKey: ["groups"] });
       },
-      { success: `Gruppo "${newName.trim()}" creato.` },
+      { success: `Gruppo «${newName.trim()}» creato.` },
     );
-    if (ok) setNewName("");
+    if (ok) {
+      setNewName("");
+      setNewDescription("");
+    }
   }
 
   return (
@@ -183,9 +219,22 @@ function NewGroupForm() {
           <input
             {...fieldAria("group-name", { hint: true, error: nameError })}
             required
-            maxLength={120}
+            maxLength={NAME_MAX}
             value={newName}
             onChange={(event) => setNewName(event.target.value)}
+          />
+        </Field>
+        <Field
+          id="group-new-description"
+          label="Descrizione"
+          optional
+          hint="Compare nell'elenco dei gruppi e aiuta chi non li ha creati."
+        >
+          <input
+            {...fieldAria("group-new-description", { hint: true })}
+            maxLength={DESCRIPTION_MAX}
+            value={newDescription}
+            onChange={(event) => setNewDescription(event.target.value)}
           />
         </Field>
         <div className="form-actions">
@@ -200,7 +249,7 @@ function NewGroupForm() {
 
 export default function GroupsPage() {
   const { role } = useSession();
-  const navigate = useNavigate();
+  const canAdmin = hasRole(role, ADMIN_ROLES);
   const {
     data: groups,
     isLoading,
@@ -241,15 +290,7 @@ export default function GroupsPage() {
       key: "actions",
       header: "Azioni",
       render: (g) => (
-        <div className="row-actions">
-          <button onClick={() => navigate(`/groups/${g.id}`)}>Apri</button>
-          {hasRole(role, ADMIN_ROLES) && (
-            <>
-              <button onClick={() => setEditingGroup(g)}>Modifica gruppo</button>
-              <DeleteGroupButton group={g} />
-            </>
-          )}
-        </div>
+        <GroupRowActions group={g} canAdmin={canAdmin} onEdit={() => setEditingGroup(g)} />
       ),
     },
   ];
@@ -265,7 +306,7 @@ export default function GroupsPage() {
       </p>
       {error && <ErrorBanner error={error} />}
 
-      {hasRole(role, ADMIN_ROLES) && <NewGroupForm />}
+      {canAdmin && <NewGroupForm />}
 
       <div className="group-search">
         <input
@@ -277,19 +318,19 @@ export default function GroupsPage() {
         />
       </div>
 
-      <DataTable
-        columns={columns}
-        rows={filtered}
-        rowKey={(g) => g.id}
-        loading={isLoading}
-        error={error}
-        emptyMessage={q ? "Nessun gruppo corrisponde alla ricerca." : "Nessun gruppo configurato."}
-      />
+      <div className="card">
+        <DataTable
+          columns={columns}
+          rows={filtered}
+          rowKey={(g) => g.id}
+          loading={isLoading}
+          error={error}
+          emptyMessage={q ? "Nessun gruppo corrisponde alla ricerca." : "Nessun gruppo configurato."}
+        />
+      </div>
 
       {editingGroup && (
-        <Modal title={`Modifica "${editingGroup.name}"`} onClose={() => setEditingGroup(null)}>
-          <EditGroupForm group={editingGroup} onDone={() => setEditingGroup(null)} />
-        </Modal>
+        <EditGroupForm group={editingGroup} onDone={() => setEditingGroup(null)} />
       )}
     </div>
   );

@@ -43,26 +43,38 @@ export default function GroupList({ groups, onSelect, loading }: GroupListProps)
         <EmptyState message="Nessun gruppo corrisponde alla ricerca." />
       ) : (
         <div className="group-grid">
-          {filtered.map((g) => (
-            <button key={g.id} className="group-card" onClick={() => onSelect(g.id)}>
-              <div className="group-card-head">
-                <span className="group-card-eyebrow">Gruppo</span>
-                <span className="group-card-meta">{g.receiver_count} receiver</span>
-              </div>
-              <span className="group-card-name">{g.name}</span>
-              {g.description && <span className="group-card-desc">{g.description}</span>}
-              {typeof g.notification_count === "number" && (
-                <div className="group-card-stats">
-                  <span className="group-card-stat group-card-stat-unread">
-                    {g.unread_count} non lette
+          {filtered.map((g) => {
+            const unread = g.unread_count ?? 0;
+            const read = (g.notification_count ?? 0) - unread;
+            return (
+              <button key={g.id} className="group-card" onClick={() => onSelect(g.id)}>
+                {/* Solo span dentro il bottone: un div non è contenuto valido al suo interno. */}
+                <span className="group-card-head">
+                  <span className="group-card-eyebrow">Gruppo</span>
+                  <span className="group-card-meta">{g.receiver_count} receiver</span>
+                </span>
+                {/* title: il testo è troncato a due righe, per intero al passaggio del mouse. */}
+                <span className="group-card-name" title={g.name}>
+                  {g.name}
+                </span>
+                {g.description && (
+                  <span className="group-card-desc" title={g.description}>
+                    {g.description}
                   </span>
-                  <span className="group-card-stat">
-                    {g.notification_count - (g.unread_count ?? 0)} lette
+                )}
+                {typeof g.notification_count === "number" && (
+                  <span className="group-card-stats">
+                    <span className="group-card-stat group-card-stat-unread">
+                      {unread} {unread === 1 ? "non letta" : "non lette"}
+                    </span>
+                    <span className="group-card-stat">
+                      {read} {read === 1 ? "letta" : "lette"}
+                    </span>
                   </span>
-                </div>
-              )}
-            </button>
-          ))}
+                )}
+              </button>
+            );
+          })}
         </div>
       )}
     </>

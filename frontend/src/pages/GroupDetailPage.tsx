@@ -54,7 +54,7 @@ export default function GroupDetailPage() {
           </span>
           {/* Il ritardo della sorveglianza si vede qui e non solo aprendo il
               receiver: è il motivo per cui si apre questa pagina. */}
-          {r.expected_late && <span className="status-pill danger">in ritardo</span>}
+          {r.expected_late && <span className="status-pill danger">In ritardo</span>}
         </div>
       ),
     },
@@ -64,7 +64,7 @@ export default function GroupDetailPage() {
       render: (r) => (
         <div className="slug-cell">
           <code title={r.slug}>{r.slug}</code>
-          <CopyButton value={r.ingest_url} />
+          <CopyButton value={r.slug} label="Copia slug" />
         </div>
       ),
     },
@@ -92,9 +92,11 @@ export default function GroupDetailPage() {
       <div className="card group-receivers-table">
         <div className="card-header">
           <h3>Receiver del gruppo</h3>
-          <span className="card-header-actions text-muted text-sm">
-            {(receivers ?? []).length} configurati
-          </span>
+          {receivers !== undefined && (
+            <span className="card-header-actions text-muted text-sm">
+              {receivers.length} {receivers.length === 1 ? "configurato" : "configurati"}
+            </span>
+          )}
         </div>
         <DataTable
           columns={columns}

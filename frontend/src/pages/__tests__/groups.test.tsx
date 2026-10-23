@@ -47,7 +47,7 @@ describe("GroupsPage", () => {
       expect(screen.getByText("Server Produzione")).toBeInTheDocument();
     });
 
-    expect(screen.getAllByRole("button", { name: "Apri" })).toHaveLength(2);
+    expect(screen.getAllByRole("link", { name: "Apri" })).toHaveLength(2);
 
     const g1Row = screen.getByRole("row", { name: /server produzione/i });
     expect(within(g1Row).getByText("1")).toBeInTheDocument();
@@ -110,5 +110,147 @@ describe("GroupsPage", () => {
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(deletes).toBe(1);
+  });
+
+  it.each(["member", "viewer"])(
+    "T-ROLE1 con ruolo %s la pagina Gruppi non offre la gestione, come l'API",
+    async (ruolo) => {
+      server.use(
+        http.get("/api/v1/auth/me", () =>
+          HttpResponse.json({
+            id: "u2",
+            email: `${ruolo}@acme.test`,
+            role: ruolo,
+            tenant_id: "t1",
+            tenant_name: "ACME",
+          }),
+        ),
+      );
+      setRefreshToken("refresh-token-fixture");
+      renderWithProviders(<GroupsPage />);
+
+      await waitFor(() => {
+        expect(screen.getByText("Server Produzione")).toBeInTheDocument();
+      });
+      expect(screen.queryByText("Nuovo gruppo")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Modifica gruppo" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Elimina gruppo" })).not.toBeInTheDocument();
+      // Aprire il gruppo resta permesso a tutti.
+      expect(screen.getAllByRole("link", { name: "Apri" })).toHaveLength(2);
+    },
+  );
+
+  it("T-DEL3 il motivo del rifiuto di una cancellazione resta nel dialogo aperto", async () => {
+    server.use(
+      http.delete("/api/v1/groups/:groupId", () =>
+        HttpResponse.json(
+          {
+            type: "/problems/unprocessable",
+            title: "Unprocessable",
+            status: 422,
+            detail: "confirm must match the exact group name.",
+          },
+          { status: 422 },
+        ),
+      ),
+    );
+    setRefreshToken("refresh-token-fixture");
+    const user = userEvent.setup();
+    renderWithProviders(<GroupsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Server Produzione")).toBeInTheDocument();
+    });
+    await user.click(screen.getAllByRole("button", { name: "Elimina gruppo" })[0]);
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText(/Digita/), "Server Produzione");
+    await user.click(within(dialog).getByRole("button", { name: "Elimina gruppo" }));
+
+    // Il toast scompare dopo pochi secondi: il dialogo deve dire perché è rimasto aperto.
+    expect(await within(dialog).findByRole("alert")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("T-DEL4 un errore nel caricare l'impatto non spinge fuori la colonna delle azioni", async () => {
+    server.use(
+      http.get("/api/v1/groups/:groupId/delete-impact", () =>
+        HttpResponse.json(
+          { type: "/problems/internal", title: "Internal", status: 500, detail: "Boom." },
+          { status: 500 },
+        ),
+      ),
+    );
+    setRefreshToken("refresh-token-fixture");
+    const user = userEvent.setup();
+    renderWithProviders(<GroupsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Server Produzione")).toBeInTheDocument();
+    });
+    await user.click(screen.getAllByRole("button", { name: "Elimina gruppo" })[0]);
+
+    const avviso = await screen.findByRole("alert");
+    expect(avviso).toBeInTheDocument();
+    expect(avviso.closest(".row-actions")).toBeNull();
+  });
+
+  it("T-GRP5 la creazione manda anche la descrizione del gruppo", async () => {
+    let inviato: Record<string, unknown> | null = null;
+    server.use(
+      http.post("/api/v1/groups", async ({ request }) => {
+        inviato = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ ...fixtureGroups[0], ...inviato }, { status: 201 });
+      }),
+    );
+    setRefreshToken("refresh-token-fixture");
+    const user = userEvent.setup();
+    renderWithProviders(<GroupsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Server Produzione")).toBeInTheDocument();
+    });
+    await user.type(screen.getByLabelText("Nome"), "Backup notturni");
+    await user.type(screen.getByLabelText("Descrizione"), "Job di notte");
+    await user.click(screen.getByRole("button", { name: "Crea gruppo" }));
+
+    await waitFor(() => expect(inviato).not.toBeNull());
+    expect(inviato).toEqual({ name: "Backup notturni", description: "Job di notte" });
+  });
+
+  it("T-GRP6 la finestra di modifica non si chiude con Esc mentre il salvataggio è in corso", async () => {
+    let rispondi: () => void = () => undefined;
+    server.use(
+      http.patch("/api/v1/groups/:groupId", async () => {
+        await new Promise<void>((resolve) => {
+          rispondi = resolve;
+        });
+        return HttpResponse.json(fixtureGroups[0]);
+      }),
+    );
+    setRefreshToken("refresh-token-fixture");
+    const user = userEvent.setup();
+    renderWithProviders(<GroupsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Server Produzione")).toBeInTheDocument();
+    });
+    await user.click(screen.getAllByRole("button", { name: "Modifica gruppo" })[0]);
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+    await user.keyboard("{Escape}");
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    rispondi();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("T-GRP7 la tabella dei gruppi sta dentro una card e il nome accetta 255 caratteri", async () => {
+    setRefreshToken("refresh-token-fixture");
+    const { container } = renderWithProviders(<GroupsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Server Produzione")).toBeInTheDocument();
+    });
+    expect(container.querySelector(".table-wrap")?.closest(".card")).not.toBeNull();
+    expect(screen.getByLabelText("Nome")).toHaveAttribute("maxlength", "255");
   });
 });

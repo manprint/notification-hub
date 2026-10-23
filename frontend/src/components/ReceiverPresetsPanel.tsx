@@ -46,10 +46,15 @@ export default function ReceiverPresetsPanel({ receiverId }: { receiverId: strin
     if (!ready) return;
     await run(
       async () => {
-        await apiPut(`/api/v1/receivers/${receiverId}/presets`, { preset_ids: presetIds });
-        await queryClient.invalidateQueries({ queryKey: ["receiver-presets", receiverId] });
-        await queryClient.invalidateQueries({ queryKey: ["severity-chain", receiverId] });
-        await queryClient.invalidateQueries({ queryKey: ["severity-replay", receiverId] });
+        try {
+          await apiPut(`/api/v1/receivers/${receiverId}/presets`, { preset_ids: presetIds });
+        } finally {
+          // Anche dopo un errore: la lista in cache è quella che il 409 o il 404
+          // hanno appena smentito, e va riletta prima della prossima azione.
+          await queryClient.invalidateQueries({ queryKey: ["receiver-presets", receiverId] });
+          await queryClient.invalidateQueries({ queryKey: ["severity-chain", receiverId] });
+          await queryClient.invalidateQueries({ queryKey: ["severity-replay", receiverId] });
+        }
       },
       { success: messaggio },
     );
@@ -90,7 +95,8 @@ export default function ReceiverPresetsPanel({ receiverId }: { receiverId: strin
         <ol className="chain-list" aria-label="Preset applicati">
           {appliedList.map((preset, index) => (
             <li key={preset.preset_id}>
-              <strong>{preset.name}</strong> — {preset.rules_count} regole
+              <strong>{preset.name}</strong> — {preset.rules_count}{" "}
+              {preset.rules_count === 1 ? "regola" : "regole"}
               {preset.description && <div className="cell-diagnostics">{preset.description}</div>}
               {canManage && (
                 <div className="row-actions">
@@ -132,23 +138,22 @@ export default function ReceiverPresetsPanel({ receiverId }: { receiverId: strin
           <ul className="check-list" aria-label="Preset disponibili">
             {available.map((preset) => (
               <li key={preset.id}>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={false}
+                <div className="row-actions">
+                  <button
                     aria-label={`Applica ${preset.name}`}
                     disabled={locked}
-                    onChange={() =>
+                    onClick={() =>
                       void save([...appliedIds, preset.id], `Preset «${preset.name}» applicato.`)
                     }
-                  />
+                  >
+                    Applica
+                  </button>
                   <span>
-                    <strong>{preset.name}</strong> — {preset.rules_count} regole
-                    {preset.description && (
-                      <div className="cell-diagnostics">{preset.description}</div>
-                    )}
+                    <strong>{preset.name}</strong> — {preset.rules_count}{" "}
+                    {preset.rules_count === 1 ? "regola" : "regole"}
                   </span>
-                </label>
+                </div>
+                {preset.description && <div className="cell-diagnostics">{preset.description}</div>}
               </li>
             ))}
           </ul>
