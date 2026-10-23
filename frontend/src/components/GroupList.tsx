@@ -64,7 +64,12 @@ export default function GroupList({ groups, onSelect, loading }: GroupListProps)
                 )}
                 {typeof g.notification_count === "number" && (
                   <span className="group-card-stats">
-                    <span className="group-card-stat group-card-stat-unread">
+                    {/* L'accento dice "da leggere": con zero non letture non va acceso. */}
+                    <span
+                      className={
+                        unread > 0 ? "group-card-stat group-card-stat-unread" : "group-card-stat"
+                      }
+                    >
                       {unread} {unread === 1 ? "non letta" : "non lette"}
                     </span>
                     <span className="group-card-stat">

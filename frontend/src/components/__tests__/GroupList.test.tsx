@@ -135,6 +135,31 @@ describe("GroupList", () => {
     expect(screen.getByText("2 non lette")).toBeInTheDocument();
   });
 
+  it("zero non lette non accende il contatore: l'accento è solo per chi va letto", () => {
+    render(
+      <GroupList
+        groups={[{ ...groups[0], notification_count: 4, unread_count: 0 }]}
+        onSelect={() => {}}
+      />,
+    );
+
+    const nonLette = screen.getByText("0 non lette");
+    expect(nonLette).not.toHaveClass("group-card-stat-unread");
+    expect(nonLette).toHaveClass("group-card-stat");
+    expect(screen.getByText("4 lette")).toBeInTheDocument();
+  });
+
+  it("con almeno una non letta il contatore è acceso", () => {
+    render(
+      <GroupList
+        groups={[{ ...groups[0], notification_count: 4, unread_count: 1 }]}
+        onSelect={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("1 non letta")).toHaveClass("group-card-stat-unread");
+  });
+
   it("i contatori stanno dentro il bottone come span, non come div", () => {
     render(
       <GroupList
