@@ -17,6 +17,12 @@
    migrazioni girano in una transazione, dove CONCURRENTLY non e' ammesso. Il
    prezzo e' un lock SHARE durante la creazione, che blocca le scritture su
    quella tabella per la durata della build.
+
+   Nota di deploy: il lock dura quanto la build su `notifications` e `deliveries`,
+   cioe' il tempo di scansione della tabella. Mentre dura, l'ingestion si ferma.
+   Si esegue quindi in una finestra a basso traffico. Per tabelle molto grandi, e'
+   possibile creare prima gli indici con CREATE INDEX CONCURRENTLY, fuori dalla
+   migrazione, e adattare la migrazione con IF NOT EXISTS.
 """
 
 from alembic import op
