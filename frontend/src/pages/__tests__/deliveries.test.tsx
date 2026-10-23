@@ -66,7 +66,9 @@ describe("DeliveriesPage leggibilità", () => {
     );
 
     renderWithProviders(<DeliveriesPage />);
-    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument(),
+    );
 
     // Il corpo si legge nella notifica: una preview lunga qui sfonda la riga e
     // spinge fuori vista le colonne che dicono com'è andata la consegna.
@@ -80,7 +82,9 @@ describe("DeliveriesPage leggibilità", () => {
 
   it("la riga resta riconoscibile senza il testo: severity, receiver, quando", async () => {
     renderWithProviders(<DeliveriesPage />);
-    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument(),
+    );
 
     const riga = screen.getAllByRole("row")[1];
     expect(within(riga).getByText("Errore")).toBeInTheDocument();
@@ -91,7 +95,9 @@ describe("DeliveriesPage leggibilità", () => {
 
   it("la severity sta in una colonna sua, come nell'elenco delle notifiche", async () => {
     renderWithProviders(<DeliveriesPage />);
-    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument(),
+    );
 
     const intestazioni = within(screen.getAllByRole("row")[0])
       .getAllByRole("columnheader")
@@ -108,7 +114,9 @@ describe("DeliveriesPage leggibilità", () => {
 
   it("la data di ricezione ha la colonna «Ricevuta», con giorno e ora su due righe", async () => {
     renderWithProviders(<DeliveriesPage />);
-    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument(),
+    );
 
     const intestazioni = within(screen.getAllByRole("row")[0])
       .getAllByRole("columnheader")
@@ -130,7 +138,9 @@ describe("DeliveriesPage filtri", () => {
 
   it("gli stati della tendina usano le stesse parole della tabella", async () => {
     renderWithProviders(<DeliveriesPage />);
-    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument(),
+    );
 
     const tendina = screen.getByLabelText("Stato della consegna");
     const opzioni = within(tendina)
@@ -146,7 +156,9 @@ describe("DeliveriesPage filtri", () => {
   it("con un filtro attivo compare il modo di azzerarlo", async () => {
     const user = userEvent.setup();
     renderWithProviders(<DeliveriesPage />);
-    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument(),
+    );
 
     expect(screen.queryByRole("button", { name: /Azzera i filtri/ })).not.toBeInTheDocument();
 
@@ -182,7 +194,9 @@ describe("DeliveriesPage paginazione", () => {
     const user = userEvent.setup();
     renderWithProviders(<DeliveriesPage />);
 
-    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument(),
+    );
     expect(screen.queryByText("Inviata", { selector: ".status-pill" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Carica altri" }));
