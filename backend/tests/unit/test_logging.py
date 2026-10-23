@@ -86,7 +86,7 @@ def test_worker_configura_il_logging_con_la_redazione_dei_segreti():
         "print('_redact_secrets' in [getattr(p, '__name__', '') "
         "for p in structlog.get_config()['processors']])"
     )
-    risultato = subprocess.run(
+    risultato = subprocess.run(  # noqa: S603
         [sys.executable, "-c", codice],
         cwd=BACKEND,
         env=dict(os.environ),

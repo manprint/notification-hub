@@ -1,6 +1,7 @@
 """Script di init Postgres: il loopback non deve restare trust nel pg_hba.conf."""
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -27,8 +28,8 @@ _LOOPBACK = {"127.0.0.1/32", "::1/128"}
 def test_loopback_non_resta_trust_dopo_lo_script(tmp_path):
     (tmp_path / "pg_hba.conf").write_text(_PG_HBA_IMMAGINE, encoding="utf-8")
 
-    subprocess.run(
-        ["bash", str(SCRIPT)],
+    subprocess.run(  # noqa: S603
+        [shutil.which("bash") or "/bin/bash", str(SCRIPT)],
         env={"PATH": os.environ["PATH"], "PGDATA": str(tmp_path)},
         check=True,
         timeout=30,

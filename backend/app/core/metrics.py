@@ -14,8 +14,8 @@ from prometheus_client.registry import REGISTRY
 
 if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
     # Il pid da solo non basta: API e worker sono container diversi e i pid si ripetono.
-    # Il collector usa '_' come separatore nel nome dei file, quindi l'identificativo non lo contiene.
-    values.ValueClass = values.MultiProcessValue(  # type: ignore[misc]
+    # Il collector usa '_' come separatore nei nomi dei file: l'identificativo non lo contiene.
+    values.ValueClass = values.MultiProcessValue(
         lambda: f"{socket.gethostname().replace('_', '-')}-{os.getpid()}"
     )
 

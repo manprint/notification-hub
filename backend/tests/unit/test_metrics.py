@@ -12,8 +12,7 @@ BACKEND = Path(__file__).resolve().parents[2]
 # Un processo a parte, come l'API o il worker: importa il modulo con la directory multiprocess
 # gia' impostata (la scelta del backend dei valori avviene all'import) e incrementa il contatore.
 _SCRITTORE = (
-    "from app.core.metrics import ingestion_requests_total as c; "
-    "c.labels(outcome='success').inc()"
+    "from app.core.metrics import ingestion_requests_total as c; c.labels(outcome='success').inc()"
 )
 
 
@@ -21,7 +20,7 @@ _SCRITTORE = (
 def test_contatori_di_processi_separati_arrivano_al_registro_del_9100(tmp_path, monkeypatch):
     env = {**os.environ, "PROMETHEUS_MULTIPROC_DIR": str(tmp_path)}
     for _ in range(2):
-        subprocess.run(
+        subprocess.run(  # noqa: S603
             [sys.executable, "-c", _SCRITTORE],
             cwd=BACKEND,
             env=env,
@@ -34,9 +33,7 @@ def test_contatori_di_processi_separati_arrivano_al_registro_del_9100(tmp_path, 
     monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(tmp_path))
     registro = _registro_metriche()
 
-    valore = registro.get_sample_value(
-        "notifyhub_ingestion_requests_total", {"outcome": "success"}
-    )
+    valore = registro.get_sample_value("notifyhub_ingestion_requests_total", {"outcome": "success"})
     assert valore == 2.0
 
 
