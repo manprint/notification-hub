@@ -442,8 +442,10 @@ tbody tr:last-child td {
   opacity: 0.55;
 }
 
-/* Gruppo di pulsanti dentro una cella: restano su una riga; se la colonna
-   non basta, la tabella scorre in orizzontale dentro .table-wrap. */
+/* Gruppo di pulsanti dentro una cella: su schermo largo restano su una riga e,
+   se la colonna non basta, la tabella scorre in orizzontale dentro .table-wrap.
+   Sotto i 760px vanno a capo (media query in fondo): così restano visibili
+   senza cercarli nello scorrimento. */
 .row-actions {
   display: flex;
   flex-wrap: nowrap;
@@ -805,6 +807,16 @@ tbody tr:last-child td {
   color: var(--color-text-muted);
 }
 
+/* Un gruppo di controlli (le caselle dei gruppi) è una fieldset con la sua
+   legenda: come riga di modulo, senza il riquadro che le fieldset hanno di
+   default. */
+fieldset.form-row {
+  border: 0;
+  padding: 0;
+  margin-left: 0;
+  margin-right: 0;
+}
+
 .field-hint {
   font-size: var(--text-xs);
   color: var(--color-text-muted);
@@ -902,6 +914,12 @@ tbody tr:last-child td {
   padding: 0;
 }
 
+/* La spunta è figlia diretta di .form-row, come l'etichetta del campo: senza
+   questa regola eredita il grassetto di `.form-row > label` (più specifico). */
+.form-row > .inline-check {
+  font-weight: 400;
+}
+
 /* Scelta multipla con caselle invece di <select multiple>: le voci hanno una
    descrizione su più righe e devono restare leggibili tutte insieme. */
 .check-list {
@@ -959,12 +977,20 @@ tbody tr:last-child td {
 
 .filters-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   align-items: center;
   margin-left: auto;
   /* Il pulsante sta alla altezza delle caselle, non alla riga delle etichette:
      24px = etichetta (13px su 1.5) piu' la distanza fra etichetta e casella. */
   margin-top: var(--space-4);
+}
+
+/* Il banner di un errore dentro la riga dei pulsanti (per esempio l'export
+   CSV) va a capo a tutta larghezza: altrimenti stringe il pulsante e il testo
+   in due colonne strette. */
+.filters-actions .error-banner {
+  flex-basis: 100%;
 }
 
 /* Distanze che stavano in style={{}} in linea: le stesse tre righe ripetute in
