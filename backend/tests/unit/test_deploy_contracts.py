@@ -58,3 +58,17 @@ def test_xff_del_client_arriva_all_app_con_il_nginx_del_compose():
     # Senza la fiducia configurata l'app vede solo il peer, cioe' nginx per tutti i client.
     senza_fiducia = asyncio.run(_client_visto_dall_app("127.0.0.1", ip_nginx, xff))
     assert senza_fiducia == ip_nginx
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("servizio", ["api", "worker"])
+def test_api_e_worker_condividono_la_directory_delle_metriche(servizio):
+    compose = _compose()
+    svc = compose["services"][servizio]
+    cartella = svc["environment"]["PROMETHEUS_MULTIPROC_DIR"]
+
+    assert f"metricsdata:{cartella}" in svc["volumes"]
+    assert "metricsdata" in compose["volumes"]
+    # L'immagine crea la directory con l'utente dell'app, cosi' il volume nasce scrivibile.
+    dockerfile = (REPO / "deploy/api/Dockerfile").read_text(encoding="utf-8")
+    assert f"mkdir -p {cartella}" in dockerfile

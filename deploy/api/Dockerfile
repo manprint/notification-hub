@@ -16,7 +16,8 @@ COPY deploy/api/entrypoint.sh deploy/api/entrypoint.sh
 # una sola copia dello script, quella del repository (app/services/wrapper_script.py).
 COPY scripts/notifyhub-run.sh scripts/notifyhub-run.sh
 
-RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app \
+    && mkdir -p /var/lib/notifyhub/metrics && chown appuser:appuser /var/lib/notifyhub/metrics
 USER appuser
 
 EXPOSE 8000 9100
