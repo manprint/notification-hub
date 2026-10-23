@@ -69,14 +69,14 @@ describe("ReceiverDetailPage", () => {
 
     // La vista di sola lettura riassume la politica con la durata leggibile.
     await waitFor(() => {
-      expect(campo("Soglia di durata")).toContain("oltre 10m00s → error");
+      expect(campo("Soglia di durata")).toContain("oltre 10m00s → Errore");
     });
 
     await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
     // 600 secondi si presentano come 10 minuti, non come 600 secondi.
     const soglia = screen.getByLabelText("Soglia di durata");
     expect(soglia).toHaveValue(10);
-    expect(screen.getByLabelText("Unita della soglia di durata")).toHaveValue("m");
+    expect(screen.getByLabelText("Unità della soglia di durata")).toHaveValue("m");
 
     await user.clear(soglia);
     await user.type(soglia, "15");
@@ -222,7 +222,7 @@ describe("ReceiverDetailPage", () => {
     renderReceiverDetail();
 
     await waitFor(() => {
-      expect(campo("Politica in vigore")).toContain("ogni 1g, tolleranza 30m00s → critical");
+      expect(campo("Politica in vigore")).toContain("ogni 1g, tolleranza 30m00s → Critica");
     });
     // Le tre date che rispondono a "sono in ritardo?" e "e' anche partito?".
     expect(campo("Ultima conclusione")).not.toMatch(/mai$/);
@@ -264,7 +264,7 @@ describe("ReceiverDetailPage", () => {
 
     // 86400 secondi si presentano come 1 giorno, non come 86400 secondi.
     expect(screen.getByLabelText("Mi aspetto un invio ogni")).toHaveValue(1);
-    expect(screen.getByLabelText("Unita dell'intervallo atteso")).toHaveValue("g");
+    expect(screen.getByLabelText("Unità dell'intervallo atteso")).toHaveValue("g");
 
     await user.selectOptions(screen.getByLabelText("Attesa"), "cron");
     await user.type(screen.getByLabelText("Espressione cron"), "0 3 * * 1-5");
@@ -870,16 +870,18 @@ describe("ReceiverDetailPage", () => {
       await user.clear(screen.getByLabelText(etichetta));
       await user.type(screen.getByLabelText(etichetta), valore);
     };
+    // Il tetto del tenant arriva in una richiesta a parte: va sul campo prima di scrivere.
+    expect(await screen.findByText(/Massimo per questo tenant/)).toBeInTheDocument();
     await scrivi("Limite corpo (byte)", "2147483648");
     await scrivi("Rate limit (al minuto)", "1e308");
     // 30000 giorni stanno nel campo ma sono 2,59 miliardi di secondi.
     await scrivi("Mi aspetto un invio ogni", "30000");
     await scrivi("Soglia di durata", "1.5");
-    await user.selectOptions(screen.getByLabelText("Unita della soglia di durata"), "s");
+    await user.selectOptions(screen.getByLabelText("Unità della soglia di durata"), "s");
     await user.click(screen.getByRole("button", { name: "Salva" }));
 
     expect(screen.getByLabelText("Limite corpo (byte)")).toHaveAccessibleDescription(
-      /massimo è 2147483647/,
+      /massimo è 1048576/,
     );
     expect(screen.getByLabelText("Rate limit (al minuto)")).toHaveAccessibleDescription(
       /Troppo grande/,
@@ -910,7 +912,7 @@ describe("ReceiverDetailPage", () => {
 
     await user.clear(screen.getByLabelText("Mi aspetto un invio ogni"));
     await user.type(screen.getByLabelText("Mi aspetto un invio ogni"), "1.5");
-    await user.selectOptions(screen.getByLabelText("Unita dell'intervallo atteso"), "h");
+    await user.selectOptions(screen.getByLabelText("Unità dell'intervallo atteso"), "h");
     await user.click(screen.getByRole("button", { name: "Salva" }));
 
     await waitFor(() => expect(inviato).not.toBeNull());
@@ -1070,4 +1072,88 @@ describe("ReceiverDetailPage", () => {
     expect(screen.getByLabelText("Severity dell'assenza")).toBeRequired();
   });
 
+  it("la configurazione dice le severity con le etichette della tabella, non in inglese", async () => {
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+
+    await waitFor(() => expect(campo("Severity di default")).toContain("Info"));
+    expect(campo("Severity di default")).not.toMatch(/\binfo\b/);
+    expect(campo("Severity per exit code diverso da zero")).toContain("Critica");
+    expect(campo("Soglia di durata")).toContain("Errore");
+  });
+
+  it("il limite del corpo non va oltre il tetto del tenant, e il campo dice quanto è", async () => {
+    const user = userEvent.setup();
+    let inviati = 0;
+    server.use(
+      http.patch("/api/v1/receivers/r1", () => {
+        inviati += 1;
+        return HttpResponse.json(fixtureReceiver);
+      }),
+    );
+
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+    // Il tetto arriva dal tenant: si aspetta che sia sul campo prima di scrivere.
+    expect(await screen.findByText(/Massimo per questo tenant/)).toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText("Limite corpo (byte)"));
+    await user.type(screen.getByLabelText("Limite corpo (byte)"), "2000000");
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+
+    expect(screen.getByLabelText("Limite corpo (byte)")).toHaveAccessibleDescription(
+      /massimo è 1048576/,
+    );
+    expect(inviati).toBe(0);
+  });
+
+  it("un errore dello scaricamento sta fuori dalla riga dei pulsanti dell'intestazione", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/v1/receivers/r1/wrapper-script", () =>
+        HttpResponse.json(
+          { type: "/problems/internal-error", title: "Internal Server Error", status: 500, detail: "Script non disponibile." },
+          { status: 500 },
+        ),
+      ),
+    );
+
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Scarica lo script" }));
+
+    expect((await screen.findAllByText(/Script non disponibile/)).length).toBeGreaterThan(0);
+    // Dentro la riga dei pulsanti, il banner andava a capo solo come un pezzo di flex.
+    expect(document.querySelector(".page-header-actions .error-banner")).toBeNull();
+  });
+
+  it("un limite già salvato sopra il tetto non blocca il salvataggio degli altri campi", async () => {
+    const user = userEvent.setup();
+    let inviato: Record<string, unknown> | null = null;
+    server.use(
+      http.get("/api/v1/receivers/r1", () =>
+        HttpResponse.json({ ...fixtureReceiver, max_body_bytes: 2_000_000 }),
+      ),
+      http.patch("/api/v1/receivers/r1", async ({ request }) => {
+        inviato = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(fixtureReceiver);
+      }),
+    );
+
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+    expect(await screen.findByText(/Massimo per questo tenant/)).toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText("Nome"));
+    await user.type(screen.getByLabelText("Nome"), "Nuovo nome");
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+
+    await waitFor(() => expect(inviato).toMatchObject({ name: "Nuovo nome" }));
+    expect(inviato).not.toHaveProperty("max_body_bytes");
+  });
 });

@@ -50,7 +50,9 @@ export default function NewReceiverForm({ groupId }: { groupId: string }) {
         di severity e la sua sorveglianza dell'attesa.
       </p>
       {error && <ErrorBanner error={error} />}
-      <form className="form-stacked" onSubmit={(event) => void createReceiver(event)}>
+      {/* noValidate: il nome vuoto lo rifiuta createReceiver, con il messaggio sul campo,
+          invece del fumetto del browser. */}
+      <form noValidate className="form-stacked" onSubmit={(event) => void createReceiver(event)}>
         <RequiredLegend />
         <Field id="new-receiver-name" label="Nome receiver" required error={nameError}>
           <input
@@ -64,10 +66,12 @@ export default function NewReceiverForm({ groupId }: { groupId: string }) {
         <Field
           id="new-receiver-severity"
           label="Severity di default"
+          required
           hint="Vale per i messaggi che nessuna regola classifica. Si cambia anche dopo."
         >
           <select
             {...fieldAria("new-receiver-severity", { hint: true })}
+            required
             value={defaultSeverity}
             onChange={(event) => setDefaultSeverity(event.target.value as Severity)}
           >

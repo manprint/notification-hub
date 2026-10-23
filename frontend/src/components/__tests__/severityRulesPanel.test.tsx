@@ -226,7 +226,7 @@ describe("SeverityRulesPanel", () => {
       expect(screen.getByText(/1 delle ultime 2 notifiche/)).toBeInTheDocument();
     });
     const riga = screen.getByText(/Backup FALLITO/).closest("tr")!;
-    expect(within(riga).getByText("cambia")).toBeInTheDocument();
+    expect(within(riga).getByText("Cambia")).toBeInTheDocument();
   });
 
   it("il member vede le regole ma il viewer non puo modificarle", async () => {
@@ -244,7 +244,7 @@ describe("SeverityRulesPanel", () => {
     renderPanel();
 
     await waitFor(() => expect(screen.getByText("ERRORE")).toBeInTheDocument());
-    expect(screen.queryByRole("button", { name: "Modifica" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Modifica/ })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Sposta giù ERRORE")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Aggiungi regola" })).not.toBeInTheDocument();
   });
@@ -351,6 +351,7 @@ describe("SeverityRulesPanel", () => {
 
     expect(await screen.findByText(/Boom/)).toBeInTheDocument();
     expect(screen.queryByText(/Nessuna regola:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/nessuna attiva/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Caricamento delle regole/)).not.toBeInTheDocument();
   });
 
@@ -438,5 +439,119 @@ describe("SeverityRulesPanel", () => {
     expect(campo).toHaveAttribute("aria-invalid", "true");
     expect(campo).toHaveAttribute("aria-describedby", messaggio.id);
     expect(inviati).toHaveLength(0);
+  });
+
+  it("T-RULES3 se la rilettura fallisce su una lista vuota non dice 'nessuna regola'", async () => {
+    const user = userEvent.setup();
+    let fallisci = false;
+    server.use(
+      http.get("/api/v1/receivers/r1/severity-rules", () =>
+        fallisci
+          ? HttpResponse.json(
+              { type: "/problems/internal", title: "Internal", status: 500, detail: "Rilettura fallita." },
+              { status: 500 },
+            )
+          : HttpResponse.json([]),
+      ),
+      http.post("/api/v1/receivers/r1/severity-rules", () => {
+        fallisci = true;
+        return HttpResponse.json({}, { status: 201 });
+      }),
+    );
+    renderWithProviders(<SeverityRulesPanel receiver={receiver} />);
+
+    expect(await screen.findByText(/Nessuna regola:/)).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Pattern"), "NUOVA");
+    await user.click(screen.getByRole("button", { name: "Aggiungi regola" }));
+
+    // La rilettura dopo l'aggiunta fallisce: la lista vuota in cache non è più una
+    // risposta, quindi né «nessuna regola» né «nessuna attiva» vanno detti.
+    expect(await screen.findByText(/Rilettura fallita/)).toBeInTheDocument();
+    expect(screen.queryByText(/Nessuna regola:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/nessuna attiva/)).not.toBeInTheDocument();
+  });
+
+  it("T-LABEL1 le severity delle regole hanno le etichette italiane, come nelle tabelle", async () => {
+    renderPanel([]);
+
+    const tendina = await screen.findByLabelText("Severity", { selector: "select" });
+    expect(within(tendina).getByRole("option", { name: "Critica" })).toHaveAttribute(
+      "value",
+      "critical",
+    );
+    expect(within(tendina).queryByRole("option", { name: "critical" })).toBeNull();
+    // Il receiver di questa prova ha severity di default «info».
+    expect(await screen.findByText(/Nessuna regola:.*\(Info\)/)).toBeInTheDocument();
+  });
+
+  it("T-ACT1 ogni regola ha pulsanti con il suo nome, e l'intestazione Azioni c'è anche se nascosta", async () => {
+    renderPanel();
+
+    await waitFor(() => expect(screen.getByText("ERRORE")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Modifica la regola ERRORE" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Elimina la regola attenzione" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Azioni" })).toBeInTheDocument();
+  });
+
+  it("T-ORD2 il riordino parte dall'ordine letto adesso sul server, non da quello in cache", async () => {
+    const user = userEvent.setup();
+    let letture = 0;
+    let inviato: string[] | null = null;
+    const terza: SeverityRuleOut = {
+      id: "sr3",
+      receiver_id: "r1",
+      priority: 30,
+      pattern: "avviso",
+      case_insensitive: true,
+      severity: "info",
+      enabled: true,
+    };
+    server.use(
+      http.get("/api/v1/receivers/r1/severity-rules", () => {
+        letture += 1;
+        // Dalla prima lettura in poi qualcun altro ha messo una regola in cima.
+        return HttpResponse.json(letture === 1 ? twoRules : [terza, twoRules[0], twoRules[1]]);
+      }),
+      http.put("/api/v1/receivers/r1/severity-rules/order", async ({ request }) => {
+        inviato = ((await request.json()) as { rule_ids: string[] }).rule_ids;
+        return HttpResponse.json([]);
+      }),
+    );
+    renderWithProviders(<SeverityRulesPanel receiver={receiver} />);
+
+    await waitFor(() => expect(screen.getByText("ERRORE")).toBeInTheDocument());
+    await user.click(screen.getByLabelText("Sposta giù ERRORE"));
+
+    // In cache ERRORE sta in cima; letto adesso sta in mezzo e scende di uno, prima
+    // di attenzione.
+    await waitFor(() => expect(inviato).toEqual(["sr3", "sr2", "sr1"]));
+  });
+
+  it("T-ORD3 se la lettura fresca fallisce il riordino non parte e il motivo si vede", async () => {
+    const user = userEvent.setup();
+    let letture = 0;
+    let ordini = 0;
+    server.use(
+      http.get("/api/v1/receivers/r1/severity-rules", () => {
+        letture += 1;
+        return letture === 1
+          ? HttpResponse.json(twoRules)
+          : HttpResponse.json(
+              { type: "/problems/internal", title: "Internal", status: 500, detail: "Lettura fallita." },
+              { status: 500 },
+            );
+      }),
+      http.put("/api/v1/receivers/r1/severity-rules/order", () => {
+        ordini += 1;
+        return HttpResponse.json([]);
+      }),
+    );
+    renderWithProviders(<SeverityRulesPanel receiver={receiver} />);
+
+    await waitFor(() => expect(screen.getByText("ERRORE")).toBeInTheDocument());
+    await user.click(screen.getByLabelText("Sposta giù ERRORE"));
+
+    expect((await screen.findAllByText(/Lettura fallita/)).length).toBeGreaterThan(0);
+    expect(ordini).toBe(0);
   });
 });

@@ -18,6 +18,7 @@ import SeverityBadge from "../components/SeverityBadge";
 import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
+import { severityLabel } from "../lib/format";
 import { ADMIN_ROLES, hasRole } from "../lib/roles";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
@@ -71,7 +72,7 @@ function PresetRuleForm({
     <form noValidate onSubmit={(event) => void handleSubmit(event)}>
       {error && <ErrorBanner error={error} />}
       <div className="toolbar">
-        <label className="inline-check">
+        <label className="inline-check pattern-field">
           <span>Pattern</span>
           <input
             aria-describedby={patternError ? patternErrorId : undefined}
@@ -89,7 +90,7 @@ function PresetRuleForm({
           <select value={severity} onChange={(event) => setSeverity(event.target.value as Severity)}>
             {SEVERITIES.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {severityLabel(s)}
               </option>
             ))}
           </select>
@@ -227,7 +228,7 @@ function PresetRules({ presetId, canManage }: { presetId: string; canManage: boo
                       </div>
                     </td>
                     <td>
-                      <code>{rule.pattern}</code>
+                      <code className="rule-pattern">{rule.pattern}</code>
                     </td>
                     <td>
                       <SeverityBadge severity={rule.severity} />
@@ -384,7 +385,8 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
       {error && !confirmReset && !confirmDelete && <ErrorBanner error={error} />}
 
       {renaming ? (
-        <form onSubmit={(event) => void saveRename(event)}>
+        // noValidate: il nome vuoto lo rifiuta saveRename, con il messaggio sul campo.
+        <form noValidate onSubmit={(event) => void saveRename(event)}>
           <RequiredLegend />
           <Field id={`preset-name-${preset.id}`} label="Nome" required error={nameError}>
             <input
@@ -568,7 +570,8 @@ function NewPresetForm() {
     <details className="card collapsible">
       <summary>Nuovo preset</summary>
       {error && <ErrorBanner error={error} />}
-      <form className="form-stacked" onSubmit={(event) => void handleSubmit(event)}>
+        {/* noValidate: il nome vuoto lo rifiuta handleSubmit, con il messaggio sul campo. */}
+      <form noValidate className="form-stacked" onSubmit={(event) => void handleSubmit(event)}>
         <RequiredLegend />
         <Field id="new-preset-name" label="Nome" required error={nameError}>
           <input
@@ -688,7 +691,9 @@ export default function PresetsPage() {
       {canManage && <NewPresetForm />}
 
       {isLoading && <EmptyState message="Caricamento…" />}
-      {presets?.length === 0 && !isLoading && <EmptyState message="Nessun preset in questo tenant." />}
+      {presets?.length === 0 && !isLoading && !error && (
+        <EmptyState message="Nessun preset in questo tenant." />
+      )}
       {presets?.map((preset) => (
         <PresetCard key={preset.id} preset={preset} canManage={canManage} />
       ))}

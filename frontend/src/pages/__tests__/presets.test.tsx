@@ -354,7 +354,7 @@ describe("PresetsPage", () => {
     expect(chiamate).toBe(1);
   });
 
-  it("T-PST7 la lista delle regole non dice 'non ha ancora regole' mentre si carica o dopo un errore", async () => {
+  it("T-PST7 la lista delle regole non dice 'non ha ancora regole' mentre si carica", async () => {
     const user = userEvent.setup();
     let rispondi: () => void = () => undefined;
     server.use(
@@ -503,5 +503,92 @@ describe("PresetsPage", () => {
     const dialogoElimina = await screen.findByRole("dialog");
     expect(within(dialogoElimina).getByText("Nessun receiver usa questo preset.")).toBeInTheDocument();
     expect(within(dialogoElimina).getByText(/Elimina preset «Backup interni»/)).toBeInTheDocument();
+  });
+
+  it("T-PST11 una rilettura fallita dell'elenco vuoto non dice 'nessun preset in questo tenant'", async () => {
+    const user = userEvent.setup();
+    let letture = 0;
+    server.use(
+      http.get("/api/v1/severity-presets", () => {
+        letture += 1;
+        return letture === 1
+          ? HttpResponse.json([])
+          : HttpResponse.json(
+              { type: "/problems/internal-error", title: "Internal Server Error", status: 500, detail: "Rilettura fallita." },
+              { status: 500 },
+            );
+      }),
+      http.post("/api/v1/severity-presets", () => HttpResponse.json(fixturePresets[0], { status: 201 })),
+    );
+    renderPage();
+
+    expect(await screen.findByText("Nessun preset in questo tenant.")).toBeInTheDocument();
+    await user.click(screen.getByText("Nuovo preset"));
+    await user.type(screen.getByLabelText("Nome"), "Nuovo");
+    await user.click(screen.getByRole("button", { name: "Crea preset" }));
+
+    expect((await screen.findAllByText(/Rilettura fallita/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Nessun preset in questo tenant.")).not.toBeInTheDocument();
+  });
+
+  it("T-PST12 il nome vuoto mostra il messaggio sul campo, non il fumetto del browser", async () => {
+    const user = userEvent.setup();
+    const creati: unknown[] = [];
+    const rinominati: unknown[] = [];
+    server.use(
+      http.post("/api/v1/severity-presets", () => {
+        creati.push(true);
+        return HttpResponse.json(fixturePresets[0], { status: 201 });
+      }),
+      http.patch("/api/v1/severity-presets/p1", () => {
+        rinominati.push(true);
+        return HttpResponse.json(fixturePresets[0]);
+      }),
+    );
+    renderPage();
+
+    await user.click(await screen.findByText("Nuovo preset"));
+    await user.click(screen.getByRole("button", { name: "Crea preset" }));
+    expect(await screen.findByText("Il nome del preset è obbligatorio.")).toBeInTheDocument();
+    expect(creati).toHaveLength(0);
+
+    await waitFor(() => expect(screen.getByText("Bash generico")).toBeInTheDocument());
+    const card = screen.getByText("Bash generico").closest<HTMLElement>(".card")!;
+    await user.click(within(card).getByRole("button", { name: "Rinomina" }));
+    await user.clear(within(card).getByLabelText("Nome"));
+    await user.click(within(card).getByRole("button", { name: "Salva" }));
+    expect(await within(card).findByText(/Il nome del preset è obbligatorio/)).toBeInTheDocument();
+    expect(rinominati).toHaveLength(0);
+  });
+
+  it("T-PST13 la severity di una regola di preset dice l'etichetta italiana, come le tabelle", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Bash generico")).toBeInTheDocument());
+    const card = screen.getByText("Bash generico").closest<HTMLElement>(".card")!;
+    await user.click(within(card).getByRole("button", { name: "Mostra regole" }));
+
+    const tendina = await within(card).findByLabelText("Severity", { selector: "select" });
+    expect(within(tendina).getByRole("option", { name: "Critica" })).toHaveAttribute(
+      "value",
+      "critical",
+    );
+    expect(within(tendina).queryByRole("option", { name: "critical" })).toBeNull();
+  });
+
+  it("T-PST14 se l'elenco dei preset non si legge, il banner dice l'errore e nessun 'elenco vuoto'", async () => {
+    server.use(
+      http.get("/api/v1/severity-presets", () =>
+        HttpResponse.json(
+          { type: "/problems/internal-error", title: "Internal Server Error", status: 500, detail: "Elenco non disponibile." },
+          { status: 500 },
+        ),
+      ),
+    );
+    renderPage();
+
+    expect((await screen.findAllByText(/Elenco non disponibile/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Nessun preset in questo tenant.")).not.toBeInTheDocument();
   });
 });

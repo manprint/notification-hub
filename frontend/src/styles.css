@@ -385,6 +385,15 @@ td a {
   overflow-wrap: anywhere;
 }
 
+/* Pattern RE2 in colonna: `code` va a capo ovunque (regola in testa al foglio),
+   e senza una larghezza minima la colonna si stringeva a un carattere per riga
+   e spingeva Modifica ed Elimina fuori dalla tabella. Venti caratteri di minimo:
+   la tabella scorre invece di schiacciarsi. */
+code.rule-pattern {
+  display: inline-block;
+  min-width: 20ch;
+}
+
 th {
   /* Gli header sono etichette brevi: mai spezzati a metà parola. */
   white-space: nowrap;
@@ -874,8 +883,17 @@ fieldset.form-row {
 /* Campo di testo che dentro una .toolbar prende lo spazio che resta: i pattern
    RE2 non stanno in un input alla larghezza di default del browser. */
 .grow-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+}
+
+/* Etichetta del pattern (con il suo campo dentro): è lei la voce della .toolbar
+   che cresce, e il campo prende tutta la sua larghezza. Senza, l'etichetta
+   stringe alla larghezza del testo e il campo resta piccolo. */
+.pattern-field {
   flex: 1 1 18rem;
-  min-width: 12rem;
+  min-width: 0;
 }
 
 /* Campo numerico con l'unità accanto (durate, tolleranze). */

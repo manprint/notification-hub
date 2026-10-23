@@ -58,4 +58,29 @@ describe("NewReceiverForm", () => {
       invalida.mockRestore();
     }
   });
+
+  it("un nome vuoto mostra il messaggio sul campo, non il fumetto del browser, e non crea nulla", async () => {
+    const user = userEvent.setup();
+    let creati = 0;
+    server.use(
+      http.post("/api/v1/groups/g1/receivers", () => {
+        creati += 1;
+        return HttpResponse.json(fixtureReceiver, { status: 201 });
+      }),
+    );
+    renderWithProviders(<NewReceiverForm groupId="g1" />);
+    await user.click(screen.getByText("Nuovo receiver"));
+    await user.click(screen.getByRole("button", { name: "Aggiungi receiver" }));
+
+    expect(await screen.findByText("Il nome del receiver è obbligatorio.")).toBeInTheDocument();
+    expect(creati).toBe(0);
+  });
+
+  it("la severity di default è obbligatoria, come nel modulo di modifica", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<NewReceiverForm groupId="g1" />);
+    await user.click(screen.getByText("Nuovo receiver"));
+
+    expect(screen.getByLabelText("Severity di default")).toBeRequired();
+  });
 });
