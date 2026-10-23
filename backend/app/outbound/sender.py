@@ -22,6 +22,16 @@ MAX_ATTEMPTS = len(_BACKOFF_SCHEDULE_SECONDS)
 # del provider senza limiti: il tetto serve solo a valori fuori scala, che da un
 # endpoint ostile farebbero sforare la data di prossimo tentativo in fase 3.
 MAX_RETRY_AFTER_SECONDS = 30 * 24 * 3600
+# Il corpo di una risposta d'errore del provider finisce nell'esito della consegna:
+# se lo tagliamo, l'operatore deve vederlo, altrimenti sembra che il provider abbia
+# detto proprio quello.
+_ERROR_BODY_MAX_CHARS = 200
+
+
+def _corpo_troncato(testo: str) -> str:
+    if len(testo) <= _ERROR_BODY_MAX_CHARS:
+        return testo
+    return testo[:_ERROR_BODY_MAX_CHARS] + "…"
 
 
 def parse_retry_after(value: str | None, *, now: datetime | None = None) -> int:
@@ -164,7 +174,7 @@ def send_webhook_sync(
             ok=False,
             status_code=response.status_code,
             retry_after=None,
-            error=f"HTTP {response.status_code}: {response.text[:200]}",
+            error=f"HTTP {response.status_code}: {_corpo_troncato(response.text)}",
         )
     except Exception as exc:  # noqa: BLE001
         # Deliberatamente su Exception e non su httpx.HTTPError: qualunque

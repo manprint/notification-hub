@@ -64,7 +64,7 @@ async def _bootstrap(tenant_name: str, email: str, password: str) -> None:
     # iterano per sempre.
     if await find_user_by_email(email) is not None:
         raise click.ClickException(
-            f"L'email {email} e gia registrata: ogni account appartiene a un solo "
+            f"L'email {email} è già registrata: ogni account appartiene a un solo "
             "tenant. Usarne un'altra, oppure accedere con quella esistente."
         )
 

@@ -22,7 +22,6 @@ from app.models.severity_preset import (
     SeverityPresetRule,
 )
 from app.models.severity_rule import SeverityRule
-from app.models.tenant import Tenant
 from app.schemas.preset import (
     ReceiverPresetOut,
     ReceiverPresetsIn,
@@ -54,6 +53,7 @@ from app.services.surveillance import (
     reference_instant,
     schedule_from_receiver,
 )
+from app.services.tenant_lock import lock_tenant_settings
 from app.services.wrapper_script import (
     WrapperTemplateError,
     load_template,
@@ -201,11 +201,9 @@ async def _get_group_or_404(
 async def _validate_max_body_bytes(
     session: AsyncSession, tenant_id: uuid.UUID, requested: int | None
 ) -> int:
-    # FOR UPDATE: serializza con un PATCH /tenant che abbassa il cap (write skew).
-    tenant_result = await session.execute(
-        select(Tenant).where(Tenant.id == tenant_id).with_for_update()
-    )
-    tenant = tenant_result.scalar_one()
+    # Lock sulla riga del tenant: serializza con un PATCH /tenant che abbassa il cap
+    # (write skew). NO KEY UPDATE, per non fermare le ingestion del tenant.
+    tenant = await lock_tenant_settings(session, tenant_id)
     if requested is None:
         return tenant.max_body_bytes
     if requested > tenant.max_body_bytes:
@@ -334,7 +332,7 @@ async def update_receiver(
         # Lock del tenant prima di modificare il receiver: la validazione del cap
         # fa autoflush, quindi senza questo lock la riga receiver verrebbe scritta
         # prima del tenant, nell'ordine inverso a quello dell'ingestion.
-        await session.execute(select(Tenant.id).where(Tenant.id == tenant_id).with_for_update())
+        await lock_tenant_settings(session, tenant_id)
 
     if body.name is not None:
         receiver.name = body.name

@@ -135,22 +135,32 @@ async def test_abbassare_cap_tenant_sotto_receiver_esistente_409(
     token = await owner_token(api_client, tenant_id)
     headers = {"Authorization": f"Bearer {token}"}
 
+    nome_gruppo = f"Group {uuid.uuid4().hex[:8]}"
     group_resp = await api_client.post(
-        "/api/v1/groups", json={"name": f"Group {uuid.uuid4().hex[:8]}"}, headers=headers
+        "/api/v1/groups", json={"name": nome_gruppo}, headers=headers
     )
     group_id = group_resp.json()["id"]
-    await api_client.post(
+    receiver_resp = await api_client.post(
         f"/api/v1/groups/{group_id}/receivers",
         json={"name": "R", "max_body_bytes": 1_000_000},
         headers=headers,
     )
+    receiver_id = receiver_resp.json()["id"]
 
     response = await api_client.patch(
         "/api/v1/tenant", json={"max_body_bytes": 500_000}, headers=headers
     )
     assert response.status_code == 409
+    # Ogni conflitto dice id e gruppo, oltre a nome e cap: il nome da solo non identifica.
     conflicting = response.json()["conflicting_receivers"]
-    assert conflicting == [{"name": "R", "max_body_bytes": 1_000_000}]
+    assert conflicting == [
+        {
+            "id": receiver_id,
+            "name": "R",
+            "group_name": nome_gruppo,
+            "max_body_bytes": 1_000_000,
+        }
+    ]
 
 
 @pytest.mark.e2e

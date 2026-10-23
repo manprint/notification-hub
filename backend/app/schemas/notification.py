@@ -28,7 +28,7 @@ def _senza_nul(value: str) -> str:
     """Postgres non accetta il byte NUL nel testo: un `q` che lo contiene
     farebbe fallire il database, cioe' un 500 al posto di un 422."""
     if "\x00" in value:
-        raise ValueError("il testo di ricerca non puo' contenere il byte NUL")
+        raise ValueError("il testo di ricerca non può contenere il byte NUL")
     return value
 
 

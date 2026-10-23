@@ -121,7 +121,8 @@ async def test_bind_concorrente_aggiorna_la_riga_gia_inserita(api_client, two_te
     finally:
         await altra.close()
 
-    assert resp.status_code == 201, resp.text
+    # La riga esisteva gia' al commit: e' un aggiornamento, quindi 200 come l'override.
+    assert resp.status_code == 200, resp.text
     assert resp.json()["min_severity"] == "error"
     elenco = await api_client.get(f"/api/v1/groups/{group_id}/channels", headers=headers)
     assert len(elenco.json()) == 1

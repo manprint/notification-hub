@@ -40,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.types import Severity
 from app.models.severity_preset import SeverityPreset, SeverityPresetRule
+from app.services.tenant_lock import lock_tenant_settings
 
 PRIORITY_STEP = 10
 
@@ -137,7 +138,7 @@ POSTGRES = PresetSpec(
     key="postgres",
     name="PostgreSQL",
     description=(
-        "Livelli di log del server (PANIC, FATAL, ERROR, WARNING) piu gli errori tipici di "
+        "Livelli di log del server (PANIC, FATAL, ERROR, WARNING) più gli errori tipici di "
         "psql, pg_dump e pg_restore."
     ),
     rules=(
@@ -200,7 +201,7 @@ MONGODB = PresetSpec(
     key="mongodb",
     name="MongoDB",
     description=(
-        "Log del server (campo di severita F/E/W del formato JSON), errori di connessione e "
+        "Log del server (campo di severità F/E/W del formato JSON), errori di connessione e "
         "autenticazione, esiti di mongodump e mongorestore."
     ),
     rules=(
@@ -418,7 +419,13 @@ async def sync_builtin_presets(session: AsyncSession, tenant_id: uuid.UUID) -> l
     lotto. Si installa al primo sync utile, dopo che il nome si e liberato.
 
     Restituisce le chiavi installate ora.
+
+    Il lock sulla riga del tenant serializza due sync concorrenti (doppio click, due
+    admin): il secondo aspetta il primo e poi vede i preset gia installati, invece di
+    far scattare il vincolo unico e tornare 409 a una chiamata che doveva andare a buon
+    fine. E' un lock NO KEY UPDATE: non ferma le ingestion del tenant.
     """
+    await lock_tenant_settings(session, tenant_id)
     chiavi, nomi = await _chiavi_e_nomi_del_tenant(session, tenant_id)
 
     installed: list[str] = []

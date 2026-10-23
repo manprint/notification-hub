@@ -92,7 +92,7 @@ def validate_cron(expression: str) -> str:
     """
     candidate = expression.strip()
     if not candidate:
-        raise InvalidScheduleError("l'espressione cron e' vuota")
+        raise InvalidScheduleError("l'espressione cron è vuota")
     if len(candidate) > CRON_MAX_CHARS:
         raise InvalidScheduleError(f"l'espressione cron supera {CRON_MAX_CHARS} caratteri")
     if len(candidate.split()) != CRON_FIELDS:
@@ -123,7 +123,7 @@ def validate_cron(expression: str) -> str:
 def validate_timezone(name: str) -> str:
     candidate = name.strip()
     if not candidate:
-        raise InvalidScheduleError("il fuso orario e' vuoto")
+        raise InvalidScheduleError("il fuso orario è vuoto")
     try:
         ZoneInfo(candidate)
     except (ZoneInfoNotFoundError, ValueError) as exc:
@@ -256,8 +256,8 @@ def diagnose_phase(
     """
     if last_start_at is None:
         return (
-            "[notifyhub] non e' possibile dire se l'esecuzione non e' partita o se e' "
-            "partita e si e' interrotta: questo receiver non riceve ping di avvio "
+            "[notifyhub] non è possibile dire se l'esecuzione non è partita o se è "
+            "partita e si è interrotta: questo receiver non riceve ping di avvio "
             "(wrapper con --ping-start)."
         )
 
@@ -266,15 +266,15 @@ def diagnose_phase(
         return (
             f"[notifyhub] l'ultima esecuzione partita ({_stamp(last_start_at)}) aveva "
             "concluso regolarmente, e dopo di quella non ne risulta partita nessun'altra: "
-            "il job non e' stato avviato (cron non eseguito, macchina spenta, unita' "
+            "il job non è stato avviato (cron non eseguito, macchina spenta, unità "
             "systemd disabilitata)."
         )
 
     eta = format_seconds(int((now - last_start_at).total_seconds()))
     return (
         f"[notifyhub] l'esecuzione partita il {_stamp(last_start_at)} ({eta} fa) non ha "
-        "mai inviato la conclusione: il job E' partito e si e' interrotto a meta' "
-        "(macchina caduta, OOM, riavvio, processo ucciso), non e' un cron che non e' "
+        "mai inviato la conclusione: il job È partito e si è interrotto a metà "
+        "(macchina caduta, OOM, riavvio, processo ucciso), non è un cron che non è "
         "scattato."
     )
 
@@ -309,10 +309,10 @@ def missing_content(
         )
         + "\n[notifyhub] questa notifica l'ha generata NotifyHub, non lo script: nessuna "
         "esecuzione ha inviato niente entro la finestra attesa.\n"
-        "[notifyhub] da guardare, in ordine: la macchina e' accesa? il cron e' "
+        "[notifyhub] da guardare, in ordine: la macchina è accesa? il cron è "
         "ancora in crontab? la rete verso NotifyHub risponde? il job usa "
         "--only-on-failure (in quel caso il successo non manda niente e la "
-        "sorveglianza non va usata cosi')?"
+        "sorveglianza non va usata così)?"
     )
 
 

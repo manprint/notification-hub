@@ -63,7 +63,7 @@ def compile_pattern(pattern: str, case_insensitive: bool) -> Any:
     # Postgres non accetta il byte NUL in una colonna text: un pattern che lo
     # contiene verrebbe rifiutato in fase di INSERT con un 500 opaco.
     if "\x00" in pattern:
-        raise InvalidPatternError("il pattern non puo contenere il carattere NUL")
+        raise InvalidPatternError("il pattern non può contenere il carattere NUL")
     effective = f"(?i){pattern}" if case_insensitive else pattern
     try:
         return _compile_cached(effective)

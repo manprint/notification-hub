@@ -322,7 +322,8 @@ async def test_binding_gruppo_canale_idempotente(api_client, two_tenants, owner_
         json={"channel_id": str(channel_id), "min_severity": "warning"},
         headers=headers,
     )
-    assert second.status_code == 201, second.text
+    # L'aggiornamento della stessa coppia risponde 200, come l'override di canale.
+    assert second.status_code == 200, second.text
     assert second.json()["min_severity"] == "warning"
     assert second.json()["id"] == first.json()["id"]
 
