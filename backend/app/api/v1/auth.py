@@ -88,9 +88,12 @@ async def register(body: RegisterIn) -> dict:
     user_id = uuid.uuid4()
     password_hash = await asyncio.to_thread(hash_password, body.password)
 
-    # Tenant e owner nella stessa transazione: se l'INSERT dell'owner fallisce (corsa
-    # su users.email), il tenant torna indietro con lui e non resta senza utenti.
-    # tenants non ha RLS, quindi si inserisce sulla sessione gia legata al tenant.
+    # Tenant, owner e preset predefiniti nella stessa transazione: se una delle tre
+    # scritture fallisce (corsa su users.email, errore sui preset), il tenant torna
+    # indietro con le altre e il retry non trova un account gia registrato senza
+    # preset. tenants non ha RLS, quindi si inserisce sulla sessione gia legata al tenant.
+    from app.services.severity_presets import sync_builtin_presets
+
     async with tenant_session(tenant_id) as session:
         session.add(
             Tenant(
@@ -111,12 +114,9 @@ async def register(body: RegisterIn) -> dict:
                 status=UserStatus.ACTIVE,
             )
         )
-
-    # Come nel bootstrap da CLI: un tenant nuovo trova i preset predefiniti gia
-    # installati e modificabili, invece di una sezione Preset vuota.
-    from app.services.severity_presets import sync_builtin_presets
-
-    async with tenant_session(tenant_id) as session:
+        await session.flush()
+        # Come nel bootstrap da CLI: un tenant nuovo trova i preset predefiniti gia
+        # installati e modificabili, invece di una sezione Preset vuota.
         await sync_builtin_presets(session, tenant_id)
 
     return {"tenant_id": str(tenant_id), "user_id": str(user_id)}

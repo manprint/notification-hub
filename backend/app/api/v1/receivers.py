@@ -22,7 +22,6 @@ from app.models.severity_preset import (
     SeverityPresetRule,
 )
 from app.models.severity_rule import SeverityRule
-from app.models.tenant import Tenant
 from app.schemas.preset import (
     ReceiverPresetOut,
     ReceiverPresetsIn,
@@ -48,13 +47,13 @@ from app.services.authz import accessible_group_ids, assert_group_access
 from app.services.rule_chain import load_evaluation_chain
 from app.services.severity import InvalidPatternError, compile_pattern, resolve_severity_async
 from app.services.slug import build_receiver_slug
-from app.services.tenant_lock import lock_tenant_settings
 from app.services.surveillance import (
     InvalidScheduleError,
     alert_deadline,
     reference_instant,
     schedule_from_receiver,
 )
+from app.services.tenant_lock import lock_tenant_settings
 from app.services.wrapper_script import (
     WrapperTemplateError,
     load_template,

@@ -10,16 +10,14 @@ from app.outbound.formatters.slack import SLACK_BODY_LIMIT, build_slack_payload
 from app.outbound.sender import (
     MAX_ATTEMPTS,
     MAX_RETRY_AFTER_SECONDS,
-    calculate_retry_delay,
     WebhookResult,
+    calculate_retry_delay,
     parse_retry_after,
     send_webhook_sync,
 )
 
 
-def _invia_con_risposta(
-    monkeypatch: pytest.MonkeyPatch, status: int, corpo: str
-) -> WebhookResult:
+def _invia_con_risposta(monkeypatch: pytest.MonkeyPatch, status: int, corpo: str) -> WebhookResult:
     def _risposta(*args: object, **kwargs: object) -> httpx.Response:
         return httpx.Response(status, text=corpo)
 
