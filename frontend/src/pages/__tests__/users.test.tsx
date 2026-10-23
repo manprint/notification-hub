@@ -526,8 +526,10 @@ describe("UsersPage", () => {
     renderWithProviders(<UsersPage />);
 
     const rigaOwner = await screen.findByRole("row", { name: /owner@acme\.test/ });
-    const motivo = "Solo un owner può modificare o rimuovere un altro owner.";
+    const motivo = "Solo un proprietario può modificare o rimuovere un altro proprietario.";
     expect(within(rigaOwner).getByText(motivo)).toBeInTheDocument();
+    // Un blocco sotto l'email, non un testo attaccato a lei.
+    expect(within(rigaOwner).getByText(motivo).tagName).toBe("DIV");
     expect(within(rigaOwner).getByLabelText("Ruolo di owner@acme.test")).toHaveAccessibleDescription(
       motivo,
     );

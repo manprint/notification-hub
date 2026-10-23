@@ -552,7 +552,7 @@ export default function UsersPage() {
                   const manageable = canManage(user);
                   const readOnlyHint = manageable
                     ? undefined
-                    : "Solo un owner può modificare o rimuovere un altro owner.";
+                    : "Solo un proprietario può modificare o rimuovere un altro proprietario.";
                   // Il motivo sta anche a schermo: il title non si raggiunge da
                   // tastiera né al tocco, e un controllo disabilitato non prende il focus.
                   const notaId = `owner-readonly-${user.id}`;
@@ -562,9 +562,10 @@ export default function UsersPage() {
                         {user.email}
                         {isSelf(user) && <span className="text-muted text-sm"> (tu)</span>}
                         {readOnlyHint && (
-                          <span className="field-hint" id={notaId}>
+                          // Un blocco e non uno span: l'email e la nota non si leggono attaccate.
+                          <div className="field-hint" id={notaId}>
                             {readOnlyHint}
-                          </span>
+                          </div>
                         )}
                       </td>
                       <td>
