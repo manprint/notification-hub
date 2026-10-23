@@ -86,6 +86,7 @@ docker run -d --name "$MOCK" --network "$NETWORK" \
 docker run -d --name "$CONTAINER" --network "$NETWORK" \
     -p "127.0.0.1:${PORT}:80" \
     -e NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST="hooks.slack.com,chat.googleapis.com,${MOCK}" \
+    -e NOTIFYHUB_WEBHOOK_INSECURE_HTTP_HOSTS="${MOCK}" \
     -v "${CONTAINER}-data:/data" \
     -v "${CONTAINER}-logs:/logs" \
     "$IMAGE" >/dev/null

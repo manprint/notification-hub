@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # app/services/wrapper_script.py): serve solo a deploy fuori standard.
     notifyhub_wrapper_script_path: str | None = None
     notifyhub_webhook_host_allowlist: str = "hooks.slack.com,chat.googleapis.com"
+    # Host per cui e' ammesso http:// nel webhook: solo dev e smoke test con un mock
+    # interno. Il webhook porta il segreto nel percorso, quindi in produzione resta vuoto.
+    notifyhub_webhook_insecure_http_hosts: str = ""
     access_token_ttl_minutes: int = 15
     refresh_token_ttl_days: int = 30
     cors_origins: str = ""
@@ -61,6 +64,12 @@ class Settings(BaseSettings):
     @property
     def webhook_host_allowlist_list(self) -> list[str]:
         return [h.strip() for h in self.notifyhub_webhook_host_allowlist.split(",") if h.strip()]
+
+    @property
+    def webhook_insecure_http_hosts_list(self) -> list[str]:
+        return [
+            h.strip() for h in self.notifyhub_webhook_insecure_http_hosts.split(",") if h.strip()
+        ]
 
     @property
     def smtp_enabled(self) -> bool:

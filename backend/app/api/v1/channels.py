@@ -51,9 +51,19 @@ def _validate_webhook_url(webhook_url: str) -> None:
             status=422,
             type=PROBLEM_TYPES["validation_error"],
             title="Validation Error",
-            detail="Webhook URL must be an absolute http(s) URL.",
+            detail="Webhook URL must be an absolute https URL.",
         )
-    allowlist = get_settings().webhook_host_allowlist_list
+    settings = get_settings()
+    # Il webhook porta il segreto nel percorso: in chiaro andrebbe sulla rete. Il
+    # passaggio http resta solo per gli host dichiarati di dev e smoke test.
+    if parsed.scheme == "http" and parsed.hostname not in settings.webhook_insecure_http_hosts_list:
+        raise Problem(
+            status=422,
+            type=PROBLEM_TYPES["validation_error"],
+            title="Validation Error",
+            detail="Webhook URL must use https.",
+        )
+    allowlist = settings.webhook_host_allowlist_list
     if allowlist and parsed.hostname not in allowlist:
         raise Problem(
             status=422,

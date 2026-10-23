@@ -16,6 +16,8 @@ test_failed=0
 # processo bash. L'interpolazione di docker compose legge questa variabile dal
 # proprio ambiente prima di lanciare i container (vedi docker-compose.yml).
 export NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST="hooks.slack.com,chat.googleapis.com,mock-webhook"
+# Il mock interno parla http: e' l'unico host ammesso senza https (vedi config.py).
+export NOTIFYHUB_WEBHOOK_INSECURE_HTTP_HOSTS="mock-webhook"
 
 assert_eq() {
     local expected="$1"
