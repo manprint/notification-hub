@@ -395,9 +395,10 @@ docker compose exec api curl -s http://localhost:9100/metrics
 
 Il 9100 somma i valori di API e worker: entrambi scrivono nel volume `metricsdata`
 (`PROMETHEUS_MULTIPROC_DIR`). Il volume resta fra un riavvio e l'altro, quindi i contatori non
-ripartono da zero; per azzerarli serve `docker compose down -v` (cancella anche i dati). Il
-processo di scrittura dei gauge (`notifyhub_tenant_storage_bytes`) e' visibile solo finche' il
-worker che lo ha calcolato e' vivo.
+ripartono da zero; per azzerarli serve `docker compose down -v` (cancella anche i dati). La
+gauge `notifyhub_tenant_storage_bytes` vale l'ultimo valore scritto da `recompute_tenant_usage`
+(ogni notte alle 04:30): resta visibile anche con il worker fermo, e si aggiorna al ricalcolo
+successivo. Su un volume nuovo, prima del primo ricalcolo, la serie manca.
 
 Metriche definite in `app/core/metrics.py`:
 

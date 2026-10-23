@@ -58,7 +58,8 @@ tenant_storage_bytes = Gauge(
     "notifyhub_tenant_storage_bytes",
     "Spazio occupato per tenant (inline + oggetti MinIO), da recompute_tenant_usage",
     ["tenant_id"],
-    # Solo i processi vivi: il valore lo calcola un task del worker, e un processo morto non deve
-    # continuare a comparire con il suo ultimo valore.
-    multiprocess_mode="livemax",
+    # Ultimo valore scritto, da qualunque processo: dopo un nuovo calcolo (o un restart del worker,
+    # che cambia pid) non resta il massimo del passato. Il valore dura fino al ricalcolo successivo,
+    # anche con il worker fermo.
+    multiprocess_mode="mostrecent",
 )
