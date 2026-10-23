@@ -51,7 +51,7 @@ show_missing = true
 skip_covered = false
 # Pavimento verificato da `make cov`: una modifica che scende sotto fa fallire il
 # gate invece di passare inosservata. Va alzato quando la copertura sale.
-fail_under = 88
+fail_under = 92
 exclude_also = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",

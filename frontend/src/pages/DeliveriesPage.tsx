@@ -230,9 +230,11 @@ export default function DeliveriesPage() {
       header: "",
       render: (d) =>
         d.status === "dead" && canRetry ? (
-          <button disabled={retryingId !== null} onClick={() => void retry(d.id)}>
-            {retryingId === d.id ? "Ri-accodamento…" : "Ri-accoda"}
-          </button>
+          <div className="row-actions">
+            <button disabled={retryingId !== null} onClick={() => void retry(d.id)}>
+              {retryingId === d.id ? "Ri-accodamento…" : "Ri-accoda"}
+            </button>
+          </div>
         ) : null,
     },
   ];

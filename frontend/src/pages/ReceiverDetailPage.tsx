@@ -875,13 +875,13 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
               <h3>Come inviare qui</h3>
             </div>
             <div className="detail-grid">
-              <Detail label="Slug">
+              <Detail label="Slug" wide>
                 <span className="copy-field">
                   <code>{receiver.slug}</code>
                   <CopyButton value={receiver.slug} label="Copia slug" />
                 </span>
               </Detail>
-              <Detail label="URL di invio">
+              <Detail label="URL di invio" wide>
                 <span className="copy-field">
                   <code>{receiver.ingest_url}</code>
                   <CopyButton value={receiver.ingest_url} label="Copia URL" />

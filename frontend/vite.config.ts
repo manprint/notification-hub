@@ -34,10 +34,10 @@ export default defineConfig({
       // scende sotto. Alzarlo quando la copertura sale, mai abbassarlo per far
       // passare una modifica.
       thresholds: {
-        statements: 85,
-        branches: 78,
-        functions: 60,
-        lines: 85,
+        statements: 89,
+        branches: 83,
+        functions: 85,
+        lines: 90,
       },
     },
   },

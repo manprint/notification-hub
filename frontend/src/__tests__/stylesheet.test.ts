@@ -151,6 +151,11 @@ describe("cascata: regole che devono vincere sui pulsanti", () => {
     expect(declared("th", "overflow-wrap")).toBe("break-word");
   });
 
+  it("gli elementi assoluti dentro una tabella scorrono con lei e non allargano la pagina", () => {
+    expect(declared(".table-wrap", "overflow-x")).toBe("auto");
+    expect(declared(".table-wrap", "position")).toBe("relative");
+  });
+
   it("il pulsante principale in hover usa il fill di hover, piu' scuro", () => {
     expect(declared("button.primary:hover:not(:disabled)", "background")).toBe("var(--color-accent-fill-hover)");
   });

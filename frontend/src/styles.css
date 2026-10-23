@@ -418,8 +418,11 @@ tbody tr:last-child td {
    non ci stanno scorre la tabella, non la pagina. Ai bordi, un'ombra dice che
    c'e' altro da scorrere: le due coperture (local) seguono il contenuto e la
    spengono in fondo; le ombre (scroll) restano sulla scatola. Sono sfondo,
-   non coprono il testo. */
+   non coprono il testo. Il position: relative fa del contenitore il riferimento
+   degli elementi assoluti al suo interno (gli .sr-only di intestazioni e
+   caption): senza, sfuggono allo scorrimento e allargano la pagina. */
 .table-wrap {
+  position: relative;
   width: 100%;
   overflow-x: auto;
   background-color: var(--color-surface);

@@ -25,7 +25,7 @@ make migrate-test   # alembic upgrade head, test stack (ENV_FILE=.env.test)
 make test           # pytest -q, full suite
 make test-unit      # pytest -m unit
 make test-int       # pytest -m integration
-make cov            # pytest --cov, branch coverage, fail_under=88
+make cov            # pytest --cov, branch coverage, fail_under=92
 make fmt / fmt-check   # ruff format
 make lint           # ruff check
 make types          # mypy
