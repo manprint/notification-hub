@@ -248,7 +248,7 @@ export default function NotificationDetailPage() {
                 className="status-pill"
                 title="Il corpo ricevuto non era UTF-8 valido o conteneva byte NUL: il testo mostrato è stato ripulito in ingestion."
               >
-                contenuto normalizzato
+                Contenuto normalizzato
               </span>
             )}
           </h3>

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import PresetsPage from "../PresetsPage";
 import { setRefreshToken } from "../../api/client";
 import { server } from "../../api/mocks/server";
-import { fixturePresetCatalog, fixturePresets } from "../../api/mocks/handlers";
+import { fixturePresetCatalog, fixturePresetDetail, fixturePresets } from "../../api/mocks/handlers";
 import { renderWithProviders } from "./testUtils";
 
 function renderPage() {
@@ -96,6 +96,36 @@ describe("PresetsPage", () => {
 
     await user.click(await screen.findByLabelText("Sposta giù No space left on device"));
     await waitFor(() => expect(inviato).toEqual({ rule_ids: ["pr2", "pr1"] }));
+  });
+
+  it("un riordino fatto altrove nel frattempo non viene riportato indietro", async () => {
+    const user = userEvent.setup();
+    let letture = 0;
+    let riordini = 0;
+    const [pr1, pr2] = fixturePresetDetail.rules;
+    server.use(
+      // La prima lettura riempie la schermata; dalla seconda in poi qualcun altro
+      // ha gia' messo pr2 davanti a pr1.
+      http.get("/api/v1/severity-presets/p1", () => {
+        letture += 1;
+        const rules = letture === 1 ? [pr1, pr2] : [pr2, pr1];
+        return HttpResponse.json({ ...fixturePresetDetail, rules });
+      }),
+      http.put("/api/v1/severity-presets/p1/rules/order", () => {
+        riordini += 1;
+        return HttpResponse.json([]);
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Bash generico")).toBeInTheDocument());
+    const card = screen.getByText("Bash generico").closest<HTMLElement>(".card")!;
+    await user.click(within(card).getByRole("button", { name: "Mostra regole" }));
+
+    await user.click(await screen.findByLabelText("Sposta giù No space left on device"));
+    // Banner e avviso, come ogni errore (Verifica 6).
+    expect((await screen.findAllByText(/cambiato nel frattempo/)).length).toBeGreaterThan(0);
+    expect(riordini).toBe(0);
   });
 
   it("la nuova regola del preset non chiede la priorita", async () => {

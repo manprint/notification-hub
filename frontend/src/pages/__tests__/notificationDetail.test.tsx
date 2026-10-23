@@ -82,14 +82,14 @@ describe("NotificationDetailPage", () => {
     serviDettaglio({ ...fixtureNotificationDetailInline, content_normalized: true });
     renderDetail("n1");
 
-    expect(await screen.findByText("contenuto normalizzato")).toBeInTheDocument();
+    expect(await screen.findByText("Contenuto normalizzato")).toBeInTheDocument();
   });
 
   it("un contenuto non normalizzato non porta la pill", async () => {
     renderDetail("n1");
     await screen.findByText("Origine della severity");
 
-    expect(screen.queryByText("contenuto normalizzato")).not.toBeInTheDocument();
+    expect(screen.queryByText("Contenuto normalizzato")).not.toBeInTheDocument();
   });
 
   it("T-UI11 test_origine_severity_mostrata: con severity_source rule compare il pattern vincente", async () => {

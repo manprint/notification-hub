@@ -121,6 +121,19 @@ function PresetRuleForm({
   );
 }
 
+/** Errore mostrato quando la lettura fresca smentisce l'ordine a schermo: il
+ *  riordino non si invia. Ha la forma di un ApiError, cosi' il banner lo tratta
+ *  come gli altri errori. */
+function staleOrderError(detail: string): ApiError {
+  return {
+    status: 0,
+    type: "/problems/generic",
+    title: "Ordine non modificato",
+    detail,
+    extra: {},
+  };
+}
+
 function PresetRules({ presetId, canManage }: { presetId: string; canManage: boolean }) {
   const queryClient = useQueryClient();
   const { busy, error, run } = useAction();
@@ -151,18 +164,28 @@ function PresetRules({ presetId, canManage }: { presetId: string; canManage: boo
     }, { success });
   }
 
-  function move(index: number, delta: number) {
-    const next = [...rules];
-    const target = index + delta;
-    if (target < 0 || target >= next.length) return;
-    [next[index], next[target]] = [next[target], next[index]];
-    void mutate(
-      () =>
-        apiPut(`/api/v1/severity-presets/${presetId}/rules/order`, {
-          rule_ids: next.map((r) => r.id),
-        }),
-      "Ordine delle regole aggiornato.",
-    );
+  function move(ruleId: string, delta: number) {
+    void mutate(async () => {
+      // Lettura fresca dal server, non la cache: da un ordine vecchio il PUT
+      // riporterebbe indietro il riordino fatto nel frattempo da un altro.
+      const fresh = await queryClient.fetchQuery({
+        queryKey: ["preset", presetId],
+        queryFn: () => apiGet<SeverityPresetDetailOut>(`/api/v1/severity-presets/${presetId}`),
+        staleTime: 0,
+      });
+      const next = [...fresh.rules];
+      const index = next.findIndex((r) => r.id === ruleId);
+      const target = index + delta;
+      if (index === -1 || target < 0 || target >= next.length) {
+        throw staleOrderError(
+          "L'elenco delle regole è cambiato nel frattempo: ricontrolla l'ordine e riprova.",
+        );
+      }
+      [next[index], next[target]] = [next[target], next[index]];
+      await apiPut(`/api/v1/severity-presets/${presetId}/rules/order`, {
+        rule_ids: next.map((r) => r.id),
+      });
+    }, "Ordine delle regole aggiornato.");
   }
 
   return (
@@ -212,14 +235,14 @@ function PresetRules({ presetId, canManage }: { presetId: string; canManage: boo
                             <button
                               aria-label={`Sposta su ${rule.pattern}`}
                               disabled={index === 0 || busy !== null}
-                              onClick={() => move(index, -1)}
+                              onClick={() => move(rule.id, -1)}
                             >
                               ↑
                             </button>
                             <button
                               aria-label={`Sposta giù ${rule.pattern}`}
                               disabled={index === rules.length - 1 || busy !== null}
-                              onClick={() => move(index, 1)}
+                              onClick={() => move(rule.id, 1)}
                             >
                               ↓
                             </button>
