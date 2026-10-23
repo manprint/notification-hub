@@ -7,6 +7,7 @@ import httpx
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_claims, db, require_admin, require_member
@@ -314,11 +315,7 @@ async def create_receiver_override(
         )
     )
     override = existing_result.scalar_one_or_none()
-    if override is not None:
-        override.mode = body.mode
-        override.min_severity = min_severity
-        response.status_code = 200
-    else:
+    if override is None:
         override = ReceiverChannelOverride(
             id=uuid.uuid4(),
             tenant_id=tenant_id,
@@ -327,7 +324,29 @@ async def create_receiver_override(
             mode=body.mode,
             min_severity=min_severity,
         )
-        session.add(override)
+        try:
+            async with session.begin_nested():
+                session.add(override)
+                await session.flush()
+        except IntegrityError:
+            # Una richiesta concorrente ha inserito la stessa coppia dopo la nostra
+            # lettura: si aggiorna quella riga, come in un salvataggio ripetuto.
+            override = (
+                await session.execute(
+                    select(ReceiverChannelOverride).where(
+                        ReceiverChannelOverride.receiver_id == receiver_id,
+                        ReceiverChannelOverride.channel_id == body.channel_id,
+                        ReceiverChannelOverride.tenant_id == tenant_id,
+                    )
+                )
+            ).scalar_one()
+            override.mode = body.mode
+            override.min_severity = min_severity
+            response.status_code = 200
+    else:
+        override.mode = body.mode
+        override.min_severity = min_severity
+        response.status_code = 200
     await session.flush()
     return ReceiverChannelOverrideOut.model_validate(override)
 
@@ -508,6 +527,10 @@ async def retry_delivery(
         .join(Receiver, Receiver.id == Notification.receiver_id)
         .outerjoin(DeliveryChannel, DeliveryChannel.id == Delivery.channel_id)
         .where(Delivery.id == delivery_id, Delivery.tenant_id == tenant_id)
+        # Lock sulla riga della delivery: due retry concorrenti non possono leggere
+        # entrambi "dead" e accodare due volte. `of` perche' il lock sulle tabelle
+        # del lato nullable del LEFT JOIN non e' ammesso da Postgres.
+        .with_for_update(of=Delivery)
     )
     row = result.first()
     if row is None:

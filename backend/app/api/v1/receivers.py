@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_claims, db, require_admin, require_member
@@ -563,12 +564,37 @@ async def create_severity_rule(
         ) from exc
 
     if body.priority is None:
-        priority = await _next_priority(session, tenant_id, receiver_id)
+        # Priorita automatica: una richiesta concorrente puo aver preso lo stesso numero.
+        # Se il vincolo scatta si ricalcola e si riprova una volta, senza un 409 per una
+        # scelta che l'utente non ha fatto.
+        rule = _nuova_regola(
+            tenant_id, receiver_id, body, await _next_priority(session, tenant_id, receiver_id)
+        )
+        try:
+            async with session.begin_nested():
+                session.add(rule)
+                await session.flush()
+        except IntegrityError:
+            rule = _nuova_regola(
+                tenant_id, receiver_id, body, await _next_priority(session, tenant_id, receiver_id)
+            )
+            session.add(rule)
+            await session.flush()
     else:
-        priority = body.priority
-        await _assert_priority_free(session, tenant_id, receiver_id, priority)
+        await _assert_priority_free(session, tenant_id, receiver_id, body.priority)
+        rule = _nuova_regola(tenant_id, receiver_id, body, body.priority)
+        session.add(rule)
+        await session.flush()
+    return SeverityRuleOut.model_validate(rule)
 
-    rule = SeverityRule(
+
+def _nuova_regola(
+    tenant_id: uuid.UUID,
+    receiver_id: uuid.UUID,
+    body: SeverityRuleCreate,
+    priority: int,
+) -> SeverityRule:
+    return SeverityRule(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
         receiver_id=receiver_id,
@@ -578,9 +604,6 @@ async def create_severity_rule(
         severity=body.severity,
         enabled=body.enabled,
     )
-    session.add(rule)
-    await session.flush()
-    return SeverityRuleOut.model_validate(rule)
 
 
 async def _get_rule_or_404(

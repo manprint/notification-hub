@@ -11,6 +11,7 @@ import uuid
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_claims, db, require_admin
@@ -373,24 +374,45 @@ async def create_preset_rule(
     _validate_pattern(body.pattern, body.case_insensitive)
 
     if body.priority is None:
-        priority = await _next_rule_priority(session, preset.id)
+        # Priorita automatica: come per le regole dei receiver, un conflitto concorrente
+        # si risolve ricalcolando una volta, senza un 409 per una scelta non fatta.
+        rule = _nuova_regola_preset(
+            tenant_id, preset.id, body, await _next_rule_priority(session, preset.id)
+        )
+        try:
+            async with session.begin_nested():
+                session.add(rule)
+                await session.flush()
+        except IntegrityError:
+            rule = _nuova_regola_preset(
+                tenant_id, preset.id, body, await _next_rule_priority(session, preset.id)
+            )
+            session.add(rule)
+            await session.flush()
     else:
-        priority = body.priority
-        await _assert_rule_priority_free(session, preset.id, priority)
+        await _assert_rule_priority_free(session, preset.id, body.priority)
+        rule = _nuova_regola_preset(tenant_id, preset.id, body, body.priority)
+        session.add(rule)
+        await session.flush()
+    return SeverityPresetRuleOut.model_validate(rule)
 
-    rule = SeverityPresetRule(
+
+def _nuova_regola_preset(
+    tenant_id: uuid.UUID,
+    preset_id: uuid.UUID,
+    body: SeverityPresetRuleCreate,
+    priority: int,
+) -> SeverityPresetRule:
+    return SeverityPresetRule(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
-        preset_id=preset.id,
+        preset_id=preset_id,
         priority=priority,
         pattern=body.pattern,
         case_insensitive=body.case_insensitive,
         severity=body.severity,
         enabled=body.enabled,
     )
-    session.add(rule)
-    await session.flush()
-    return SeverityPresetRuleOut.model_validate(rule)
 
 
 @router.put("/severity-presets/{preset_id}/rules/order", response_model=list[SeverityPresetRuleOut])

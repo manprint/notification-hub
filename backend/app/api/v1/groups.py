@@ -2,6 +2,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_claims, db, require_admin
@@ -276,7 +277,24 @@ async def bind_group_channel(
             min_severity=body.min_severity,
             enabled=body.enabled,
         )
-        session.add(binding)
+        try:
+            async with session.begin_nested():
+                session.add(binding)
+                await session.flush()
+        except IntegrityError:
+            # Richiesta concorrente sulla stessa coppia (gruppo, canale): si aggiorna
+            # la riga che ha gia inserito, senza un 409 per un salvataggio ripetuto.
+            binding = (
+                await session.execute(
+                    select(GroupChannelBinding).where(
+                        GroupChannelBinding.group_id == group_id,
+                        GroupChannelBinding.channel_id == body.channel_id,
+                        GroupChannelBinding.tenant_id == tenant_id,
+                    )
+                )
+            ).scalar_one()
+            binding.min_severity = body.min_severity
+            binding.enabled = body.enabled
     await session.flush()
     return GroupChannelBindingOut.model_validate(binding)
 
