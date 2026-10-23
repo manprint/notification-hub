@@ -1005,32 +1005,40 @@ async def group_delete_impact(
     tenant_id = uuid.UUID(claims.tid)
     await assert_group_access(session, claims, group_id, write=False)
 
-    receivers_result = await session.execute(
-        select(Receiver.id).where(Receiver.group_id == group_id, Receiver.tenant_id == tenant_id)
+    # Solo conteggi, in SQL: elencare gli id di ogni notifica del gruppo in Python
+    # e rimandarli come parametri legati supererebbe il limite di 32767 parametri
+    # del protocollo Postgres su un gruppo grande, con un 500 sulla preflight.
+    # I receiver si passano come sottoquery per la stessa ragione.
+    receivers_of_group = select(Receiver.id).where(
+        Receiver.group_id == group_id, Receiver.tenant_id == tenant_id
     )
-    receiver_ids = [row[0] for row in receivers_result.all()]
-
-    if not receiver_ids:
+    receivers_count = await session.scalar(
+        select(func.count()).select_from(receivers_of_group.subquery())
+    )
+    if not receivers_count:
         return DeleteImpactOut(receivers=0, notifications=0, deliveries=0)
 
-    notifications_result = await session.execute(
-        select(Notification.id).where(
-            Notification.receiver_id.in_(receiver_ids), Notification.tenant_id == tenant_id
+    notifications_count = await session.scalar(
+        select(func.count())
+        .select_from(Notification)
+        .where(
+            Notification.receiver_id.in_(receivers_of_group),
+            Notification.tenant_id == tenant_id,
         )
     )
-    notification_ids = [row[0] for row in notifications_result.all()]
-
-    deliveries_count = 0
-    if notification_ids:
-        deliveries_result = await session.execute(
-            select(Delivery.id).where(
-                Delivery.notification_id.in_(notification_ids), Delivery.tenant_id == tenant_id
-            )
+    deliveries_count = await session.scalar(
+        select(func.count())
+        .select_from(Delivery)
+        .join(Notification, Notification.id == Delivery.notification_id)
+        .where(
+            Notification.receiver_id.in_(receivers_of_group),
+            Notification.tenant_id == tenant_id,
+            Delivery.tenant_id == tenant_id,
         )
-        deliveries_count = len(deliveries_result.all())
+    )
 
     return DeleteImpactOut(
-        receivers=len(receiver_ids),
-        notifications=len(notification_ids),
-        deliveries=deliveries_count,
+        receivers=receivers_count,
+        notifications=notifications_count or 0,
+        deliveries=deliveries_count or 0,
     )
