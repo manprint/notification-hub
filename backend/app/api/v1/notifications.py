@@ -184,7 +184,7 @@ async def list_notifications(
     cursor: str | None = Query(default=None),  # noqa: B008
     limit: int = Query(default=20, ge=1, le=100),  # noqa: B008
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> NotificationListOut:
     """Paginazione a cursore su (received_at, id) DESC (spec 9.5): niente
     OFFSET, che degrada su tabelle grandi e puo saltare o ripetere righe se
@@ -307,7 +307,7 @@ async def get_notification(
     notification_id: uuid.UUID,
     request: Request,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> NotificationDetailOut:
     notification = await _get_notification_or_404(session, claims, notification_id)
     emails = await _handler_emails(session, [notification])
@@ -348,7 +348,7 @@ async def get_notification(
 async def get_notification_content(
     notification_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> StreamingResponse:
     """Streaming del corpo completo, proxy da MinIO se offloaded (spec 6.5,
     9.5): mai una presigned URL esposta al browser, il download passa sempre
@@ -387,7 +387,7 @@ async def mark_notification_status(
     body: MarkStatusIn,
     request: Request,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> NotificationDetailOut:
     """Cambia read/unread e/o verified. Serve il ruolo member: un viewer ha
     accesso in sola lettura (spec 3, ruoli) e prima poteva invece marcare come
@@ -445,7 +445,7 @@ async def mark_notification_status(
 async def bulk_mark_read(
     body: BulkReadIn,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> BulkReadOut:
     """Come PATCH: e una scrittura, quindi serve il ruolo member."""
     conditions: list = []
@@ -512,7 +512,7 @@ async def bulk_mark_read(
 async def delete_notification(
     notification_id: uuid.UUID,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     """Il trigger AFTER DELETE (migrazione 0002) accoda storage_key in
     pending_object_deletions per i payload offloaded (invariante I-8): qui

@@ -155,7 +155,7 @@ async def _replace_user_groups(
 async def create_user(
     body: UserCreateIn,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> UserOut:
     """Creazione diretta (email + password specificate dall'admin), in
     alternativa al flusso di invito via email: l'utente risultante e gia
@@ -203,7 +203,7 @@ async def list_users(
     # Elenco membri con le email: admin+ (spec 9.2). La pagina Utenti era gia'
     # riservata, ma l'API rispondeva a chiunque fosse autenticato.
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[UserOut]:
     tenant_id = uuid.UUID(claims.tid)
     # Ordine esplicito: senza ORDER BY la tabella cambia riga di posto a ogni UPDATE.
@@ -233,7 +233,7 @@ async def list_users(
 async def get_user(
     user_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> UserOut:
     tenant_id = uuid.UUID(claims.tid)
     result = await session.execute(
@@ -260,7 +260,7 @@ async def update_user(
     user_id: uuid.UUID,
     body: UserPatchIn,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> UserOut:
     tenant_id = uuid.UUID(claims.tid)
     result = await session.execute(
@@ -310,7 +310,7 @@ async def update_user(
 async def remove_user(
     user_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     """Rimozione (spec 9.2). Disabilita l'utente invece di eliminare la riga:
     refresh_tokens e invitations referenziano users.id senza ON DELETE, e la
