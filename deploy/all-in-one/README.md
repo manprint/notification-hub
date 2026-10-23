@@ -262,6 +262,19 @@ resta compatibile per tutta la vita di questa base. Se una futura immagine cambi
 container si ferma prima di toccare i dati e stampa la procedura (backup con la vecchia immagine,
 cluster nuovo, `notifyhub-restore`).
 
+**Coda Celery dei job di manutenzione**: fino alla v0.0.10 compresa i job di manutenzione di beat
+(per esempio `check_expected_schedules`) finivano sulla coda Celery di default, `celery`, che il
+worker non consumava. Dopo l'aggiornamento quei messaggi restano in Redis senza che nessuno li legga.
+Una volta sola, dopo l'aggiornamento:
+
+```bash
+docker compose exec notifyhub redis-cli -n 1 LLEN celery   # messaggi residui
+docker compose exec notifyhub redis-cli -n 1 DEL celery
+```
+
+Il database 1 e' quello del broker Celery (`CELERY_BROKER_URL`). Il comando non tocca le code
+`delivery` e `maintenance`.
+
 ## Backup e ripristino
 
 ```bash
