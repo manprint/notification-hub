@@ -172,3 +172,25 @@ def test_all_in_one_metriche_multiprocess_pulite_all_avvio():
         < boot.index("metrics_prepare")
         < boot.index('exec "${VENV_BIN}/supervisord"')
     )
+    # La CLI (docker exec) ricompone l'ambiente con export_runtime_env: senza unset, ogni
+    # invocazione creerebbe un file di metriche nella directory che il 9100 somma.
+    cli = (radice / "rootfs/usr/local/bin/notifyhub-cli").read_text(encoding="utf-8")
+    assert cli.index("export_runtime_env") < cli.index("unset PROMETHEUS_MULTIPROC_DIR")
+
+
+@pytest.mark.unit
+def test_all_in_one_nginx_intestazioni_ereditate_dalla_spa():
+    # nginx non eredita gli add_header del server in una location che ne definisce una propria:
+    # le intestazioni di sicurezza stanno nel server, e index.html e gli asset non ne definiscono.
+    nginx = (REPO / "deploy/all-in-one/config/nginx.conf").read_text(encoding="utf-8")
+
+    for intestazione in (
+        "X-Content-Type-Options nosniff always",
+        "X-Frame-Options DENY always",
+        "Referrer-Policy strict-origin-when-cross-origin always",
+    ):
+        assert f"add_header {intestazione};" in nginx
+    for location in ("location = /index.html {", "location /assets/ {"):
+        inizio = nginx.index(location)
+        blocco = nginx[inizio : nginx.index("}", inizio)]
+        assert "add_header" not in blocco

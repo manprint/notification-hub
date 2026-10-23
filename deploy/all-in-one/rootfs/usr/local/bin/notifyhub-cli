@@ -19,6 +19,9 @@ set -Eeuo pipefail
 
 load_secrets readonly
 export_runtime_env
+# La CLI non e' un programma di supervisord: non deve creare file nella directory delle
+# metriche multiprocess, che il 9100 somma per tutta la vita del container.
+unset PROMETHEUS_MULTIPROC_DIR
 
 cd "${APP_DIR}"
 exec gosu "${APP_USER}:${APP_GROUP}" "${VENV_BIN}/python" -m app "$@"
