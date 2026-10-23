@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ReactNode } from "react";
-import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { Link, Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Layout from "./components/Layout";
 import RequireRole from "./components/RequireRole";
@@ -29,6 +29,16 @@ function CaricamentoPagina() {
     <main className="auth-shell">
       <div className="empty-state">Caricamento…</div>
     </main>
+  );
+}
+
+/** Le pagine autenticate si caricano pigre dentro il layout: l'attesa sta nel
+ *  riquadro della pagina, così il menu non sparisce mentre arriva il chunk. */
+function AttesaPagina() {
+  return (
+    <Suspense fallback={<div className="empty-state">Caricamento…</div>}>
+      <Outlet />
+    </Suspense>
   );
 }
 
@@ -97,6 +107,7 @@ export default function App() {
               </RequireAuth>
             }
           >
+          <Route element={<AttesaPagina />}>
           <Route index element={<HomePage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/notifications/:id" element={<NotificationDetailPage />} />
@@ -176,6 +187,7 @@ export default function App() {
           {/* Dentro il layout autenticato: chi non è entrato passa prima dal
               login, e il menu resta a disposizione per tornare altrove. */}
           <Route path="*" element={<NotFound />} />
+          </Route>
           </Route>
         </Routes>
       </Suspense>
