@@ -29,6 +29,7 @@ from app.core.security import AccessClaims
 from app.db.types import AuditOutcome
 from app.models.audit_event import AuditEvent
 from app.schemas.audit import AuditEventListOut, AuditEventOut
+from app.schemas.notification import UtcDatetime, as_utc
 from app.services.audit import NOTIFICATION_STATUS_ACTIONS
 from app.services.audit_location import EMPTY, Location, resolve_locations
 
@@ -77,7 +78,7 @@ def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
     try:
         raw = base64.urlsafe_b64decode(cursor.encode()).decode()
         occurred_at_str, id_str = raw.split("|", 1)
-        return datetime.fromisoformat(occurred_at_str), uuid.UUID(id_str)
+        return as_utc(datetime.fromisoformat(occurred_at_str)), uuid.UUID(id_str)
     except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
         raise Problem(
             status=422,
@@ -217,8 +218,8 @@ async def list_audit_events(
     resource_type: str | None = Query(default=None),  # noqa: B008
     resource_id: uuid.UUID | None = Query(default=None),  # noqa: B008
     outcome: AuditOutcome | None = Query(default=None),  # noqa: B008
-    from_: datetime | None = Query(default=None, alias="from"),  # noqa: B008
-    to: datetime | None = Query(default=None),  # noqa: B008
+    from_: UtcDatetime | None = Query(default=None, alias="from"),  # noqa: B008
+    to: UtcDatetime | None = Query(default=None),  # noqa: B008
     cursor: str | None = Query(default=None),  # noqa: B008
     limit: int = Query(default=50, ge=1, le=200),  # noqa: B008
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
@@ -243,8 +244,8 @@ async def list_notification_status_events(
     notification_id: uuid.UUID | None = Query(default=None),  # noqa: B008
     actor_user_id: uuid.UUID | None = Query(default=None),  # noqa: B008
     action: str | None = Query(default=None),  # noqa: B008
-    from_: datetime | None = Query(default=None, alias="from"),  # noqa: B008
-    to: datetime | None = Query(default=None),  # noqa: B008
+    from_: UtcDatetime | None = Query(default=None, alias="from"),  # noqa: B008
+    to: UtcDatetime | None = Query(default=None),  # noqa: B008
     cursor: str | None = Query(default=None),  # noqa: B008
     limit: int = Query(default=50, ge=1, le=200),  # noqa: B008
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
@@ -277,8 +278,8 @@ async def export_audit_events(
     resource_type: str | None = Query(default=None),  # noqa: B008
     resource_id: uuid.UUID | None = Query(default=None),  # noqa: B008
     outcome: AuditOutcome | None = Query(default=None),  # noqa: B008
-    from_: datetime | None = Query(default=None, alias="from"),  # noqa: B008
-    to: datetime | None = Query(default=None),  # noqa: B008
+    from_: UtcDatetime | None = Query(default=None, alias="from"),  # noqa: B008
+    to: UtcDatetime | None = Query(default=None),  # noqa: B008
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> StreamingResponse:

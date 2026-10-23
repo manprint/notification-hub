@@ -4,12 +4,14 @@ letta" e "segna come verificata"."""
 import csv
 import io
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 
 from app.core.security import hash_password
 from app.db.session import tenant_session
-from app.db.types import UserRole, UserStatus
+from app.db.types import AuditOutcome, UserRole, UserStatus
+from app.models.audit_event import AuditEvent
 from app.models.user import User
 from app.models.user_group_membership import UserGroupMembership
 from tests.conftest_factories import create_group, create_receiver
@@ -765,3 +767,53 @@ async def test_notification_status_trova_ogni_notifica_del_bulk_read(
             "notification.bulk_marked_read"
         ]
         assert eventi.json()["events"][0]["context"]["count"] == 3
+
+
+@pytest.mark.e2e
+async def test_paginazione_audit_con_occurred_at_uguale(api_client, two_tenants, owner_token):
+    """Sette eventi con lo stesso occurred_at: il cursore su (occurred_at, id)
+    deve consegnarli tutti, una volta sola, pagina dopo pagina."""
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    stesso_istante = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+    async with tenant_session(tenant_id) as session:
+        session.add_all(
+            [
+                AuditEvent(
+                    tenant_id=tenant_id,
+                    occurred_at=stesso_istante,
+                    actor_email="owner@test.com",
+                    actor_role=UserRole.OWNER,
+                    action="notification.marked_read",
+                    resource_type="notification",
+                    outcome=AuditOutcome.SUCCESS,
+                )
+                for _ in range(7)
+            ]
+        )
+
+    ids: list[str] = []
+    params: dict = {"action": "notification.marked_read", "limit": 3}
+    while True:
+        pagina = (await api_client.get("/api/v1/audit/events", params=params, headers=owner)).json()
+        ids += [evento["id"] for evento in pagina["events"]]
+        if pagina["next_cursor"] is None:
+            break
+        params = {**params, "cursor": pagina["next_cursor"]}
+
+    assert len(ids) == 7
+    assert len(set(ids)) == 7
+
+
+@pytest.mark.e2e
+async def test_periodo_fuori_dall_intervallo_supportato_e_422(api_client, two_tenants, owner_token):
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+
+    resp = await api_client.get(
+        "/api/v1/audit/events",
+        params={"from": "0001-01-01T00:00:00+01:00"},
+        headers=owner,
+    )
+
+    assert resp.status_code == 422

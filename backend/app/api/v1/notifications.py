@@ -29,6 +29,9 @@ from app.schemas.notification import (
     NotificationDetailOut,
     NotificationListItemOut,
     NotificationListOut,
+    SearchText,
+    UtcDatetime,
+    as_utc,
 )
 from app.services.audit import (
     ACTION_BULK_MARKED_READ,
@@ -49,7 +52,7 @@ def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
     try:
         raw = base64.urlsafe_b64decode(cursor.encode()).decode()
         received_at_str, id_str = raw.split("|", 1)
-        return datetime.fromisoformat(received_at_str), uuid.UUID(id_str)
+        return as_utc(datetime.fromisoformat(received_at_str)), uuid.UUID(id_str)
     except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
         raise Problem(
             status=422,
@@ -173,9 +176,9 @@ async def list_notifications(
     severity_min: Severity | None = Query(default=None),  # noqa: B008
     source: SeveritySource | None = Query(default=None),  # noqa: B008
     verified: bool | None = Query(default=None),  # noqa: B008
-    q: str | None = Query(default=None),  # noqa: B008
-    from_: datetime | None = Query(default=None, alias="from"),  # noqa: B008
-    to: datetime | None = Query(default=None),  # noqa: B008
+    q: SearchText | None = Query(default=None),  # noqa: B008
+    from_: UtcDatetime | None = Query(default=None, alias="from"),  # noqa: B008
+    to: UtcDatetime | None = Query(default=None),  # noqa: B008
     cursor: str | None = Query(default=None),  # noqa: B008
     limit: int = Query(default=20, ge=1, le=100),  # noqa: B008
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
