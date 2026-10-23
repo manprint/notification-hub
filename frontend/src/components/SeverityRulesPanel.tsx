@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { INT4_MAX, parseDurationInput, parseIntegerInput } from "../lib/duration";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../api/client";
 import type {
@@ -99,6 +99,7 @@ function RuleForm({
   const [severity, setSeverity] = useState<Severity>(rule?.severity ?? "error");
   const [caseInsensitive, setCaseInsensitive] = useState(rule?.case_insensitive ?? true);
   const [patternError, setPatternError] = useState<string | null>(null);
+  const patternErrorId = useId();
   const { busy, error, run } = useAction();
 
   async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
@@ -136,35 +137,33 @@ function RuleForm({
   }
 
   return (
-    <form onSubmit={(event) => void handleSubmit(event)}>
+    // noValidate: il campo vuoto lo rifiuta handleSubmit, con il messaggio sotto.
+    <form noValidate onSubmit={(event) => void handleSubmit(event)}>
       {error && <ErrorBanner error={error} />}
-      {patternError && (
-        <p className="field-error" role="alert">
-          {patternError}
-        </p>
-      )}
       <div className="toolbar">
-        <input
-          aria-label="Pattern RE2"
-          aria-invalid={patternError ? true : undefined}
-          placeholder="Pattern RE2, es. ERRORE|FALL(ITO|IMENTO)"
-          value={pattern}
-          onChange={(event) => setPattern(event.target.value)}
-          required
-          maxLength={200}
-          className="grow-input"
-        />
-        <select
-          aria-label="Severity assegnata"
-          value={severity}
-          onChange={(event) => setSeverity(event.target.value as Severity)}
-        >
-          {SEVERITIES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
+        <label className="inline-check">
+          <span>Pattern</span>
+          <input
+            aria-describedby={patternError ? patternErrorId : undefined}
+            aria-invalid={patternError ? true : undefined}
+            placeholder="RE2, es. ERRORE|FALL(ITO|IMENTO)"
+            value={pattern}
+            onChange={(event) => setPattern(event.target.value)}
+            required
+            maxLength={200}
+            className="grow-input"
+          />
+        </label>
+        <label className="inline-check">
+          <span>Severity</span>
+          <select value={severity} onChange={(event) => setSeverity(event.target.value as Severity)}>
+            {SEVERITIES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="inline-check">
           <input
             type="checkbox"
@@ -182,6 +181,11 @@ function RuleForm({
           </button>
         )}
       </div>
+      {patternError && (
+        <p className="field-error" id={patternErrorId} role="alert">
+          {patternError}
+        </p>
+      )}
     </form>
   );
 }

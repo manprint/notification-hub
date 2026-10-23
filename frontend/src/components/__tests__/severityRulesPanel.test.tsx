@@ -181,7 +181,7 @@ describe("SeverityRulesPanel", () => {
     await user.click(await screen.findByRole("button", { name: /ultime notifiche/i }));
     await waitFor(() => expect(ricalcoli).toBe(1));
 
-    await user.type(screen.getByLabelText("Pattern RE2"), "PANIC");
+    await user.type(screen.getByLabelText("Pattern"), "PANIC");
     await user.click(screen.getByRole("button", { name: "Aggiungi regola" }));
 
     await waitFor(() => expect(ricalcoli).toBe(2));
@@ -260,7 +260,7 @@ describe("SeverityRulesPanel", () => {
     );
     renderPanel();
 
-    await user.type(await screen.findByLabelText("Pattern RE2"), "PANIC");
+    await user.type(await screen.findByLabelText("Pattern"), "PANIC");
     await user.click(screen.getByRole("button", { name: "Aggiungi regola" }));
 
     await waitFor(() => expect(inviato).not.toBeNull());
@@ -285,7 +285,7 @@ describe("SeverityRulesPanel", () => {
     );
     renderPanel();
 
-    await user.type(await screen.findByLabelText("Pattern RE2"), "(aperta");
+    await user.type(await screen.findByLabelText("Pattern"), "(aperta");
     await user.click(screen.getByRole("button", { name: "Aggiungi regola" }));
 
     await waitFor(() => {
@@ -388,6 +388,55 @@ describe("SeverityRulesPanel", () => {
     await user.click(screen.getByRole("button", { name: "Esegui prova" }));
 
     expect(await screen.findByText(/Troppo grande/)).toBeInTheDocument();
+    expect(inviati).toHaveLength(0);
+  });
+  it("T-ORD2 dopo un riordino rifiutato la lista si rilegge prima della mossa successiva", async () => {
+    const user = userEvent.setup();
+    let letture = 0;
+    const ordini: string[] = [];
+    server.use(
+      http.get("/api/v1/receivers/r1/severity-rules", () => {
+        letture += 1;
+        return HttpResponse.json(twoRules);
+      }),
+      http.put("/api/v1/receivers/r1/severity-rules/order", async ({ request }) => {
+        const body = (await request.json()) as { rule_ids: string[] };
+        ordini.push(body.rule_ids.join(","));
+        return HttpResponse.json(
+          { type: "/problems/unprocessable", title: "Unprocessable", status: 422, detail: "No." },
+          { status: 422 },
+        );
+      }),
+    );
+    renderWithProviders(<SeverityRulesPanel receiver={receiver} />);
+
+    await waitFor(() => expect(screen.getByText("ERRORE")).toBeInTheDocument());
+    const lettureIniziali = letture;
+    await user.click(screen.getByLabelText("Sposta giù ERRORE"));
+
+    await waitFor(() => expect(ordini).toHaveLength(1));
+    // Il rifiuto ha fatto rileggere le regole: la cache non è più quella di prima.
+    await waitFor(() => expect(letture).toBeGreaterThan(lettureIniziali));
+  });
+
+  it("T-RULE1 una regola senza pattern dice il problema sul campo, senza la validazione del browser", async () => {
+    const user = userEvent.setup();
+    const inviati: unknown[] = [];
+    server.use(
+      http.post("/api/v1/receivers/r1/severity-rules", async ({ request }) => {
+        inviati.push(await request.json());
+        return HttpResponse.json({}, { status: 201 });
+      }),
+    );
+    renderPanel();
+
+    await waitFor(() => expect(screen.getByText("ERRORE")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Aggiungi regola" }));
+
+    const messaggio = await screen.findByText("Il pattern è obbligatorio.");
+    const campo = screen.getByLabelText("Pattern");
+    expect(campo).toHaveAttribute("aria-invalid", "true");
+    expect(campo).toHaveAttribute("aria-describedby", messaggio.id);
     expect(inviati).toHaveLength(0);
   });
 });
