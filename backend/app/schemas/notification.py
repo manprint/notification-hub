@@ -1,11 +1,38 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import Annotated
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AfterValidator, BaseModel, Field, model_validator
 
 from app.db.types import NotificationPhase, NotificationStatus, Severity, SeveritySource
 
 LIST_PREVIEW_CHARS = 500  # spec 9.5: la lista non restituisce il content completo
+
+
+def as_utc(value: datetime) -> datetime:
+    """Un istante senza fuso e' UTC, non l'ora locale del processo: asyncpg lo
+    converte nel fuso di sistema, e lo stesso `from` selezionava righe diverse
+    a seconda del TZ del container. Un valore che UTC non sa rappresentare
+    (0001-01-01 con offset positivo) e' un 422, non un 500."""
+    try:
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    except OverflowError as exc:
+        raise ValueError("data fuori dall'intervallo supportato") from exc
+
+
+# Date di from/to e dei cursori, su liste e export dell'audit.
+UtcDatetime = Annotated[datetime, AfterValidator(as_utc)]
+
+
+def _senza_nul(value: str) -> str:
+    """Postgres non accetta il byte NUL nel testo: un `q` che lo contiene
+    farebbe fallire il database, cioe' un 500 al posto di un 422."""
+    if "\x00" in value:
+        raise ValueError("il testo di ricerca non puo' contenere il byte NUL")
+    return value
+
+
+SearchText = Annotated[str, AfterValidator(_senza_nul)]
 
 
 class NotificationListItemOut(BaseModel):
@@ -100,9 +127,9 @@ class BulkReadIn(BaseModel):
     # prima veniva scartato in silenzio, e con "solo lette" attivo "segna tutte
     # come lette" toccava proprio le non lette che la vista stava nascondendo.
     status: NotificationStatus | None = None
-    q: str | None = None
-    from_: datetime | None = Field(default=None, alias="from")
-    to: datetime | None = None
+    q: SearchText | None = None
+    from_: UtcDatetime | None = Field(default=None, alias="from")
+    to: UtcDatetime | None = None
 
     model_config = {"populate_by_name": True}
 

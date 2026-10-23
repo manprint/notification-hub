@@ -168,6 +168,12 @@ async def test_delete_notification_accoda_storage_key_per_oggetti(
     )
     assert delete_resp.status_code == 204
 
+    # Il DELETE dell'owner e' un fatto con attore: deve lasciare un evento di audit.
+    audit = await api_client.get(
+        "/api/v1/audit/events", params={"resource_id": notification_id}, headers=headers
+    )
+    assert [evento["action"] for evento in audit.json()["events"]] == ["notification.deleted"]
+
     from app.models.object_deletion import PendingObjectDeletion
 
     async with tenant_session(tenant_id) as session:

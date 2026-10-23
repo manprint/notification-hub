@@ -29,6 +29,9 @@ from app.schemas.notification import (
     NotificationDetailOut,
     NotificationListItemOut,
     NotificationListOut,
+    SearchText,
+    UtcDatetime,
+    as_utc,
 )
 from app.services.audit import (
     ACTION_BULK_MARKED_READ,
@@ -49,7 +52,7 @@ def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
     try:
         raw = base64.urlsafe_b64decode(cursor.encode()).decode()
         received_at_str, id_str = raw.split("|", 1)
-        return datetime.fromisoformat(received_at_str), uuid.UUID(id_str)
+        return as_utc(datetime.fromisoformat(received_at_str)), uuid.UUID(id_str)
     except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
         raise Problem(
             status=422,
@@ -95,8 +98,10 @@ async def _apply_filters(
     from_: datetime | None,
     to: datetime | None,
     write: bool = False,
-) -> bool:
-    """Costruisce le condizioni di filtro. Restituisce False quando il
+) -> tuple[bool, list[uuid.UUID] | None]:
+    """Costruisce le condizioni di filtro. Restituisce anche i gruppi visibili
+    al chiamante (None = tutti), perche' il conteggio non li ricalcoli. Il primo
+    valore e' False quando il
     chiamante non puo vedere nulla (member/viewer senza gruppi associati):
     senza il vincolo di appartenenza, member e viewer leggevano le notifiche
     di tutti i gruppi del tenant, non solo dei propri.
@@ -134,14 +139,14 @@ async def _apply_filters(
     allowed = await accessible_group_ids(session, claims)
     if allowed is not None:
         if not allowed:
-            return False
+            return False, allowed
         receiver_conditions.append(Receiver.group_id.in_(allowed))
 
     if len(receiver_conditions) > 1:
         conditions.append(
             Notification.receiver_id.in_(select(Receiver.id).where(*receiver_conditions))
         )
-    return True
+    return True, allowed
 
 
 async def _handler_emails(
@@ -173,9 +178,9 @@ async def list_notifications(
     severity_min: Severity | None = Query(default=None),  # noqa: B008
     source: SeveritySource | None = Query(default=None),  # noqa: B008
     verified: bool | None = Query(default=None),  # noqa: B008
-    q: str | None = Query(default=None),  # noqa: B008
-    from_: datetime | None = Query(default=None, alias="from"),  # noqa: B008
-    to: datetime | None = Query(default=None),  # noqa: B008
+    q: SearchText | None = Query(default=None),  # noqa: B008
+    from_: UtcDatetime | None = Query(default=None, alias="from"),  # noqa: B008
+    to: UtcDatetime | None = Query(default=None),  # noqa: B008
     cursor: str | None = Query(default=None),  # noqa: B008
     limit: int = Query(default=20, ge=1, le=100),  # noqa: B008
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
@@ -186,7 +191,7 @@ async def list_notifications(
     arrivano nuove notifiche fra una pagina e l'altra."""
     tenant_id = uuid.UUID(claims.tid)
     conditions: list = []
-    visible = await _apply_filters(
+    visible, allowed = await _apply_filters(
         conditions,
         session,
         claims,
@@ -227,7 +232,6 @@ async def list_notifications(
         Notification.tenant_id == tenant_id,
         Notification.status == NotificationStatus.UNREAD,
     ]
-    allowed = await accessible_group_ids(session, claims)
     if allowed is not None:
         unread_conditions.append(
             Notification.receiver_id.in_(
@@ -352,26 +356,28 @@ async def get_notification_content(
     notification = await _get_notification_or_404(session, claims, notification_id)
 
     if notification.storage_backend == "inline":
-        content = notification.content or ""
-        body = content.encode()
+        body = (notification.content or "").encode()
+
+        async def _inline() -> AsyncIterator[bytes]:
+            yield body
+
+        length, chunks = len(body), _inline()
     else:
-        from app.services.storage import fetch_object
+        from app.services.storage import stream_object
 
         assert notification.storage_key is not None
-        body = await fetch_object(notification.storage_key)
-
-    async def _stream() -> AsyncIterator[bytes]:
-        yield body
+        length, chunks = await stream_object(notification.storage_key)
 
     # Content-Length sui byte che si stanno davvero mandando, non su
     # content_size: quello e la dimensione del corpo ORIGINALE, e per un payload
     # inline normalizzato (UTF-8 non valido sostituito con U+FFFD, byte NUL
     # rimossi, spec 6.2) le due misure non coincidono. Dichiarare la lunghezza
-    # sbagliata fa troncare la risposta o fallire il client.
+    # sbagliata fa troncare la risposta o fallire il client. Per un oggetto la
+    # lunghezza e' quella che MinIO dichiara per il blocco che si sta inviando.
     return StreamingResponse(
-        _stream(),
+        chunks,
         media_type="text/plain",
-        headers={"Content-Length": str(len(body))},
+        headers={"Content-Length": str(length)},
     )
 
 
@@ -443,7 +449,7 @@ async def bulk_mark_read(
 ) -> BulkReadOut:
     """Come PATCH: e una scrittura, quindi serve il ruolo member."""
     conditions: list = []
-    visible = await _apply_filters(
+    visible, _ = await _apply_filters(
         conditions,
         session,
         claims,
