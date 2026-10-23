@@ -12,6 +12,7 @@ from app.core.security import AccessClaims
 from app.models.receiver import Receiver
 from app.models.tenant import Tenant
 from app.schemas.tenant import TenantOut, TenantUpdate
+from app.services.tenant_lock import lock_tenant_settings
 
 router = APIRouter(prefix="/tenant", tags=["tenant"])
 
@@ -41,10 +42,10 @@ async def update_tenant(
     session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> TenantOut:
     tenant_id = uuid.UUID(claims.tid)
-    # FOR UPDATE: un receiver creato o modificato in parallelo legge il cap sotto
-    # lo stesso lock, altrimenti il controllo qui sotto non vedrebbe il suo valore.
-    result = await session.execute(select(Tenant).where(Tenant.id == tenant_id).with_for_update())
-    tenant = result.scalar_one()
+    # Lock NO KEY UPDATE: un receiver creato o modificato in parallelo legge il cap
+    # sotto lo stesso lock, altrimenti il controllo qui sotto non vedrebbe il suo
+    # valore. Non fermano le ingestion del tenant, che prendono solo FOR KEY SHARE.
+    tenant = await lock_tenant_settings(session, tenant_id)
 
     if body.max_body_bytes is not None and body.max_body_bytes < tenant.max_body_bytes:
         conflicting_result = await session.execute(
