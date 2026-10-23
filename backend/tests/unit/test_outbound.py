@@ -5,7 +5,12 @@ import pytest
 from app.outbound.formatters.duration import duration_note, format_duration_ms
 from app.outbound.formatters.google_chat import GOOGLE_CHAT_BODY_LIMIT, build_google_chat_payload
 from app.outbound.formatters.slack import SLACK_BODY_LIMIT, build_slack_payload
-from app.outbound.sender import MAX_ATTEMPTS, calculate_retry_delay, parse_retry_after
+from app.outbound.sender import (
+    MAX_ATTEMPTS,
+    MAX_RETRY_AFTER_SECONDS,
+    calculate_retry_delay,
+    parse_retry_after,
+)
 
 
 @pytest.mark.unit
@@ -32,6 +37,16 @@ def test_retry_after_accetta_secondi_data_http_e_valori_malformati():
     assert parse_retry_after(None, now=now) == 60
     past = (now - timedelta(minutes=1)).strftime("%a, %d %b %Y %H:%M:%S GMT")
     assert parse_retry_after(past, now=now) == 1
+
+
+@pytest.mark.unit
+def test_retry_after_enorme_e_limitato_al_massimo_del_backoff():
+    """Un Retry-After di 300000000000 secondi (o una data lontana nel futuro) farebbe
+    sforare la data di prossimo tentativo in phase 3: il valore resta entro il tetto."""
+    now = datetime(2026, 8, 11, 10, 0, tzinfo=UTC)
+    assert parse_retry_after("300000000000", now=now) == MAX_RETRY_AFTER_SECONDS
+    far = "Tue, 11 Aug 9999 10:00:00 GMT"
+    assert parse_retry_after(far, now=now) == MAX_RETRY_AFTER_SECONDS
 
 
 @pytest.mark.unit

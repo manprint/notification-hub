@@ -3,7 +3,7 @@ gestione degli esiti del webhook. Il task viene chiamato direttamente (non
 via broker): Celery permette di invocare un task come funzione normale."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -294,3 +294,62 @@ async def test_errore_di_rete_non_espone_il_segreto_del_webhook(two_tenants):
             assert testo is not None
             assert "/services/T0/B0/X0" not in testo
             assert "ConnectError" in testo
+
+
+@pytest.mark.integration
+@respx.mock
+async def test_failed_non_ancora_scaduta_non_viene_rispedita(two_tenants):
+    """Un duplicato accodato prima della scadenza del backoff (reconcile ogni 5
+    minuti) non deve colpire il webhook: la delivery resta com'e'."""
+    tenant_id, _ = two_tenants
+    delivery_id, _ = await _setup_delivery(tenant_id, status="failed")
+    async with tenant_session(tenant_id) as session:
+        delivery = await session.get(Delivery, delivery_id)
+        delivery.attempts = 1
+        delivery.next_attempt_at = datetime.now(UTC) + timedelta(seconds=300)
+    route = respx.post(WEBHOOK_URL).mock(return_value=httpx.Response(200))
+
+    dispatch_delivery(str(delivery_id), str(tenant_id))
+
+    assert not route.called
+    async with tenant_session(tenant_id) as session:
+        delivery = await session.get(Delivery, delivery_id)
+        assert delivery.status == DeliveryStatus.FAILED
+        assert delivery.attempts == 1
+
+
+@pytest.mark.integration
+@respx.mock
+async def test_failed_scaduta_viene_rispedita(two_tenants):
+    tenant_id, _ = two_tenants
+    delivery_id, _ = await _setup_delivery(tenant_id, status="failed")
+    async with tenant_session(tenant_id) as session:
+        delivery = await session.get(Delivery, delivery_id)
+        delivery.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+    respx.post(WEBHOOK_URL).mock(return_value=httpx.Response(200))
+
+    dispatch_delivery(str(delivery_id), str(tenant_id))
+
+    async with tenant_session(tenant_id) as session:
+        delivery = await session.get(Delivery, delivery_id)
+        assert delivery.status == DeliveryStatus.SENT
+
+
+@pytest.mark.integration
+@respx.mock
+async def test_429_con_retry_after_enorme_ripianifica_senza_crash(two_tenants):
+    """Un Retry-After fuori scala non fa crashare phase 3 (overflow della data):
+    la delivery torna `failed` con un prossimo tentativo finito."""
+    tenant_id, _ = two_tenants
+    delivery_id, _ = await _setup_delivery(tenant_id)
+    respx.post(WEBHOOK_URL).mock(
+        return_value=httpx.Response(429, headers={"Retry-After": "300000000000"})
+    )
+
+    dispatch_delivery(str(delivery_id), str(tenant_id))
+
+    async with tenant_session(tenant_id) as session:
+        delivery = await session.get(Delivery, delivery_id)
+        assert delivery.status == DeliveryStatus.FAILED
+        assert delivery.attempts == 1
+        assert delivery.next_attempt_at <= datetime.now(UTC) + timedelta(hours=7)
