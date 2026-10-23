@@ -16,13 +16,31 @@ from app.db.session import engine_app
 from app.tasks.enqueue import reset_enqueue_function, set_enqueue_function
 from tests.conftest_factories import create_group, create_receiver
 
-ATTESA_MAX_ITERAZIONI = 200
+# 750 * 0.02s = 15s: sotto carico di suite completa la richiesta puo arrivare al lock
+# dopo i 4s della prima stima; il ciclo esce appena il lock compare, quindi non rallenta.
+ATTESA_MAX_ITERAZIONI = 750
 
 
-async def _attendi_richiesta_bloccata() -> None:
+@pytest.fixture(autouse=True)
+async def _pool_di_engine_app_pulito():
+    # Il pool e' globale e sopravvive ai singoli event loop dei test: una connessione
+    # rimasta da un test precedente puo restare appesa senza mai arrivare al lock.
+    # Si scarta il pool, cosi ogni gara parte da connessioni nuove nel suo loop.
+    await engine_app.dispose()
+    yield
+
+
+async def _attendi_richiesta_bloccata(richiesta: asyncio.Task) -> None:
     """Aspetta che una richiesta concorrente resti in attesa su un lock non concesso."""
     async with engine_app.connect() as osservatore:
         for _ in range(ATTESA_MAX_ITERAZIONI):
+            if richiesta.done():
+                # Terminata senza mai bloccarsi: il messaggio dice con che esito.
+                raise AssertionError(
+                    f"la richiesta e' terminata senza bloccarsi: {richiesta.exception()!r}"
+                    if richiesta.exception()
+                    else f"la richiesta e' terminata senza bloccarsi: {richiesta.result().text}"
+                )
             # Una sessione in attesa di lock nel database di questa suite (pg_locks non
             # distingue il database per i lock di transazione, e vede anche le altre suite).
             bloccate = await osservatore.scalar(
@@ -85,7 +103,7 @@ async def test_bind_concorrente_aggiorna_la_riga_gia_inserita(api_client, two_te
                 headers=headers,
             )
         )
-        await _attendi_richiesta_bloccata()
+        await _attendi_richiesta_bloccata(richiesta)
         await altra.commit()
         resp = await richiesta
     finally:
@@ -121,7 +139,7 @@ async def test_override_concorrente_aggiorna_la_riga_gia_inserita(
                 headers=headers,
             )
         )
-        await _attendi_richiesta_bloccata()
+        await _attendi_richiesta_bloccata(richiesta)
         await altra.commit()
         resp = await richiesta
     finally:
@@ -155,7 +173,7 @@ async def test_regola_a_priorita_automatica_concorrente_viene_accodata(
                 headers=headers,
             )
         )
-        await _attendi_richiesta_bloccata()
+        await _attendi_richiesta_bloccata(richiesta)
         await altra.commit()
         resp = await richiesta
     finally:
@@ -193,7 +211,7 @@ async def test_regola_di_preset_a_priorita_automatica_concorrente_viene_accodata
                 headers=headers,
             )
         )
-        await _attendi_richiesta_bloccata()
+        await _attendi_richiesta_bloccata(richiesta)
         await altra.commit()
         resp = await richiesta
     finally:
@@ -247,7 +265,7 @@ async def test_retry_concorrente_di_una_delivery_dead_non_accoda_due_volte(
         richiesta = asyncio.create_task(
             api_client.post(f"/api/v1/deliveries/{delivery_id}/retry", headers=headers)
         )
-        await _attendi_richiesta_bloccata()
+        await _attendi_richiesta_bloccata(richiesta)
         await altra.commit()
         resp = await richiesta
     finally:
