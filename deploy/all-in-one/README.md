@@ -215,7 +215,9 @@ Cosa fa il container quando trova in `/data/state/version` una versione diversa 
 1. **backup automatico** — `pg_dumpall` compresso in `/data/backups/notifyhub-pre-<nuova>-<data>.sql.gz`,
    con a fianco l'archivio della configurazione e un manifest. Se il backup fallisce, l'avvio si
    ferma: meglio non partire che migrare senza rete. Disattivabile con
-   `NOTIFYHUB_BACKUP_ON_UPGRADE=false`, si tengono gli ultimi `NOTIFYHUB_BACKUP_KEEP` (5).
+   `NOTIFYHUB_BACKUP_ON_UPGRADE=false`. La rotazione tiene gli ultimi `NOTIFYHUB_BACKUP_KEEP` (5)
+   backup manuali e, a parte, altrettanti pre-aggiornamento: un backup manuale non spinge mai via il
+   punto di ritorno di un upgrade.
 2. **migrazioni** — `alembic upgrade head` con il cluster avviato ma **prima** che supervisord
    faccia partire API, worker e beat. Nessun processo applicativo puo' quindi vedere uno schema a
    meta'. Se le migrazioni falliscono, il container esce e i servizi non partono.
@@ -271,8 +273,21 @@ docker compose exec notifyhub ls -lh /data/backups
 docker compose exec notifyhub notifyhub-restore /data/backups/notifyhub-manual-20260803T180000Z.sql.gz
 ```
 
+Ogni backup produce tre file: il dump (`.sql.gz`), l'archivio della configurazione
+(`.config.tar.gz`, con `secrets.env`) e il manifest. La chiave `NOTIFYHUB_SECRET_KEY` sta nell'archivio
+e non nel dump, e cifra i webhook dei canali: senza di lei i canali restano nel database ma non si
+decifrano. Per questo:
+
+- `notifyhub-backup` fallisce, e non lascia un dump incompleto, se l'archivio non si crea;
+- `notifyhub-restore` riporta la chiave del backup in `secrets.env`, e rifiuta se l'archivio manca
+  (`--senza-configurazione` accetta il rischio) o se `NOTIFYHUB_SECRET_KEY` e' impostata
+  nell'ambiente del container con un valore diverso;
+- dopo un ripristino che cambia la chiave occorre riavviare il container: API e worker la usano
+  ancora quella vecchia finche' non ripartono.
+
 Il dump non contiene gli oggetti MinIO: stanno nello stesso volume `/data` e per una copia completa
-conviene fare lo snapshot del volume a container fermo.
+conviene fare lo snapshot del volume a container fermo. Attenzione: anche `/data/backups` sta nel
+volume, quindi per un ripristino su un volume nuovo copiare fuori i tre file del backup.
 
 ## Comandi utili
 
@@ -286,7 +301,7 @@ docker compose exec -it notifyhub notifyhub-cli bootstrap   # CLI applicativa
 docker compose exec notifyhub notifyhub-ctl status          # stato dei singoli servizi
 docker compose exec notifyhub notifyhub-ctl restart worker  # riavvio di un solo servizio
 docker compose exec notifyhub notifyhub-ctl tail -f api
-docker compose exec notifyhub psql -U postgres notifyhub    # via socket locale
+docker compose exec -u postgres notifyhub psql -U postgres notifyhub    # via socket locale, come utente postgres
 docker compose exec notifyhub mc ls local/notifyhub-payloads
 ```
 
@@ -298,7 +313,7 @@ Tutte le variabili sono documentate in [`.env.example`](.env.example). Le piu' r
 |---|---|---|
 | `HTTP_PORT` | `80` | porta pubblicata sull'host |
 | `NOTIFYHUB_PUBLIC_BASE_URL` | `http://localhost` | URL pubblica: inviti, link delle notifiche, URL di ingestion in dashboard e script wrapper scaricabile. Se resta loopback, le risposte HTTP la deducono da `Host` e `X-Forwarded-Proto`; il worker Celery usa comunque questo valore |
-| `NOTIFYHUB_SECRET_KEY` | generata | firma dei token; cambiarla invalida le sessioni |
+| `NOTIFYHUB_SECRET_KEY` | generata | firma dei token e cifra i webhook dei canali; cambiarla invalida le sessioni e rende illeggibili i webhook gia' salvati |
 | `NOTIFYHUB_BOOTSTRAP_EMAIL` | vuota | crea il primo tenant al primo avvio |
 | `UVICORN_WORKERS` / `WORKER_CONCURRENCY` | `2` / `4` | dimensionamento API e worker |
 | `PG_SHARED_BUFFERS`, `PG_MAX_CONNECTIONS`, ... | vedi esempio | tuning PostgreSQL |

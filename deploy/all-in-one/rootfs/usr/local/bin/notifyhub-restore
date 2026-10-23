@@ -1,11 +1,22 @@
 #!/usr/bin/env bash
 # Ripristino di un backup prodotto da notifyhub-backup.
 #
-#   notifyhub-restore <file.sql.gz> [--yes]
+#   notifyhub-restore <file.sql.gz> [--yes] [--senza-configurazione]
 #
 # ATTENZIONE: sovrascrive il database corrente. Il dump e' un pg_dumpall
 # --clean --if-exists, quindi elimina e ricrea ruoli e database prima di
 # ricaricare i dati. Tutto quello che c'e' adesso nel database viene perso.
+#
+# La chiave NOTIFYHUB_SECRET_KEY non sta nel dump: sta nell'archivio di
+# configurazione accanto al dump (<etichetta>-<timestamp>.config.tar.gz), e
+# cifra i webhook dei canali. Senza la chiave del backup i canali restano nel
+# database ma non si decifrano. Il ripristino quindi:
+#   - rifiuta se manca l'archivio (--senza-configurazione accetta il rischio);
+#   - rifiuta se NOTIFYHUB_SECRET_KEY e' fissata nell'ambiente del container con
+#     un valore diverso da quello del backup;
+#   - riscrive in secrets.env la sola chiave del backup, se diversa.
+# Il container va riavviato dopo un ripristino che cambia la chiave: l'API e i
+# worker hanno ancora in memoria quella vecchia.
 #
 # Gli oggetti MinIO non sono nel dump: se il backup e' stato preso in un momento
 # diverso dallo stato di /data/minio, alcune notifiche possono riferirsi a
@@ -18,24 +29,107 @@ set -Eeuo pipefail
 
 DUMP=""
 ASSUME_YES=0
+SKIP_CONFIG=0
+APP_PROGRAMS="nginx api metrics worker beat"
+SUPERVISORCTL="${VENV_BIN}/supervisorctl -c /etc/notifyhub/supervisord.conf"
+# Errori di psql che un ripristino con --clean su cluster vivo produce in modo
+# normale: il ruolo corrente non si elimina e il ruolo postgres esiste gia'.
+BENIGN_ERRORS='current user cannot be dropped|role "postgres" already exists'
+
+CONFIG_WORK=""
+SERVICES_STOPPED=0
+
+# Riavvia i servizi applicativi se li abbiamo fermati, anche quando il ripristino
+# esce per un errore: altrimenti un die lascerebbe l'applicazione spenta.
+restart_services() {
+    [ "${SERVICES_STOPPED}" = "1" ] || return 0
+    SERVICES_STOPPED=0
+    log_info "riavvio i servizi applicativi"
+    # shellcheck disable=SC2086
+    ${SUPERVISORCTL} start ${APP_PROGRAMS} >/dev/null 2>&1 \
+        || log_warn "avvio dei servizi non riuscito: controllare con supervisorctl status"
+}
+
+cleanup() {
+    local rc=$?
+    restart_services
+    if [ -n "${CONFIG_WORK}" ]; then
+        rm -rf "${CONFIG_WORK}"
+    fi
+    return "${rc}"
+}
+trap cleanup EXIT
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --yes|-y) ASSUME_YES=1; shift ;;
-        -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --senza-configurazione) SKIP_CONFIG=1; shift ;;
+        -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) DUMP="$1"; shift ;;
     esac
 done
 
-[ -n "${DUMP}" ] || die "uso: notifyhub-restore <file.sql.gz> [--yes]"
+[ -n "${DUMP}" ] || die "uso: notifyhub-restore <file.sql.gz> [--yes] [--senza-configurazione]"
 [ -f "${DUMP}" ] || die "file non trovato: ${DUMP}"
 
 if ! "${PG_BIN}/pg_isready" -h "${PG_SOCKET_DIR}" -U postgres -t 5 >/dev/null 2>&1; then
     die "PostgreSQL non e' in ascolto: eseguire il comando dentro il container avviato"
 fi
 
+# secret_value FILE NOME: valore della variabile nel file, vuoto se assente.
+secret_value() {
+    local line=""
+    [ -f "$1" ] || return 0
+    line="$(grep -m1 "^$2=" "$1" || true)"
+    printf '%s' "${line#"$2="}"
+}
+
+# Controlli prima di qualunque modifica: archivio, chiave, ambiente.
+CONFIG_ARCHIVE="${DUMP%.sql.gz}.config.tar.gz"
+ARCHIVE_KEY=""
+KEY_CHANGE=0
+if [ ! -f "${CONFIG_ARCHIVE}" ]; then
+    if [ "${SKIP_CONFIG}" != "1" ]; then
+        die "archivio di configurazione mancante: ${CONFIG_ARCHIVE}. Senza, la chiave dei webhook non si ripristina: copiare insieme dump e archivio, oppure usare --senza-configurazione"
+    fi
+    log_warn "ripristino senza archivio di configurazione (--senza-configurazione): la chiave dei webhook resta quella dell'istanza"
+else
+    CONFIG_WORK="$(mktemp -d "${TMPDIR:-/tmp}/notifyhub-restore.XXXXXX")"
+    tar -xzf "${CONFIG_ARCHIVE}" -C "${CONFIG_WORK}" config/secrets.env 2>/dev/null \
+        || die "archivio di configurazione illeggibile o senza secrets.env: ${CONFIG_ARCHIVE}"
+    ARCHIVE_KEY="$(secret_value "${CONFIG_WORK}/config/secrets.env" NOTIFYHUB_SECRET_KEY)"
+    [ -n "${ARCHIVE_KEY}" ] || die "archivio di configurazione senza NOTIFYHUB_SECRET_KEY: ${CONFIG_ARCHIVE}"
+
+    # Docker exec eredita l'ambiente del container: una chiave fissata li' vince
+    # su secrets.env al riavvio, quindi non si puo' ripristinare quella del backup.
+    if [ -n "${NOTIFYHUB_SECRET_KEY:-}" ] && [ "${NOTIFYHUB_SECRET_KEY}" != "${ARCHIVE_KEY}" ]; then
+        die "NOTIFYHUB_SECRET_KEY e' impostata nell'ambiente del container con un valore diverso da quello del backup: rimuoverla dall'ambiente e riprovare"
+    fi
+    if [ "$(secret_value "${SECRETS_FILE}" NOTIFYHUB_SECRET_KEY)" != "${ARCHIVE_KEY}" ]; then
+        KEY_CHANGE=1
+    fi
+fi
+
+# Riscrive in secrets.env la sola chiave: le altre credenziali restano quelle
+# dell'istanza, che i servizi in esecuzione stanno usando.
+set_secret_key() {
+    local tmp="${SECRETS_FILE}.tmp"
+    umask 077
+    {
+        if [ -f "${SECRETS_FILE}" ]; then
+            awk '/^NOTIFYHUB_SECRET_KEY=/ { next } { print }' "${SECRETS_FILE}"
+        fi
+        printf 'NOTIFYHUB_SECRET_KEY=%s\n' "$1"
+    } > "${tmp}"
+    mv "${tmp}" "${SECRETS_FILE}"
+    umask 022
+}
+
 if [ "${ASSUME_YES}" != "1" ]; then
     echo "Il ripristino di ${DUMP} ELIMINA il database attuale e lo sostituisce."
+    if [ "${KEY_CHANGE}" = "1" ]; then
+        echo "Sostituisce anche NOTIFYHUB_SECRET_KEY con quella del backup."
+    fi
     echo "Digitare 'ripristina' per procedere:"
     read -r answer
     [ "${answer}" = "ripristina" ] || die "ripristino annullato"
@@ -44,24 +138,46 @@ fi
 # Dopo la conferma interattiva: da qui l'output va anche in /logs/init.
 log_setup init
 
-SUPERVISORCTL="${VENV_BIN}/supervisorctl -c /etc/notifyhub/supervisord.conf"
-APP_PROGRAMS="nginx api metrics worker beat"
-SUPERVISOR_UP=0
-if ${SUPERVISORCTL} status >/dev/null 2>&1; then
-    SUPERVISOR_UP=1
+# Non si usa l'esito di `status`: con un programma FATAL o EXITED supervisorctl
+# esce con un codice diverso da zero anche se supervisord risponde. Conta solo
+# che supervisord sia raggiungibile.
+if ${SUPERVISORCTL} version >/dev/null 2>&1; then
     log_info "fermo i servizi applicativi durante il ripristino"
+    SERVICES_STOPPED=1
     # shellcheck disable=SC2086
-    ${SUPERVISORCTL} stop ${APP_PROGRAMS} >/dev/null || true
+    ${SUPERVISORCTL} stop ${APP_PROGRAMS} >/dev/null 2>&1 || true
+fi
+
+# Con i servizi fermi non deve restare nessuna sessione sul database: DROP
+# DATABASE fallirebbe e il ripristino procederebbe a meta'.
+DB_NAME="${NOTIFYHUB_DB_NAME:-notifyhub}"
+active="$(psql_super postgres -tAc "SELECT count(*) FROM pg_stat_activity WHERE datname = '${DB_NAME}' AND pid <> pg_backend_pid()")" \
+    || die "impossibile contare le sessioni sul database ${DB_NAME}"
+if [ "${active}" != "0" ]; then
+    die "${active} sessioni ancora aperte sul database ${DB_NAME}: il ripristino non parte"
 fi
 
 log_info "ripristino da ${DUMP}"
+RESTORE_LOG="${LOG_DIR}/init/restore-$(date -u +%Y%m%dT%H%M%SZ).log"
+RESTORE_ERRORS=0
 if ! gzip -dc "${DUMP}" | as_postgres "${PG_BIN}/psql" --no-psqlrc -h "${PG_SOCKET_DIR}" -U postgres -d postgres \
-        -v ON_ERROR_STOP=0 -q > "${LOG_DIR}/init/restore-$(date -u +%Y%m%dT%H%M%SZ).log" 2>&1; then
-    log_error "psql ha segnalato errori: dettagli in ${LOG_DIR}/init/"
+        -v ON_ERROR_STOP=0 -q > "${RESTORE_LOG}" 2>&1; then
+    log_error "psql ha segnalato errori"
+    RESTORE_ERRORS=$((RESTORE_ERRORS + 1))
+fi
+
+# Con ON_ERROR_STOP=0 psql prosegue e torna zero anche dopo un errore SQL: gli
+# ERROR nel log si contano qui, tolti quelli attesi.
+unexpected="$(grep -E 'ERROR:' "${RESTORE_LOG}" | grep -cvE "${BENIGN_ERRORS}" || true)"
+if [ "${unexpected}" -gt 0 ]; then
+    log_error "${unexpected} errori SQL non attesi durante il ripristino: dettagli in ${RESTORE_LOG}"
+    RESTORE_ERRORS=$((RESTORE_ERRORS + unexpected))
 fi
 
 # Il dump riporta le password dei ruoli a quelle del momento del backup: qui si
 # riallineano a quelle correnti, altrimenti i servizi non si riconnettono.
+# Avviene prima di toccare secrets.env, perche' i servizi in esecuzione usano
+# ancora le password di prima.
 reapply_role_passwords() {
     [ -f "${SECRETS_FILE}" ] || return 0
     set -a
@@ -79,10 +195,20 @@ SQL
 }
 reapply_role_passwords
 
-if [ "${SUPERVISOR_UP}" = "1" ]; then
-    log_info "riavvio i servizi applicativi"
-    # shellcheck disable=SC2086
-    ${SUPERVISORCTL} start ${APP_PROGRAMS} >/dev/null || true
+RESTART_REQUIRED=0
+if [ "${KEY_CHANGE}" = "1" ]; then
+    set_secret_key "${ARCHIVE_KEY}"
+    RESTART_REQUIRED=1
+    log_warn "NOTIFYHUB_SECRET_KEY ripristinata dall'archivio di configurazione"
 fi
 
+restart_services
+
+if [ "${RESTORE_ERRORS}" -gt 0 ]; then
+    die "ripristino incompleto: ${RESTORE_ERRORS} errori, dettagli in ${RESTORE_LOG}"
+fi
+
+if [ "${RESTART_REQUIRED}" = "1" ]; then
+    log_warn "riavviare il container: l'API e i worker usano ancora la chiave precedente, e finche' non ripartono i canali non si decifrano"
+fi
 log_info "ripristino completato. Un riavvio del container riallinea anche lo schema (alembic upgrade head)."
