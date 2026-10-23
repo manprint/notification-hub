@@ -26,10 +26,17 @@ function reloadOnceForChunk(): boolean {
   }
 }
 
+/** Il ricaricamento vero: `window.location.reload()`. Sta fuori dal componente
+ *  perché i test lo sostituiscono (jsdom non lo lascia stubbare su `location`). */
+function reloadPage(): void {
+  window.location.reload();
+}
+
 interface ErrorBoundaryProps {
   children: ReactNode;
   /** Cambia con la pagina: al cambio il confine torna a mostrare i figli. */
   resetKey?: string;
+  reload?: () => void;
 }
 
 interface ErrorBoundaryState {
@@ -47,7 +54,7 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
 
   componentDidCatch(error: unknown, _info: ErrorInfo): void {
     if (isChunkLoadError(error) && reloadOnceForChunk()) {
-      window.location.reload();
+      (this.props.reload ?? reloadPage)();
     }
   }
 
@@ -66,7 +73,7 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
           Può succedere dopo un aggiornamento di NotifyHub con la scheda ancora aperta. Ricarica la
           pagina per continuare: quello che non era salvato va rifatto.
         </p>
-        <button type="button" className="primary" onClick={() => window.location.reload()}>
+        <button type="button" className="primary" onClick={() => (this.props.reload ?? reloadPage)()}>
           Ricarica la pagina
         </button>
       </div>
