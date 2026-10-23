@@ -19,7 +19,7 @@ function EditGroupForm({ group, onDone }: { group: GroupOut; onDone: () => void 
   const [nameError, setNameError] = useState<string | null>(null);
   const { busy, error, run } = useAction();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (name.trim() === "") {
       setNameError("Il nome del gruppo è obbligatorio.");
@@ -148,7 +148,7 @@ function NewGroupForm() {
   const [nameError, setNameError] = useState<string | null>(null);
   const { busy, error, run } = useAction();
 
-  async function createGroup(event: React.FormEvent) {
+  async function createGroup(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (newName.trim() === "") {
       setNameError("Il nome del gruppo è obbligatorio.");

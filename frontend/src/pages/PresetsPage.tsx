@@ -38,7 +38,7 @@ function PresetRuleForm({
   const [patternError, setPatternError] = useState<string | null>(null);
   const { busy, error, run } = useAction();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pattern.trim() === "") {
       setPatternError("Il pattern è obbligatorio.");
@@ -334,7 +334,7 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
     setNameError(null);
   }
 
-  async function saveRename(event: React.FormEvent) {
+  async function saveRename(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     // Nome ripulito dagli spazi: "   " non e' un nome, e "Foo " passava il
     // controllo dei duplicati del backend accanto a un "Foo" esistente.
@@ -465,7 +465,7 @@ function NewPresetForm() {
   const [nameError, setNameError] = useState<string | null>(null);
   const { busy, error, run } = useAction();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (name.trim() === "") {
       setNameError("Il nome del preset è obbligatorio.");

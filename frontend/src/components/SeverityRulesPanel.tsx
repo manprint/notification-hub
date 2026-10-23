@@ -96,7 +96,7 @@ function RuleForm({
   const [patternError, setPatternError] = useState<string | null>(null);
   const { busy, error, run } = useAction();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pattern.trim() === "") {
       setPatternError("Il pattern è obbligatorio.");
@@ -370,7 +370,7 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
     );
   }
 
-  async function runTest(event: React.FormEvent) {
+  async function runTest(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     setTestError(null);
     setTestResult(null);

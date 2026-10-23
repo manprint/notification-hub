@@ -147,7 +147,7 @@ export default function SettingsPage() {
     return { body, errors };
   }
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!tenant) return;
     setConflicting(null);

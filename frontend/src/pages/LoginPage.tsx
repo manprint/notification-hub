@@ -17,7 +17,7 @@ export default function LoginPage() {
   // Messo da RequireAuth: la pagina chiesta prima del redirect al login.
   const target = safeRedirectTarget((location.state as { from?: unknown } | null)?.from);
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
     setSubmitting(true);

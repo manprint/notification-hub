@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -268,9 +268,12 @@ describe("UsersPage", () => {
     const backup = within(riga).getByRole("checkbox", { name: "Backup" });
     await user.click(produzione);
     // Il secondo click partiva dalla lista in cache (ancora vuota) e il suo
-    // salvataggio cancellava il primo.
+    // salvataggio cancellava il primo. Il click su un controllo disabilitato è
+    // sincrono: user.click lo rimanderebbe a salvataggio finito, quando il
+    // controllo è di nuovo attivo, e il test salverebbe due volte.
     expect(backup).toBeDisabled();
-    await user.click(backup);
+    fireEvent.click(backup);
+    expect(patches).toHaveLength(1);
 
     await waitFor(() => expect(backup).toBeEnabled());
     await user.click(backup);

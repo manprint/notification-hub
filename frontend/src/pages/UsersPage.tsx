@@ -52,6 +52,9 @@ function GroupPicker({
   disabled?: boolean;
 }) {
   function toggle(groupId: string, checked: boolean) {
+    // Un controllo disabilitato non salva, neanche se un click sintetico arriva
+    // comunque al gestore: nel test il secondo click finiva per salvare due volte.
+    if (disabled) return;
     onChange(checked ? [...value, groupId] : value.filter((id) => id !== groupId));
   }
 
@@ -187,7 +190,7 @@ function InviteForm({ roles }: { roles: UserRole[] }) {
   const [emailError, setEmailError] = useState<string | null>(null);
   const { busy, error, run } = useAction();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!email.includes("@")) {
       setEmailError("Indica un indirizzo email valido.");
@@ -272,7 +275,7 @@ function CreateUserForm({ groups, roles }: { groups: GroupOut[]; roles: UserRole
   const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
   const { busy, error, run } = useAction();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     // Le stesse due regole del backend, dette prima di spendere un giro di
     // rete e con il campo indicato invece di un 422 generico.
@@ -392,6 +395,8 @@ export default function UsersPage() {
   // Quale campo ha salvato per ultimo: senza, l'esito "Salvato" comparirebbe
   // su tutte le righe insieme, perché lo stato dell'operazione è uno solo.
   const [lastSaved, setLastSaved] = useState<string | null>(null);
+  // Gruppi richiesti e non ancora confermati dalla cache, per utenza.
+  const [requestedGroups, setRequestedGroups] = useState<Record<string, string[]>>({});
   const roles = assignableRoles(sessionRole);
 
   /** Stato da mostrare accanto a un campo modificabile in linea. */
@@ -432,6 +437,10 @@ export default function UsersPage() {
 
   async function changeGroups(user: UserOut, groupIds: string[]) {
     setLastSaved(`groups:${user.id}`);
+    // La lista richiesta sta in stato finché il salvataggio non è finito e la
+    // cache è riletta: il click successivo parte da lei, non da una lista in
+    // cache che può non essere ancora ridisegnata.
+    setRequestedGroups((current) => ({ ...current, [user.id]: groupIds }));
     const ok = await run(
       async () => {
         await apiPatch(`/api/v1/users/${user.id}`, { group_ids: groupIds });
@@ -439,6 +448,11 @@ export default function UsersPage() {
       },
       { name: `groups:${user.id}`, success: `Gruppi di ${user.email} aggiornati.` },
     );
+    setRequestedGroups((current) => {
+      const next = { ...current };
+      delete next[user.id];
+      return next;
+    });
     if (ok && isSelf(user)) await reloadProfile();
   }
 
@@ -538,7 +552,7 @@ export default function UsersPage() {
                       <td>
                         <GroupsCell
                           groups={groups ?? []}
-                          value={user.group_ids}
+                          value={requestedGroups[user.id] ?? user.group_ids}
                           onChange={(groupIds) => void changeGroups(user, groupIds)}
                           saveState={stateOf(`groups:${user.id}`)}
                           disabled={busy !== null || !manageable}

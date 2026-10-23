@@ -1,7 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
-  createElement,
   useCallback,
   useContext,
   useEffect,
@@ -34,7 +33,7 @@ interface SessionState {
 
 const SessionContext = createContext<SessionState | null>(null);
 
-export function SessionProvider({ children }: { children: ReactNode }): ReturnType<typeof createElement> {
+export function SessionProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [user, setUser] = useState<MeOut | null>(null);
   // Senza refresh token non c'è sessione da caricare: partire da "caricamento"
@@ -54,17 +53,23 @@ export function SessionProvider({ children }: { children: ReactNode }): ReturnTy
     setLoading(false);
   }, [queryClient]);
 
-  const loadProfile = useCallback(async (suppressError = true) => {
+  // Gli aggiornamenti di stato stanno nelle callback della promise, non nel
+  // corpo sincrono: chi la chiama da un effetto non scatena render a cascata.
+  const loadProfile = useCallback((suppressError = true): Promise<void> => {
     const request = ++profileRequest.current;
-    try {
-      const me = await apiGet<MeOut>("/api/v1/auth/me");
-      if (request === profileRequest.current) setUser(me);
-    } catch (error) {
-      if (request === profileRequest.current) setUser(null);
-      if (!suppressError) throw error;
-    } finally {
-      if (request === profileRequest.current) setLoading(false);
-    }
+    return apiGet<MeOut>("/api/v1/auth/me")
+      .then(
+        (me) => {
+          if (request === profileRequest.current) setUser(me);
+        },
+        (error: unknown) => {
+          if (request === profileRequest.current) setUser(null);
+          if (!suppressError) throw error;
+        },
+      )
+      .finally(() => {
+        if (request === profileRequest.current) setLoading(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -142,10 +147,13 @@ export function SessionProvider({ children }: { children: ReactNode }): ReturnTy
     }
   }, [queryClient]);
 
-  return createElement(SessionContext.Provider, {
-    value: { user, role: user?.role ?? null, loading, login, logout, reloadProfile },
-    children,
-  });
+  return (
+    <SessionContext.Provider
+      value={{ user, role: user?.role ?? null, loading, login, logout, reloadProfile }}
+    >
+      {children}
+    </SessionContext.Provider>
+  );
 }
 
 export function useSession(): SessionState {
