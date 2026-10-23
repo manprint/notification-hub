@@ -1,3 +1,4 @@
+import ipaddress
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -31,13 +32,51 @@ def client_ip(request: Request) -> str:
     singolo mittente diventa un limite globale, che chiunque puo saturare per
     tutti gli altri.
     """
-    settings = get_settings()
     host = request.client.host if request.client else "unknown"
-    if host in settings.trusted_proxies_list:
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            return forwarded.split(",")[0].strip()
-    return host
+    networks = get_settings().trusted_proxy_networks
+    peer = _parse_ip(host)
+    if peer is None or not _is_trusted(peer, networks):
+        return host
+    forwarded = request.headers.get("x-forwarded-for")
+    if not forwarded:
+        return host
+
+    # Ogni proxy fidato accoda in coda l'indirizzo da cui ha ricevuto la
+    # connessione: si scorre da destra, saltando i proxy fidati, e la prima voce
+    # non fidata e il client visto dal primo proxy. Una voce che non e un IP
+    # valido interrompe la catena: non si puo fidare di nient'altro.
+    entries = [entry.strip() for entry in forwarded.split(",")]
+    for entry in reversed(entries):
+        ip = _parse_ip(entry)
+        if ip is None:
+            return host
+        if not _is_trusted(ip, networks):
+            return str(ip)
+    # Tutta la catena e di proxy fidati: il client e la voce piu a sinistra.
+    leftmost = _parse_ip(entries[0])
+    return str(leftmost) if leftmost is not None else host
+
+
+def _parse_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """IP canonico, o None se il valore non lo e. Un IPv6 con zona di scope e
+    rifiutato: la sua forma testuale puo superare le 45 colonne dell'audit."""
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return None
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.scope_id is not None:
+            return None
+        if ip.ipv4_mapped is not None:
+            return ip.ipv4_mapped
+    return ip
+
+
+def _is_trusted(
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network],
+) -> bool:
+    return any(ip in network for network in networks)
 
 
 async def current_claims(authorization: str | None = Header(default=None)) -> AccessClaims:
