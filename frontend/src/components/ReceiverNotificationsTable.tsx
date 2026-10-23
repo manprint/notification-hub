@@ -137,12 +137,18 @@ export default function ReceiverNotificationsTable({
           >
             Apri
           </Link>
-          {n.content_normalized && <span className="status-pill">contenuto normalizzato</span>}
+          {n.content_normalized && <span className="status-pill">Contenuto normalizzato</span>}
           {n.storage_backend === "object" && (
             <span className="status-pill" title={`${n.content_size} byte`}>
               {formatBytes(n.content_size)} su object storage
             </span>
           )}
+          {/* Sotto i 760px le colonne Origine e Ricevuta si nascondono (CSS): le loro
+              informazioni restano qui, altrimenti sul telefono sparirebbero. */}
+          <div className="receiver-narrow-info">
+            {severitySourceLabel(n.severity_source)} · {formatDate(n.received_at)}{" "}
+            {formatTime(n.received_at)}
+          </div>
         </div>
       ),
     },
@@ -221,11 +227,11 @@ export default function ReceiverNotificationsTable({
   }
 
   return (
-    <section className="card" aria-label={`Notifiche di ${receiver.name}`}>
+    <section className="card receiver-notifications" aria-label={`Notifiche di ${receiver.name}`}>
       <div className="receiver-table-header">
         <h3>
           {canManage ? <Link to={`/receivers/${receiver.id}`}>{receiver.name}</Link> : receiver.name}
-          {receiver.status === "disabled" && <span className="status-pill warn">disabilitato</span>}
+          {receiver.status === "disabled" && <span className="status-pill warn">Disabilitato</span>}
         </h3>
         {/* Il testo resta quello del pulsante di gruppo, ma il nome accessibile
             dice su quale receiver agisce: due pulsanti identici nella stessa

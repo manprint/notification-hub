@@ -97,7 +97,7 @@ describe("ReceiverNotificationsTable", () => {
     await screen.findByRole("table");
     const cella = screen.getByRole("link", { name: /^Apri/ }).closest(".content-cell") as HTMLElement;
     expect(cella).not.toBeNull();
-    expect(within(cella).getByText("contenuto normalizzato")).toBeInTheDocument();
+    expect(within(cella).getByText("Contenuto normalizzato")).toBeInTheDocument();
     expect(within(cella).getByText("2 MB su object storage")).toBeInTheDocument();
     expect(within(cella).getByTitle("2097152 byte")).toBeInTheDocument();
   });
@@ -142,7 +142,7 @@ describe("ReceiverNotificationsTable", () => {
     );
 
     await screen.findByRole("table");
-    expect(screen.getByText("disabilitato")).toBeInTheDocument();
+    expect(screen.getByText("Disabilitato")).toBeInTheDocument();
   });
 
   it("T-RCV8 un errore sull'azione resta dentro la sua tabella", async () => {

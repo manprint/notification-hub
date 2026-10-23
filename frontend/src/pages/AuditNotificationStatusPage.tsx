@@ -63,7 +63,7 @@ export default function AuditNotificationStatusPage() {
       key: "actor",
       header: "Chi",
       render: (event) => (
-        <div className="cell-preview">
+        <div className="cell-preview audit-chi">
           {event.actor_email}
           <div className="cell-diagnostics">
             {roleLabel(event.actor_role)}
@@ -196,17 +196,19 @@ export default function AuditNotificationStatusPage() {
         </div>
       </div>
 
-      <DataTable
-        columns={columns}
-        rows={rows}
-        rowKey={(event) => event.id}
-        loading={isLoading}
-        error={error}
-        emptyMessage="Nessuna lettura o verifica con questi filtri."
-        hasMore={hasNextPage}
-        onLoadMore={() => void fetchNextPage()}
-        loadingMore={isFetchingNextPage}
-      />
+      <div className="card audit-table">
+        <DataTable
+          columns={columns}
+          rows={rows}
+          rowKey={(event) => event.id}
+          loading={isLoading}
+          error={error}
+          emptyMessage="Nessuna lettura o verifica con questi filtri."
+          hasMore={hasNextPage}
+          onLoadMore={() => void fetchNextPage()}
+          loadingMore={isFetchingNextPage}
+        />
+      </div>
     </div>
   );
 }
