@@ -55,6 +55,18 @@ EXPORT_COLUMNS = [
 ]
 
 
+# Celle che Excel e LibreOffice valutano come formule (OWASP, CSV injection). Il
+# corpo di una notifica e i nomi di gruppi e receiver sono testo libero, quindi
+# una cella che inizia cosi' va neutralizzata con un apice davanti.
+CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_cell(value: Any) -> Any:
+    if isinstance(value, str) and value.startswith(CSV_FORMULA_PREFIXES):
+        return f"'{value}"
+    return value
+
+
 def _encode_cursor(occurred_at: datetime, event_id: uuid.UUID) -> str:
     raw = f"{occurred_at.isoformat()}|{event_id}"
     return base64.urlsafe_b64encode(raw.encode()).decode()
@@ -295,9 +307,11 @@ async def export_audit_events(
             record = _to_out(row, posizioni.get(row.id, EMPTY)).model_dump(mode="json")
             writer.writerow(
                 [
-                    json.dumps(record[column], ensure_ascii=False)
-                    if isinstance(record[column], dict)
-                    else record[column]
+                    _csv_cell(
+                        json.dumps(record[column], ensure_ascii=False)
+                        if isinstance(record[column], dict)
+                        else record[column]
+                    )
                     for column in EXPORT_COLUMNS
                 ]
             )

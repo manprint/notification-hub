@@ -1,6 +1,8 @@
 """E2E dell'audit (spec 9.6): chi ha fatto cosa, con attenzione a "segna come
 letta" e "segna come verificata"."""
 
+import csv
+import io
 import uuid
 
 import pytest
@@ -386,6 +388,29 @@ async def test_export_csv_restituisce_un_allegato(api_client, two_tenants, owner
     assert resp.headers["content-type"].startswith("text/csv")
     assert "attachment" in resp.headers["content-disposition"]
     assert "notification.marked_read" in resp.text
+
+
+@pytest.mark.e2e
+async def test_export_csv_neutralizza_le_formule(api_client, two_tenants, owner_token):
+    """Il corpo finisce in resource_label: una cella che inizia con = non deve
+    arrivare al foglio di calcolo come formula."""
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    _, notification_id = await _ingest(
+        api_client, tenant_id, body='=HYPERLINK("http://attacco.test","Apri")'
+    )
+    await api_client.patch(
+        f"/api/v1/notifications/{notification_id}", json={"status": "read"}, headers=owner
+    )
+
+    resp = await api_client.get(
+        "/api/v1/audit/export",
+        params={"notification_status_only": True, "format": "csv"},
+        headers=owner,
+    )
+    righe = list(csv.DictReader(io.StringIO(resp.text)))
+    assert [riga["action"] for riga in righe] == ["notification.marked_read"]
+    assert righe[0]["resource_label"] == "'=HYPERLINK(\"http://attacco.test\",\"Apri\")"
 
 
 @pytest.mark.e2e
