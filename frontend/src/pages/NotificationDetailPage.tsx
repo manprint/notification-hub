@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { apiDelete, apiGet, apiPatch } from "../api/client";
 import type { ApiError, NotificationDetailOut, NotificationStatus } from "../api/types";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -14,6 +14,7 @@ import { useSession } from "../hooks/useSession";
 import { saveBlob } from "../lib/download";
 import { formatBytes, formatDateTime } from "../lib/format";
 import { formatDurationMs } from "../lib/duration";
+import { safeRedirectTarget } from "../lib/redirect";
 import { ADMIN_ROLES, MEMBER_ROLES, hasRole } from "../lib/roles";
 import { isSurveillanceSource, phaseLabel, severitySourceLabel } from "../lib/severitySource";
 
@@ -25,6 +26,7 @@ const PATTERN_SOURCES = ["rule", "preset_rule"];
 export default function NotificationDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const { role } = useSession();
   const { busy: busyAction, error: actionError, run } = useAction();
@@ -36,8 +38,32 @@ export default function NotificationDetailPage() {
     enabled: Boolean(id),
   });
 
-  if (isLoading) return <EmptyState message="Caricamento…" />;
-  if (error) return <ErrorBanner error={error} />;
+  // Il ritorno riapre la lista da cui si è arrivati (gruppo e filtri compresi),
+  // passata dallo stato del link. Un link diretto torna all'elenco generale.
+  const from = (location.state as { from?: unknown } | null)?.from;
+  const tornaA = from ? safeRedirectTarget(from) : "/notifications";
+  const indietro = (
+    <Link className="back-link" to={tornaA}>
+      ← {from ? "Torna alla lista" : "Torna alle notifiche"}
+    </Link>
+  );
+
+  // Anche in caricamento e con errore la pagina ha il suo ritorno: senza, chi
+  // arriva qui da un errore resterebbe senza una strada indicata.
+  if (isLoading)
+    return (
+      <div>
+        {indietro}
+        <EmptyState message="Caricamento…" />
+      </div>
+    );
+  if (error)
+    return (
+      <div>
+        {indietro}
+        <ErrorBanner error={error} />
+      </div>
+    );
   if (!data) return null;
 
   async function setStatus(status: NotificationStatus) {
@@ -101,9 +127,7 @@ export default function NotificationDetailPage() {
 
   return (
     <div>
-      <Link className="back-link" to="/notifications">
-        ← Torna alle notifiche
-      </Link>
+      {indietro}
       <div className="page-header">
         <h1>Dettaglio notifica</h1>
         <div className="page-header-actions">

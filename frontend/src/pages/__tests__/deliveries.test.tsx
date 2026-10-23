@@ -72,7 +72,7 @@ describe("DeliveriesPage leggibilità", () => {
     expect(screen.getAllByText(/Backup notturno/).length).toBeGreaterThan(0);
 
     // si arriva alla notifica inoltrata, senza leggerne il corpo qui
-    const apri = screen.getAllByRole("link", { name: "Apri" });
+    const apri = screen.getAllByRole("link", { name: /^Apri/ });
     expect(apri[0]).toHaveAttribute("href", "/notifications/n1");
   });
 
@@ -96,7 +96,7 @@ describe("DeliveriesPage leggibilità", () => {
     // spinge fuori vista le colonne che dicono com'è andata la consegna.
     expect(screen.queryByText(/disco pieno su \/var/)).not.toBeInTheDocument();
     const riga = screen.getAllByRole("row")[1];
-    expect(within(riga).getByRole("link", { name: "Apri" })).toHaveAttribute(
+    expect(within(riga).getByRole("link", { name: /^Apri/ })).toHaveAttribute(
       "href",
       "/notifications/n1",
     );
@@ -131,7 +131,7 @@ describe("DeliveriesPage leggibilità", () => {
     // severity si scorrono in verticale.
     expect(within(celle[0]).getByText("Errore")).toBeInTheDocument();
     expect(within(celle[1]).queryByText("Errore")).not.toBeInTheDocument();
-    expect(within(celle[1]).getByRole("link", { name: "Apri" })).toBeInTheDocument();
+    expect(within(celle[1]).getByRole("link", { name: /^Apri/ })).toBeInTheDocument();
   });
 
   it("la data di ricezione ha la colonna «Ricevuta», con giorno e ora su due righe", async () => {
@@ -363,5 +363,61 @@ describe("DeliveriesPage filtro canale del viewer", () => {
 
     expect(tendina).toHaveValue("c9");
     expect(within(tendina).getByRole("option", { name: "Canale selezionato" })).toBeInTheDocument();
+  });
+});
+
+describe("DeliveriesPage stati e azioni", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setRefreshToken("refresh-token-fixture");
+  });
+
+  it("se i canali non si caricano il banner lo dice, la tabella resta", async () => {
+    server.use(
+      http.get("/api/v1/channels", () =>
+        HttpResponse.json(
+          { type: "/problems/internal-error", title: "Internal Server Error", status: 500 },
+          { status: 500, headers: { "Content-Type": "application/problem+json" } },
+        ),
+      ),
+    );
+    renderWithProviders(<DeliveriesPage />);
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    // Le consegne sono un'altra query: la tabella non sparisce per i canali.
+    expect(await screen.findByText("Morta", { selector: ".status-pill" })).toBeInTheDocument();
+  });
+
+  it("con lo stato «morta» e nessun risultato non parla di soglia", async () => {
+    server.use(
+      http.get("/api/v1/deliveries", () => HttpResponse.json({ deliveries: [], next_cursor: null })),
+    );
+    renderWithProviders(<DeliveriesPage />, ["/deliveries?status=dead"]);
+
+    expect(await screen.findByText("Nessuna consegna con questi filtri.")).toBeInTheDocument();
+    expect(screen.queryByText(/soglia/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Stato della consegna")).toHaveValue("dead");
+  });
+
+  it("Ri-accoda aggiorna la riga in place, senza ricaricare l'elenco", async () => {
+    let elenco = 0;
+    server.use(
+      http.get("/api/v1/deliveries", () => {
+        elenco += 1;
+        return HttpResponse.json({ deliveries: [fixtureDeliveries[0]], next_cursor: null });
+      }),
+      http.post("/api/v1/deliveries/:id/retry", () =>
+        HttpResponse.json({ ...fixtureDeliveries[0], status: "pending", attempts: 0 }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<DeliveriesPage />);
+
+    await user.click(await screen.findByRole("button", { name: "Ri-accoda" }));
+
+    expect(await screen.findByText("In attesa", { selector: ".status-pill" })).toBeInTheDocument();
+    expect(screen.queryByText("Morta", { selector: ".status-pill" })).not.toBeInTheDocument();
+    // Il dato arriva dalla risposta: nessuna lettura in più dell'elenco.
+    expect(elenco).toBe(1);
   });
 });

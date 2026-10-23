@@ -171,6 +171,72 @@ describe("AuditPage", () => {
       expect(urls.some((url) => url.includes("outcome=failure"))).toBe(true);
     });
   });
+
+  it("una risorsa con un'anteprima di 255 caratteri resta accorciata, intera nel title", async () => {
+    const lunga = ("Notifica di prova: " + "contenuto del messaggio ".repeat(10)).trimEnd();
+    server.use(
+      http.get("/api/v1/audit/events", () =>
+        HttpResponse.json({
+          events: [{ ...fixtureAuditEvents[0], resource_label: lunga }],
+          next_cursor: null,
+        }),
+      ),
+    );
+    renderWithProviders(<AuditPage />);
+    await screen.findByText("mario@acme.test");
+
+    // Come nel registro delle letture: una riga lunga non allarga la tabella.
+    const testo = within(cella(1, "Risorsa")).getByTitle(lunga);
+    expect(testo.textContent?.length).toBeLessThanOrEqual(81);
+    expect(testo.textContent?.endsWith("…")).toBe(true);
+  });
+
+  it("«Carica altri» accoda la pagina successiva usando il cursore", async () => {
+    const cursori: (string | null)[] = [];
+    const prima = { ...fixtureAuditEvents[0], id: "pagina-1", resource_label: "Prima notifica" };
+    const seconda = {
+      ...fixtureAuditEvents[0],
+      id: "pagina-2",
+      resource_label: "Seconda notifica",
+    };
+    server.use(
+      http.get("/api/v1/audit/events", ({ request }) => {
+        const cursore = new URL(request.url).searchParams.get("cursor");
+        cursori.push(cursore);
+        return cursore === "c1"
+          ? HttpResponse.json({ events: [seconda], next_cursor: null })
+          : HttpResponse.json({ events: [prima], next_cursor: "c1" });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<AuditPage />);
+    await screen.findByText("Prima notifica");
+
+    await user.click(screen.getByRole("button", { name: "Carica altri" }));
+
+    expect(await screen.findByText("Seconda notifica")).toBeInTheDocument();
+    expect(screen.getByText("Prima notifica")).toBeInTheDocument();
+    expect(cursori).toEqual([null, "c1"]);
+    expect(screen.queryByRole("button", { name: "Carica altri" })).not.toBeInTheDocument();
+  });
+
+  it("se il caricamento fallisce non dice «Nessun evento»: l'errore resta sullo schermo", async () => {
+    server.use(
+      http.get("/api/v1/audit/events", () =>
+        HttpResponse.json(
+          { type: "/problems/internal", title: "Internal Server Error", status: 500 },
+          { status: 500 },
+        ),
+      ),
+    );
+    renderWithProviders(<AuditPage />);
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(
+      screen.getByText("Elenco non disponibile per un errore di caricamento."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Nessun evento con questi filtri.")).not.toBeInTheDocument();
+  });
 });
 
 describe("AuditNotificationStatusPage", () => {
@@ -203,7 +269,7 @@ describe("AuditNotificationStatusPage", () => {
 
     const notifica = cella(1, "Notifica");
     expect(within(notifica).getByText("Backup notturno fallito")).toBeInTheDocument();
-    expect(within(notifica).getByRole("link", { name: "Apri" })).toHaveAttribute(
+    expect(within(notifica).getByRole("link", { name: /^Apri/ })).toHaveAttribute(
       "href",
       "/notifications/n1",
     );
@@ -251,7 +317,7 @@ describe("AuditNotificationStatusPage", () => {
 
     const notifica = cella(1, "Notifica");
     expect(within(notifica).getByText("Backup notturno fallito")).toBeInTheDocument();
-    expect(within(notifica).queryByRole("link", { name: "Apri" })).not.toBeInTheDocument();
+    expect(within(notifica).queryByRole("link", { name: /^Apri/ })).not.toBeInTheDocument();
     expect(within(notifica).getByText(/non più presente/)).toBeInTheDocument();
   });
 

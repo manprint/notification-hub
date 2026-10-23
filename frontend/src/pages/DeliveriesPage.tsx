@@ -1,5 +1,5 @@
 import { type InfiniteData, useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { apiGet, apiPost } from "../api/client";
 import type {
   ApiError,
@@ -51,6 +51,7 @@ function opzioniCanaliDelleConsegne(
 
 export default function DeliveriesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const status = (searchParams.get("status") as DeliveryStatus | null) ?? undefined;
   const channelId = searchParams.get("channel_id") ?? undefined;
   const queryClient = useQueryClient();
@@ -85,7 +86,7 @@ export default function DeliveriesPage() {
   // La lista dei canali (URL mascherato, ultimo errore) e' riservata a member e
   // superiori: il viewer non la chiede, e filtra per i canali delle consegne caricate.
   const canVedereCanali = hasRole(role, MEMBER_ROLES);
-  const { data: channels } = useQuery<DeliveryChannelOut[], ApiError>({
+  const { data: channels, error: channelsError } = useQuery<DeliveryChannelOut[], ApiError>({
     queryKey: ["channels"],
     queryFn: () => apiGet<DeliveryChannelOut[]>("/api/v1/channels"),
     enabled: canVedereCanali,
@@ -93,6 +94,12 @@ export default function DeliveriesPage() {
   const opzioniCanale = canVedereCanali
     ? (channels ?? []).map((c) => ({ id: c.id, name: c.name }))
     : opzioniCanaliDelleConsegne(rows, channelId);
+  // Un canale nell'URL senza una voce in tendina (lista non caricata, canale
+  // cancellato): la tendina non deve mostrare "Tutti i canali" mentre la lista
+  // resta filtrata.
+  if (channelId && !opzioniCanale.some((c) => c.id === channelId)) {
+    opzioniCanale.push({ id: channelId, name: "Canale selezionato" });
+  }
 
   function setParam(key: string, value: string) {
     setSearchParams((prev) => {
@@ -106,8 +113,33 @@ export default function DeliveriesPage() {
   async function retry(id: string) {
     await run(
       async () => {
-        await apiPost(`/api/v1/deliveries/${id}/retry`);
-        await queryClient.invalidateQueries({ queryKey: ["deliveries"] });
+        const aggiornata = await apiPost<DeliveryOut>(`/api/v1/deliveries/${id}/retry`);
+        // La risposta dice com'è la consegna adesso: la riga si aggiorna nelle
+        // pagine già caricate. Rileggerle tutte costava una richiesta per
+        // pagina ("Carica altri" ne accumula molte). Una riga che il filtro di
+        // stato non contiene più esce dalla lista.
+        const liste = queryClient.getQueriesData<InfiniteData<DeliveryListOut>>({
+          queryKey: ["deliveries"],
+        });
+        for (const [key] of liste) {
+          const filtro = key[1] as { status?: DeliveryStatus } | undefined;
+          const fuori = filtro?.status !== undefined && filtro.status !== aggiornata.status;
+          queryClient.setQueryData<InfiniteData<DeliveryListOut>>(key, (old) =>
+            old
+              ? {
+                  ...old,
+                  pages: old.pages.map((page) => ({
+                    ...page,
+                    deliveries: fuori
+                      ? page.deliveries.filter((d) => d.id !== id)
+                      : page.deliveries.map((d) => (d.id === id ? aggiornata : d)),
+                  })),
+                }
+              : old,
+          );
+        }
+        // Il riepilogo conta le consegne morte: va riletto.
+        await queryClient.invalidateQueries({ queryKey: ["stats-summary"] });
       },
       { name: id, success: "Consegna rimessa in coda." },
     );
@@ -131,7 +163,13 @@ export default function DeliveriesPage() {
       render: (d) => (
         <div className="cell-preview">
           <div className="content-cell">
-            <Link to={`/notifications/${d.notification_id}`}>Apri</Link>
+            <Link
+              to={`/notifications/${d.notification_id}`}
+              state={{ from: `${location.pathname}${location.search}` }}
+              aria-label={`Apri la notifica ricevuta ${formatDate(d.received_at)} ${formatTime(d.received_at)}`}
+            >
+              Apri
+            </Link>
           </div>
           <div className="cell-diagnostics">da {d.receiver_name}</div>
         </div>
@@ -255,6 +293,7 @@ export default function DeliveriesPage() {
             </div>
           )}
         </div>
+        {channelsError && <ErrorBanner error={channelsError} />}
       </div>
 
       <DataTable
@@ -263,7 +302,13 @@ export default function DeliveriesPage() {
         rowKey={(d) => d.id}
         loading={isLoading}
         error={error}
-        emptyMessage="Nessuna consegna trovata: nessuna notifica ha ancora superato la soglia di un canale."
+        // Con un filtro attivo la frase sulla soglia non c'entra: il messaggio
+        // dice che il filtro non trova nulla, non che il sistema è fermo.
+        emptyMessage={
+          filtriAttivi > 0
+            ? "Nessuna consegna con questi filtri."
+            : "Nessuna consegna trovata: nessuna notifica ha ancora superato la soglia di un canale."
+        }
         hasMore={hasNextPage}
         onLoadMore={() => void fetchNextPage()}
         loadingMore={isFetchingNextPage}
