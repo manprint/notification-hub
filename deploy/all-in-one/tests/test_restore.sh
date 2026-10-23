@@ -42,7 +42,7 @@ ARCH="${DUMP%.sql.gz}.config.tar.gz"
 reset_case() {
     rm -f "${SANDBOX}/psql-input.sql" "${SANDBOX}/supervisor.calls"
     write_secrets "${K1}"
-    unset NOTIFYHUB_SECRET_KEY STUB_PSQL_STDERR STUB_PSQL_RC STUB_SUPERVISOR_UP
+    unset NOTIFYHUB_SECRET_KEY STUB_PSQL_STDERR STUB_PSQL_RC STUB_SUPERVISOR_UP STUB_FAIL_ALTER
 }
 
 secret_in() {
@@ -80,6 +80,28 @@ STUB_PSQL_STDERR='ERROR:  relation "t_demo" already exists' \
     "${RESTORE}" "${DUMP}" --yes >/dev/null 2>&1
 check "chiave cambiata ed errore SQL: nessun programma riavviato" \
     none_match ' start ' "${SANDBOX}/supervisor.calls"
+
+# Chiave cambiata e riallineamento delle password (ALTER ROLE) che fallisce dopo il
+# caricamento del dump: lo script esce con set -e. La chiave del backup deve essere
+# gia' in secrets.env prima del fallimento, altrimenti il riavvio del container
+# userebbe la chiave vecchia e le delivery ripristinate finirebbero dead.
+reset_case
+STUB_FAIL_ALTER=1 "${RESTORE}" "${DUMP}" --yes > "${SANDBOX}/restore.out" 2>&1
+check "chiave cambiata e ALTER ROLE fallito: esito non zero" [ "$?" -ne 0 ]
+check "chiave cambiata e ALTER ROLE fallito: il dump e' stato caricato" \
+    grep -q 'CREATE TABLE t_demo' "${SANDBOX}/psql-input.sql"
+check "chiave cambiata e ALTER ROLE fallito: il fallimento e' sul riallineamento" \
+    grep -q 'ALTER ROLE' "${SANDBOX}/psql-input.sql"
+check "chiave cambiata e ALTER ROLE fallito: la chiave del backup e' in secrets.env" \
+    secret_is "${SECRETS}" "${K0}"
+check "chiave cambiata e ALTER ROLE fallito: le altre credenziali restano quelle locali" \
+    grep -q '^PG_OWNER_PASSWORD=pw-owner$' "${SECRETS}"
+check "chiave cambiata e ALTER ROLE fallito: nessun programma avviato, worker e beat compresi" \
+    none_match ' start ' "${SANDBOX}/supervisor.calls"
+check "chiave cambiata e ALTER ROLE fallito: servizi fermati" \
+    grep -q ' stop nginx api metrics worker beat$' "${SANDBOX}/supervisor.calls"
+check "chiave cambiata e ALTER ROLE fallito: il messaggio dice di riavviare il container" \
+    grep -q 'riavviare il container' "${SANDBOX}/restore.out"
 
 # Sessioni ancora aperte: il ripristino si ferma prima di caricare il dump. Il database e'
 # quello di prima, quindi la chiave non cambia e i servizi ripartono come sempre.

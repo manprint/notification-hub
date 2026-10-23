@@ -298,10 +298,14 @@ decifrano. Per questo:
 - `notifyhub-restore` riporta la chiave del backup in `secrets.env`, e rifiuta se l'archivio manca
   (`--senza-configurazione` accetta il rischio) o se `NOTIFYHUB_SECRET_KEY` e' impostata
   nell'ambiente del container con un valore diverso;
-- dopo un ripristino che cambia la chiave i servizi applicativi (API, worker, beat) restano fermi e
-  occorre riavviare il container: un programma ripartito ora avrebbe ancora la chiave vecchia, e il
-  worker marcherebbe `dead` le delivery ripristinate. Se una delivery finisce comunque `dead`, la si
-  ri-accoda dalla dashboard (`POST /api/v1/deliveries/{id}/retry`).
+- dopo un ripristino che cambia la chiave i servizi applicativi (nginx, API, worker, beat, metrics)
+  restano fermi e occorre riavviare il container: finche' non ripartono la dashboard non risponde, e
+  un programma ripartito ora avrebbe ancora la chiave vecchia, quindi il worker marcherebbe `dead` le
+  delivery ripristinate. Se una delivery finisce comunque `dead`, la si ri-accoda dalla dashboard
+  (`POST /api/v1/deliveries/{id}/retry`).
+
+Dopo un ripristino con chiave cambiata riavviare il container, non usare `notifyhub-ctl restart`: il
+worker ripartirebbe con la chiave vecchia.
 
 Il dump non contiene gli oggetti MinIO: stanno nello stesso volume `/data` e per una copia completa
 conviene fare lo snapshot del volume a container fermo. Attenzione: anche `/data/backups` sta nel

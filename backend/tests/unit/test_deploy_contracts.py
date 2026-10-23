@@ -194,3 +194,16 @@ def test_all_in_one_nginx_intestazioni_ereditate_dalla_spa():
         inizio = nginx.index(location)
         blocco = nginx[inizio : nginx.index("}", inizio)]
         assert "add_header" not in blocco
+
+
+@pytest.mark.unit
+def test_restore_riscrive_la_chiave_prima_del_riallineamento_password():
+    # Se il riallineamento (ALTER ROLE) fallisce, set -e termina lo script: la chiave del backup
+    # deve essere gia' in secrets.env, altrimenti il riavvio del container ripartirebbe con la
+    # chiave vecchia. Il comportamento e' coperto da test_restore.sh; qui si blocca l'ordine.
+    restore = (REPO / "deploy/all-in-one/rootfs/usr/local/bin/notifyhub-restore").read_text(
+        encoding="utf-8"
+    )
+    chiamata_chiave = restore.index('set_secret_key "${ARCHIVE_KEY}"')
+    chiamata_password = restore.index("\nreapply_role_passwords\n")
+    assert chiamata_chiave < chiamata_password
