@@ -50,6 +50,7 @@ from app.services.identity import (
     find_invitation,
     find_refresh_token,
     find_user_by_email,
+    lock_user_token_scope,
 )
 from app.services.ratelimit import sliding_window_hit
 
@@ -295,6 +296,10 @@ async def refresh(body: RefreshIn) -> TokenPairOut:
 
     tenant_id = uuid.UUID(refresh_token_identity.tenant_id)
     async with tenant_session(tenant_id) as session:
+        # Lock di tenant e utente prima del token: stesso ordine di logout e rimozione.
+        await lock_user_token_scope(
+            session, tenant_id, uuid.UUID(refresh_token_identity.user_id)
+        )
         refresh_result = await session.execute(
             select(RefreshToken)
             .where(RefreshToken.id == uuid.UUID(refresh_token_identity.id))
@@ -385,6 +390,11 @@ async def logout(
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> None:
+    # Stesso ordine di refresh e rimozione (tenant, utente, token). Il lock
+    # sull'utente attende le rotazioni in corso: i successori che ne escono
+    # sono visibili ai SELECT che seguono e vengono revocati nella stessa
+    # transazione, invece di sopravvivere al logout.
+    await lock_user_token_scope(session, uuid.UUID(claims.tid), uuid.UUID(claims.sub))
     if body.revoke_all:
         refresh_result = await session.execute(
             select(RefreshToken).where(
