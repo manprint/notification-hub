@@ -121,6 +121,16 @@ check "chiave fissata in overrides.env diversa dal backup: database intatto" \
     [ ! -f "${SANDBOX}/psql-input.sql" ]
 rm -f "${OVERRIDES}"
 
+# Ambiente con la chiave del backup ma overrides.env con un'altra: vince quella
+# di overrides.env al riavvio, quindi si rifiuta lo stesso.
+reset_case
+printf 'NOTIFYHUB_SECRET_KEY=%s\n' "${K1}" > "${OVERRIDES}"
+NOTIFYHUB_SECRET_KEY="${K0}" "${RESTORE}" "${DUMP}" --yes >/dev/null 2>&1
+check "ambiente uguale al backup, overrides.env diversa: rifiutato" [ "$?" -ne 0 ]
+check "ambiente uguale al backup, overrides.env diversa: database intatto" \
+    [ ! -f "${SANDBOX}/psql-input.sql" ]
+rm -f "${OVERRIDES}"
+
 # --- round trip: backup su un'istanza, restore su un volume nuovo -----------
 reset_case
 NEW_DATA="${SANDBOX}/data-nuovo"

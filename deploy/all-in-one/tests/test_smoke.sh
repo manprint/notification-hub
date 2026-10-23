@@ -19,7 +19,7 @@ CALLS="${SANDBOX}/docker.calls"
 
 cat > "${SANDBOX}/bin/docker" <<STUB
 #!/bin/bash
-printf 'HTTP_PORT=%s SMOKE_WEBHOOK_PORT=%s args:%s\n' "\${HTTP_PORT:-}" "\${SMOKE_WEBHOOK_PORT:-}" "\$*" >> "${CALLS}"
+printf 'HTTP_PORT=%s SMOKE_WEBHOOK_PORT=%s MINIO_CONSOLE_PORT=%s args:%s\n' "\${HTTP_PORT:-}" "\${SMOKE_WEBHOOK_PORT:-}" "\${MINIO_CONSOLE_PORT:-}" "\$*" >> "${CALLS}"
 exit 0
 STUB
 # curl non raggiunge mai l'API; sleep non aspetta: il readyz scade subito.
@@ -43,6 +43,8 @@ check "smoke: porta HTTP propria, non quella dello sviluppo" \
     grep -qF 'HTTP_PORT=18080 ' "${CALLS}"
 check "smoke: webhook su una porta propria" \
     grep -qF 'SMOKE_WEBHOOK_PORT=18899 ' "${CALLS}"
+check "smoke: console MinIO su una porta propria" \
+    grep -qF 'MINIO_CONSOLE_PORT=19001 ' "${CALLS}"
 
 # --- 2. controlli dell'idempotenza e dello storage ---------------------------
 # Colori usati dalle funzioni estratte da smoke.sh.

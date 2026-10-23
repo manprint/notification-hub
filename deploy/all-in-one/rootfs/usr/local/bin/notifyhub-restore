@@ -103,10 +103,14 @@ else
     # Una chiave fissata nell'ambiente del container (docker exec lo eredita) o in
     # overrides.env vince su secrets.env al riavvio: senza rimuoverla non si
     # ripristina quella del backup.
-    PINNED_KEY="${NOTIFYHUB_SECRET_KEY:-$(secret_value "${OVERRIDES_FILE}" NOTIFYHUB_SECRET_KEY)}"
-    if [ -n "${PINNED_KEY}" ] && [ "${PINNED_KEY}" != "${ARCHIVE_KEY}" ]; then
-        die "NOTIFYHUB_SECRET_KEY e' fissata nell'ambiente del container o in ${OVERRIDES_FILE} con un valore diverso da quello del backup: rimuoverla e riprovare"
-    fi
+    # Ogni fonte si controlla da sola: l'ambiente con la chiave del backup non basta
+    # se overrides.env ne fissa un'altra, perche' quella vince al riavvio.
+    OVERRIDES_KEY="$(secret_value "${OVERRIDES_FILE}" NOTIFYHUB_SECRET_KEY)"
+    for pinned_key in "${NOTIFYHUB_SECRET_KEY:-}" "${OVERRIDES_KEY}"; do
+        if [ -n "${pinned_key}" ] && [ "${pinned_key}" != "${ARCHIVE_KEY}" ]; then
+            die "NOTIFYHUB_SECRET_KEY e' fissata nell'ambiente del container o in ${OVERRIDES_FILE} con un valore diverso da quello del backup: rimuoverla e riprovare"
+        fi
+    done
     if [ "$(secret_value "${SECRETS_FILE}" NOTIFYHUB_SECRET_KEY)" != "${ARCHIVE_KEY}" ]; then
         KEY_CHANGE=1
     fi
