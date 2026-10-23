@@ -43,6 +43,8 @@ describe("ErrorBanner", () => {
       "rate_limit_per_min: Input should be less than or equal to 2147483647",
     );
     expect(voci[1]).toHaveTextContent("channel.name: Field required");
+    // La lista ha la classe che la stilizza: senza, eredita margini e rientro del browser.
+    expect(banner.querySelector("ul")).toHaveClass("error-details");
   });
 
   it("T-ERR2 senza dettagli mostra solo il messaggio", () => {

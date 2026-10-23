@@ -190,7 +190,7 @@ export default function ReceiverNotificationsTable({
   }
 
   return (
-    <section className="card receiver-table" aria-label={`Notifiche di ${receiver.name}`}>
+    <section className="card" aria-label={`Notifiche di ${receiver.name}`}>
       <div className="receiver-table-header">
         <h3>
           {canManage ? <Link to={`/receivers/${receiver.id}`}>{receiver.name}</Link> : receiver.name}

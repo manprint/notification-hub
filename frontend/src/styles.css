@@ -18,12 +18,17 @@
   --color-text-muted: #9aa1ac;
   --color-accent: #4f8cff;
   --color-accent-soft: rgba(79, 140, 255, 0.14);
+  --color-accent-border: rgba(79, 140, 255, 0.5);
+  --color-row-hover: rgba(255, 255, 255, 0.02);
   /* Sfondi pieni con testo bianco (pulsanti principali, pillola "Verificata"):
      piu' scuri dell'accento, perche' il bianco su #4f8cff sta a 3.22:1 e lo
      standard WCAG AA ne chiede 4.5:1. Rapporti con #fff: accent-fill 4.95:1,
      accent-fill-hover 6.43:1. */
   --color-accent-fill: #2b6ae0;
   --color-accent-fill-hover: #2358c4;
+  --color-on-fill: #fff;
+  --color-on-warning: #221a00; /* 9.52:1 su --color-warning */
+  --color-on-info: #10121a; /* 6.11:1 su --color-info */
 
   --color-critical: #e5484d;
   /* Rosso come sfondo pieno (badge critici, conferma distruttiva) e come
@@ -40,9 +45,14 @@
   --color-success-soft: rgba(63, 178, 127, 0.14);
   --color-danger-soft: rgba(229, 72, 77, 0.12);
   --color-warning-soft: rgba(245, 181, 68, 0.14);
+  --color-success-border: rgba(63, 178, 127, 0.5);
+  --color-warning-border: rgba(245, 181, 68, 0.5);
+  --color-critical-border: rgba(229, 72, 77, 0.5);
 
   /* --- spazio ------------------------------------------------------------ */
+  --space-0-5: 2px;
   --space-1: 4px;
+  --space-1-5: 6px;
   --space-2: 8px;
   --space-3: 16px;
   --space-4: 24px;
@@ -231,7 +241,7 @@ button:disabled {
 button.primary {
   background: var(--color-accent-fill);
   border-color: var(--color-accent-fill);
-  color: #fff;
+  color: var(--color-on-fill);
   font-weight: 600;
 }
 
@@ -244,7 +254,7 @@ button.primary:hover:not(:disabled) {
    riga di tabella non diventa un semaforo. */
 button.danger {
   color: var(--color-critical-text);
-  border-color: rgba(229, 72, 77, 0.45);
+  border-color: var(--color-critical-border);
 }
 
 button.danger:hover:not(:disabled) {
@@ -257,7 +267,7 @@ button.danger:hover:not(:disabled) {
 button.primary.danger {
   background: var(--color-critical-fill);
   border-color: var(--color-critical-fill);
-  color: #fff;
+  color: var(--color-on-fill);
 }
 
 button.primary.danger:hover:not(:disabled) {
@@ -279,11 +289,6 @@ button.ghost:hover:not(:disabled) {
   border-color: transparent;
 }
 
-button.small {
-  font-size: var(--text-sm);
-  padding: var(--space-1) var(--space-2);
-}
-
 input,
 select,
 textarea {
@@ -291,7 +296,7 @@ textarea {
   color: var(--color-text);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
-  padding: 6px var(--space-2);
+  padding: var(--space-1-5) var(--space-2);
   min-height: 34px;
 }
 
@@ -358,8 +363,25 @@ td {
   padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--color-border);
   vertical-align: top;
-  /* Webhook mascherati, URL di errore e pattern RE2 sono stringhe lunghe
-     senza spazi: senza questo spezzano la cella e sfondano la card. */
+  /* break-word, non anywhere: anywhere porta la larghezza minima della colonna
+     a un carattere e la tabella si schiaccia (email spezzate lettera per
+     lettera). Cosi' una stringa senza spazi piu' larga della cella fa scorrere
+     la tabella dentro .table-wrap, che e' il comportamento voluto. Webhook
+     mascherati e pattern RE2 stanno in <code>, che va a capo da solo. */
+  overflow-wrap: break-word;
+}
+
+/* Numeri in colonna: a destra, con cifre a larghezza fissa, cosi' le cifre di
+   righe diverse si allineano. */
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Il nome di un gruppo o di un receiver e' un collegamento: in una colonna
+   stretta va a capo. Il testo semplice (email, etichette) resta intero e fa
+   scorrere la tabella. */
+td a {
   overflow-wrap: anywhere;
 }
 
@@ -375,7 +397,7 @@ th {
 }
 
 tbody tr:hover td {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--color-row-hover);
 }
 
 tbody tr:last-child td {
@@ -387,16 +409,29 @@ tbody tr:last-child td {
 .received-at {
   display: inline-flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
 /* Contenitore obbligatorio per ogni tabella dentro una card: se le colonne
-   non ci stanno scorre la tabella, non la pagina. */
+   non ci stanno scorre la tabella, non la pagina. Ai bordi, un'ombra dice che
+   c'e' altro da scorrere: le due coperture (local) seguono il contenuto e la
+   spengono in fondo; le ombre (scroll) restano sulla scatola. Sono sfondo,
+   non coprono il testo. */
 .table-wrap {
   width: 100%;
   overflow-x: auto;
+  background-color: var(--color-surface);
+  background-image:
+    linear-gradient(to right, var(--color-surface) 30%, transparent),
+    linear-gradient(to left, var(--color-surface) 30%, transparent),
+    radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, 0.35), transparent),
+    radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, 0.35), transparent);
+  background-size: 40px 100%, 40px 100%, 12px 100%, 12px 100%;
+  background-position: left, right, left, right;
+  background-repeat: no-repeat;
+  background-attachment: local, local, scroll, scroll;
 }
 
 .table-wrap table {
@@ -456,7 +491,7 @@ tbody tr:last-child td {
 .app-brand {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   padding: var(--space-2);
   margin-bottom: var(--space-3);
   border-bottom: 1px solid var(--color-border);
@@ -479,12 +514,12 @@ tbody tr:last-child td {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 .app-sidebar a {
   display: block;
-  padding: 6px var(--space-2);
+  padding: var(--space-1-5) var(--space-2);
   border-radius: var(--radius);
   color: var(--color-text-muted);
   text-decoration: none;
@@ -529,6 +564,11 @@ tbody tr:last-child td {
 
 .page-header h1 {
   margin: 0;
+  /* Un nome senza spazi (gruppo, receiver) va a capo invece di allargare la
+     pagina: il titolo e' un elemento flex, e senza min-width: 0 non si
+     restringe sotto la larghezza della parola piu' lunga. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .page-header-actions {
@@ -654,7 +694,7 @@ tbody tr:last-child td {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--color-text-muted);
-  margin-bottom: 2px;
+  margin-bottom: var(--space-0-5);
 }
 
 .detail-value {
@@ -662,7 +702,6 @@ tbody tr:last-child td {
   overflow-wrap: anywhere;
 }
 
-.detail-value.wide,
 .detail-grid > .detail-wide {
   grid-column: 1 / -1;
 }
@@ -741,8 +780,7 @@ tbody tr:last-child td {
   min-width: 0;
 }
 
-.form-row > label,
-.field-label {
+.form-row > label {
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--color-text);
@@ -752,7 +790,7 @@ tbody tr:last-child td {
    messaggio del server dopo aver premuto Salva. */
 .required-mark {
   color: var(--color-critical-text);
-  margin-left: 2px;
+  margin-left: var(--space-0-5);
 }
 
 .form-row > label.is-required::after {
@@ -765,12 +803,6 @@ tbody tr:last-child td {
   font-weight: 400;
   font-size: var(--text-xs);
   color: var(--color-text-muted);
-}
-
-.optional-mark {
-  font-weight: 400;
-  color: var(--color-text-muted);
-  margin-left: var(--space-1);
 }
 
 .field-hint {
@@ -892,7 +924,7 @@ tbody tr:last-child td {
 .check-list input[type="checkbox"] {
   width: auto;
   min-height: 0;
-  margin-top: 4px;
+  margin-top: var(--space-1);
   padding: 0;
 }
 
@@ -910,7 +942,9 @@ tbody tr:last-child td {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-3);
-  align-items: flex-end;
+  /* In cima: con flex-end la riga della ricerca, che ha il suggerimento su due
+     righe, spingeva in basso le etichette delle altre caselle. */
+  align-items: flex-start;
 }
 
 .filters .form-row {
@@ -928,6 +962,9 @@ tbody tr:last-child td {
   gap: var(--space-2);
   align-items: center;
   margin-left: auto;
+  /* Il pulsante sta alla altezza delle caselle, non alla riga delle etichette:
+     24px = etichetta (13px su 1.5) piu' la distanza fra etichetta e casella. */
+  margin-top: var(--space-4);
 }
 
 /* Distanze che stavano in style={{}} in linea: le stesse tre righe ripetute in
@@ -970,13 +1007,13 @@ tbody tr:last-child td {
 
 .severity-badge {
   display: inline-block;
-  padding: 2px var(--space-2);
+  padding: var(--space-0-5) var(--space-2);
   border-radius: var(--radius);
   font-size: var(--text-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  color: #fff;
+  color: var(--color-on-fill);
   white-space: nowrap;
 }
 
@@ -987,18 +1024,18 @@ tbody tr:last-child td {
 
 .severity-warning {
   background: var(--color-warning);
-  color: #221a00;
+  color: var(--color-on-warning);
 }
 
 .severity-info,
 .severity-debug {
   background: var(--color-info);
-  color: #10121a;
+  color: var(--color-on-info);
 }
 
 .status-pill {
   display: inline-block;
-  padding: 2px var(--space-2);
+  padding: var(--space-0-5) var(--space-2);
   border-radius: var(--radius-pill);
   font-size: var(--text-xs);
   border: 1px solid var(--color-border-strong);
@@ -1010,40 +1047,53 @@ tbody tr:last-child td {
    morta, senza leggere la parola. */
 .status-pill.ok {
   color: var(--color-success);
-  border-color: rgba(63, 178, 127, 0.5);
+  border-color: var(--color-success-border);
   background: var(--color-success-soft);
 }
 
 .status-pill.warn {
   color: var(--color-warning);
-  border-color: rgba(245, 181, 68, 0.5);
+  border-color: var(--color-warning-border);
   background: var(--color-warning-soft);
 }
 
 .status-pill.danger {
   color: var(--color-critical-text);
-  border-color: rgba(229, 72, 77, 0.5);
+  border-color: var(--color-critical-border);
   background: var(--color-danger-soft);
 }
 
 .status-pill.info {
   color: var(--color-accent);
-  border-color: rgba(79, 140, 255, 0.5);
+  border-color: var(--color-accent-border);
   background: var(--color-accent-soft);
 }
 
 .status-pill.verified {
   background: var(--color-accent-fill);
   border-color: var(--color-accent-fill);
-  color: #fff;
+  color: var(--color-on-fill);
 }
 
 .status-cell {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   flex-wrap: wrap;
   white-space: nowrap;
+}
+
+/* Nome lungo con un segnale accanto (home, riga del receiver): il nome va a
+   capo e il segnale resta su una riga. Solo dove serve: gli altri .status-cell
+   tengono nowrap. */
+.status-cell-wrap {
+  white-space: normal;
+  min-width: 0;
+}
+
+.status-cell-wrap > a {
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .error-banner {
@@ -1056,14 +1106,12 @@ tbody tr:last-child td {
   font-size: var(--text-base);
 }
 
-.warning-banner {
-  background: var(--color-warning-soft);
-  border: 1px solid var(--color-warning);
-  color: var(--color-text);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius);
-  margin-bottom: var(--space-3);
-  font-size: var(--text-base);
+/* I campi non validi dentro un banner: come .chain-list, senza il margine e il
+   rientro che il browser mette a un elenco senza stile. */
+.error-details {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+  font-size: var(--text-sm);
 }
 
 .empty-state {
@@ -1150,7 +1198,7 @@ tbody tr:last-child td {
   cursor: pointer;
 }
 
-.toast-close:hover {
+button.toast-close:hover:not(:disabled) {
   background: none;
   border-color: transparent;
   color: var(--color-text);
@@ -1261,7 +1309,7 @@ tbody tr:last-child td {
   border-radius: var(--radius-lg);
 }
 
-.group-card:hover {
+button.group-card:hover:not(:disabled) {
   border-color: var(--color-accent);
   background: var(--color-surface-alt);
 }
@@ -1276,7 +1324,7 @@ tbody tr:last-child td {
 
 .group-card-eyebrow {
   text-transform: uppercase;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.08em;
   color: var(--color-text-muted);
@@ -1322,7 +1370,7 @@ tbody tr:last-child td {
   background: var(--color-surface-alt);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-pill);
-  padding: 2px 10px;
+  padding: var(--space-0-5) var(--space-2);
   white-space: nowrap;
 }
 
@@ -1336,7 +1384,7 @@ tbody tr:last-child td {
 .group-picker {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   max-height: 160px;
   overflow-y: auto;
   border: 1px solid var(--color-border);
@@ -1457,7 +1505,7 @@ details[open] > .group-summary::before {
   line-height: 1;
 }
 
-.stats-toggle:hover {
+button.stats-toggle:hover:not(:disabled) {
   color: var(--color-text);
   background: none;
   border-color: transparent;
@@ -1542,7 +1590,7 @@ details[open] > .group-summary::before {
 }
 
 .audit-changes li + li {
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
 }
 
 /* --- pagine di accesso ---------------------------------------------------- */
@@ -1578,13 +1626,14 @@ details[open] > .group-summary::before {
 
 /* --- responsive ---------------------------------------------------------- */
 
+/* Sotto i 1000px la barra laterale diventa una testata sopra il contenuto. A
+   768px (tablet in verticale) la colonna fissa da 224px lasciava circa 500px
+   alle tabelle e spezzava la riga dei KPI. */
 @media (max-width: 1000px) {
   .app-main {
     padding: var(--space-3) var(--space-4);
   }
-}
 
-@media (max-width: 760px) {
   .app-shell {
     flex-direction: column;
   }
@@ -1598,20 +1647,34 @@ details[open] > .group-summary::before {
     padding: var(--space-2);
     border-right: 0;
     border-bottom: 1px solid var(--color-border);
+    /* Due righe: il marchio e Esci sulla prima, il menu a scorrimento sotto. */
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-1) var(--space-2);
   }
 
   .app-brand {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
     flex-direction: row;
+    flex-wrap: wrap;
     align-items: baseline;
     gap: var(--space-2);
     padding: var(--space-1) var(--space-2);
-    margin-bottom: var(--space-2);
+    margin-bottom: 0;
     border-bottom: 0;
   }
 
   .app-sidebar nav {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    min-width: 0;
     overflow-x: auto;
     scrollbar-width: thin;
+    /* Sfumatura a destra: il menu continua oltre il bordo. */
+    mask-image: linear-gradient(to right, black calc(100% - var(--space-5)), transparent);
   }
 
   .app-sidebar nav ul {
@@ -1628,8 +1691,10 @@ details[open] > .group-summary::before {
   }
 
   .app-sidebar-footer {
-    margin-top: var(--space-2);
-    padding-top: 0;
+    grid-column: 2;
+    grid-row: 1;
+    margin: 0;
+    padding: 0;
   }
 
   .app-main {
@@ -1637,7 +1702,9 @@ details[open] > .group-summary::before {
     max-width: none;
     padding: var(--space-3);
   }
+}
 
+@media (max-width: 760px) {
   .toolbar {
     align-items: stretch;
   }
@@ -1654,6 +1721,7 @@ details[open] > .group-summary::before {
 
   .filters-actions {
     margin-left: 0;
+    margin-top: 0;
   }
 
   .row-actions {
@@ -1662,6 +1730,12 @@ details[open] > .group-summary::before {
   }
 
   .group-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Tre numeri affiancati su una larghezza da 480px diventavano due, con
+     l'ultimo solo: su telefono basta una colonna. */
+  .kpi-grid {
     grid-template-columns: 1fr;
   }
 
