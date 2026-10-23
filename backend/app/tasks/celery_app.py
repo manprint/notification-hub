@@ -4,8 +4,12 @@ from celery import Celery
 from celery.schedules import crontab
 
 from app.core.config import get_settings
+from app.core.logging import configure_logging
 
 settings = get_settings()
+# Il worker non passa da create_app: senza questa chiamata logga senza livello, senza JSON e
+# senza la redazione dei segreti.
+configure_logging()
 
 celery_app = Celery(
     "notifyhub",

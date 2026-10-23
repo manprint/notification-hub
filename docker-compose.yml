@@ -116,11 +116,21 @@ services:
     env_file: .env
     environment:
       <<: *db_env
+      # Solo le migrazioni usano il ruolo owner: qui la variabile resta vuota (env_ignore_empty la
+      # tratta come assente) e la password di .env, caricata da env_file, non arriva al container.
+      DATABASE_URL_OWNER: ""
       NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST: ${NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST:-hooks.slack.com,chat.googleapis.com}
       NOTIFYHUB_WEBHOOK_INSECURE_HTTP_HOSTS: ${NOTIFYHUB_WEBHOOK_INSECURE_HTTP_HOSTS:-}
+      # Metriche multiprocess condivise con il worker: il server 9100 le somma (vedi core/metrics.py).
+      PROMETHEUS_MULTIPROC_DIR: /var/lib/notifyhub/metrics
+      # Senza questo uvicorn ignora X-Forwarded-For di nginx, che e' sempre il peer: tutti i client
+      # collassano su un solo IP (rate limit di ingestion e lockout del login condivisi).
+      FORWARDED_ALLOW_IPS: 172.30.250.10
     expose:
       - "8000"
       - "9100"  # /metrics, mai instradata da nginx (spec 10.4)
+    volumes:
+      - metricsdata:/var/lib/notifyhub/metrics
     healthcheck:
       # curl non e presente in python:3.12-slim, si usa l'interprete.
       test:
@@ -148,7 +158,12 @@ services:
       minio:
         condition: service_healthy
     env_file: .env
-    environment: *db_env
+    environment:
+      <<: *db_env
+      DATABASE_URL_OWNER: ""
+      PROMETHEUS_MULTIPROC_DIR: /var/lib/notifyhub/metrics
+    volumes:
+      - metricsdata:/var/lib/notifyhub/metrics
     networks: [notifyhub]
     restart: unless-stopped
 
@@ -163,7 +178,9 @@ services:
       redis:
         condition: service_healthy
     env_file: .env
-    environment: *db_env
+    environment:
+      <<: *db_env
+      DATABASE_URL_OWNER: ""
     networks: [notifyhub]
     restart: unless-stopped
 
@@ -176,7 +193,10 @@ services:
     depends_on:
       api:
         condition: service_healthy
-    networks: [notifyhub]
+    networks:
+      notifyhub:
+        # IP fisso: l'API si fida di X-Forwarded-For solo da questo hop (FORWARDED_ALLOW_IPS).
+        ipv4_address: 172.30.250.10
     restart: unless-stopped
 
   mock-webhook:
@@ -195,7 +215,11 @@ volumes:
   pgdata:
   redisdata:
   miniodata:
+  metricsdata:
 
 networks:
   notifyhub:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.250.0/24
