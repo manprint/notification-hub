@@ -92,3 +92,20 @@ def test_nginx_spa_ha_cache_e_intestazioni(frammento):
     # Il comportamento reale lo verifica deploy/nginx/test-headers.sh con nginx; qui il contratto testuale.
     nginx = (REPO / "deploy/nginx/nginx.conf").read_text(encoding="utf-8")
     assert frammento in nginx
+
+
+def _valore_env(file_env: Path, nome: str) -> str:
+    righe = file_env.read_text(encoding="utf-8").splitlines()
+    valori = [r.split("=", 1)[1] for r in righe if r.startswith(f"{nome}=")]
+    assert len(valori) == 1
+    return valori[0]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("file_env", [".env.example", ".env"])
+def test_url_pubblica_di_default_e_quella_di_loopback_senza_porta_di_sviluppo(file_env):
+    # Il worker non ha richieste da cui dedurre la URL: il default deve puntare alla porta
+    # che nginx pubblica davvero (80), non a quella del dev server Vite (5173).
+    from app.core.urls import DEFAULT_BASE_URL
+
+    assert _valore_env(REPO / file_env, "NOTIFYHUB_PUBLIC_BASE_URL") == DEFAULT_BASE_URL

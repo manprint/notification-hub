@@ -51,8 +51,9 @@ make up
 
 `docker compose up -d` avvia Postgres, Redis, MinIO, esegue le migrazioni nel servizio one-shot
 `migrate`, poi `api`, `worker`, `beat` e `nginx` (che builda ed espone la SPA). Le URL di `.env`
-puntano a `localhost` per lo sviluppo fuori container e vengono sovrascritte nel compose con i nomi
-dei servizi.
+puntano a `localhost` per lo sviluppo fuori container e le connessioni (database, Redis, MinIO) vengono
+sovrascritte nel compose con i nomi dei servizi. `NOTIFYHUB_PUBLIC_BASE_URL` no: e' la URL che vedono
+gli utenti (link delle notifiche inoltrate compresi), va impostata in `.env` con la porta reale.
 
 ### Porte
 
