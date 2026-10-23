@@ -18,6 +18,10 @@ logger = get_logger(__name__)
 # spec 8.2: 30s, 2m, 10m, 1h, 6h per i tentativi 1..5, con jitter.
 _BACKOFF_SCHEDULE_SECONDS = [30, 120, 600, 3600, 21600]
 MAX_ATTEMPTS = len(_BACKOFF_SCHEDULE_SECONDS)
+# Tetto di sicurezza al Retry-After (30 giorni). La spec (8.2) rispetta il valore
+# del provider senza limiti: il tetto serve solo a valori fuori scala, che da un
+# endpoint ostile farebbero sforare la data di prossimo tentativo in fase 3.
+MAX_RETRY_AFTER_SECONDS = 30 * 24 * 3600
 
 
 def parse_retry_after(value: str | None, *, now: datetime | None = None) -> int:
@@ -26,14 +30,15 @@ def parse_retry_after(value: str | None, *, now: datetime | None = None) -> int:
     if value is None:
         return 60
     try:
-        return max(1, int(value))
+        return min(max(1, int(value)), MAX_RETRY_AFTER_SECONDS)
     except ValueError:
         try:
             target = parsedate_to_datetime(value)
             if target.tzinfo is None:
                 target = target.replace(tzinfo=UTC)
             reference = now or datetime.now(UTC)
-            return max(1, int((target - reference).total_seconds()))
+            seconds = int((target - reference).total_seconds())
+            return min(max(1, seconds), MAX_RETRY_AFTER_SECONDS)
         except (TypeError, ValueError, OverflowError):
             return 60
 

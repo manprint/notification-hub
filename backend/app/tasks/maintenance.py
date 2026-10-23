@@ -3,10 +3,11 @@ notifyhub_app, senza privilegi di bypass: quelli che toccano dati di tenant
 iterano i tenant e impostano app.tenant_id per ciascuno (spec 5.3)."""
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -156,15 +157,20 @@ def purge_deliveries() -> None:
 
 @celery_app.task(name="app.tasks.maintenance.cleanup_tokens")
 def cleanup_tokens() -> None:
-    """Elimina refresh token scaduti/revocati e inviti scaduti (spec 11).
-    Tabelle scoped-per-tenant: itera i tenant come tutto il resto."""
+    """Elimina refresh token scaduti e inviti scaduti (spec 11).
+    Tabelle scoped-per-tenant: itera i tenant come tutto il resto.
+
+    Un token revocato dalla rotazione resta fino alla sua scadenza: il riuso di
+    un token gia' ruotato va rilevato per tutta la sua validita' (spec 4.1), e
+    cancellarlo alla rotazione farebbe passare il riuso per un token ignoto.
+    """
     now = datetime.now(UTC)
     for tenant_id in _all_tenant_ids():
         with tenant_session_sync(tenant_id) as session:
             session.execute(
                 delete(RefreshToken).where(
                     RefreshToken.tenant_id == tenant_id,
-                    (RefreshToken.expires_at < now) | (RefreshToken.revoked_at.isnot(None)),
+                    RefreshToken.expires_at < now,
                 )
             )
             session.execute(
@@ -215,14 +221,30 @@ def reconcile_deliveries() -> None:
                 .all()
             )
 
-            for delivery_id in stuck:
-                delivery = session.get(Delivery, delivery_id)
-                if delivery is None:
-                    continue
-                delivery.status = DeliveryStatus.FAILED
-                delivery.locked_at = None
+            # Riclaim condizionale: l'UPDATE rivaluta `sending` e locked_at sulla
+            # riga corrente. Se il proprietario ha committato `sent` dopo la SELECT,
+            # la riga non viene toccata e non viene riaccodata: riscriverla a
+            # `failed` la farebbe consegnare due volte.
+            reclaimed: Sequence[uuid.UUID] = []
+            if stuck:
+                reclaimed = (
+                    session.execute(
+                        update(Delivery)
+                        .where(
+                            Delivery.tenant_id == tenant_id,
+                            Delivery.id.in_(stuck),
+                            Delivery.status == DeliveryStatus.SENDING,
+                            Delivery.locked_at < stuck_cutoff,
+                        )
+                        .values(status=DeliveryStatus.FAILED, locked_at=None)
+                        .returning(Delivery.id)
+                        .execution_options(synchronize_session=False)
+                    )
+                    .scalars()
+                    .all()
+                )
 
-        for delivery_id in list(due) + list(stuck):
+        for delivery_id in list(due) + list(reclaimed):
             enqueue_delivery(str(delivery_id), str(tenant_id))
             requeued += 1
 
@@ -236,6 +258,7 @@ def drain_object_deletions() -> None:
     6.5, 11). Tabella fuori da RLS, nessun contesto di tenant necessario. Dopo
     10 tentativi falliti la riga resta e alimenta una metrica di allarme."""
     import boto3
+    from botocore.config import Config
 
     from app.core.config import get_settings
 
@@ -246,32 +269,63 @@ def drain_object_deletions() -> None:
         aws_access_key_id=settings.notifyhub_s3_access_key,
         aws_secret_access_key=settings.notifyhub_s3_secret_key,
         region_name=settings.notifyhub_s3_region,
+        # Timeout e tentativi espliciti: con MinIO irraggiungibile i default di
+        # botocore (60s per tentativo) tenevano la transazione aperta per ore.
+        config=Config(connect_timeout=5, read_timeout=15, retries={"max_attempts": 2}),
     )
 
     with sync_session_factory() as session:
-        rows = (
-            session.execute(
-                select(PendingObjectDeletion)
-                .where(PendingObjectDeletion.attempts < 10)
-                .limit(PURGE_BATCH_SIZE)
-                .with_for_update(skip_locked=True)
-            )
-            .scalars()
-            .all()
-        )
-
         drained = 0
-        for row in rows:
+        # Una riga alla volta, con cursore keyset: ogni riga e' bloccata (SKIP
+        # LOCKED) e committata da sola, cosi' il lock non sopravvive al commit e un
+        # run concorrente non la riprende. Una riga che fallisce non viene ritentata
+        # nello stesso run: il cursore passa oltre.
+        ultima: tuple[datetime, uuid.UUID] | None = None
+        for _ in range(PURGE_BATCH_SIZE):
+            query = select(
+                PendingObjectDeletion.id,
+                PendingObjectDeletion.storage_key,
+                PendingObjectDeletion.enqueued_at,
+            ).where(PendingObjectDeletion.attempts < 10)
+            if ultima is not None:
+                ultimo_enqueued_at, ultimo_id = ultima
+                query = query.where(
+                    or_(
+                        PendingObjectDeletion.enqueued_at > ultimo_enqueued_at,
+                        and_(
+                            PendingObjectDeletion.enqueued_at == ultimo_enqueued_at,
+                            PendingObjectDeletion.id > ultimo_id,
+                        ),
+                    )
+                )
+            riga = session.execute(
+                query.order_by(PendingObjectDeletion.enqueued_at, PendingObjectDeletion.id)
+                .limit(1)
+                .with_for_update(skip_locked=True)
+            ).first()
+            if riga is None:
+                break
+            row_id, storage_key, enqueued_at = riga
+            ultima = (enqueued_at, row_id)
             try:
-                s3.delete_object(Bucket=settings.notifyhub_s3_bucket, Key=row.storage_key)
-                session.delete(row)
+                s3.delete_object(Bucket=settings.notifyhub_s3_bucket, Key=storage_key)
+                session.execute(
+                    delete(PendingObjectDeletion).where(PendingObjectDeletion.id == row_id)
+                )
                 drained += 1
             except Exception as exc:  # noqa: BLE001
-                row.attempts += 1
-                logger.error(
-                    "drain_object_deletion_failed", storage_key=row.storage_key, error=str(exc)
+                session.execute(
+                    update(PendingObjectDeletion)
+                    .where(PendingObjectDeletion.id == row_id)
+                    .values(attempts=PendingObjectDeletion.attempts + 1)
                 )
-        session.commit()
+                logger.error(
+                    "drain_object_deletion_failed", storage_key=storage_key, error=str(exc)
+                )
+            # Commit per riga: un job interrotto a meta' batch non perde ne' le
+            # cancellazioni gia' fatte ne' i tentativi contati. Cancellare l'oggetto
+            # prima della riga resta l'ordine voluto (spec 6.5).
+            session.commit()
 
     logger.info("drain_object_deletions_done", drained=drained)
     maintenance_job_runs_total.labels(job="drain_object_deletions", outcome="success").inc()
@@ -435,128 +489,149 @@ def check_expected_schedules() -> None:
 
     for tenant_id in tenants:
         pending: list[uuid.UUID] = []
-        with tenant_session_sync(tenant_id) as session:
-            receivers = (
+        try:
+            with tenant_session_sync(tenant_id) as session:
+                # Ordine dei lock: prima il tenant, poi i receiver, come in
+                # enforce_tenant_quotas. Con l'ordine inverso questo job teneva i
+                # receiver e chiedeva il tenant (FK delle notifiche) mentre
+                # un'ingestion con quota teneva il tenant e chiedeva un receiver.
+                # FOR NO KEY UPDATE: confligge con il FOR UPDATE dell'ingestion con
+                # quota, ma non con il FOR KEY SHARE che ogni INSERT prende via FK.
                 session.execute(
-                    select(Receiver)
-                    .where(
-                        Receiver.tenant_id == tenant_id,
-                        Receiver.missing_severity.isnot(None),
-                        Receiver.status == ReceiverStatus.ACTIVE,
-                    )
-                    .with_for_update(skip_locked=True)
+                    select(Tenant.id).where(Tenant.id == tenant_id).with_for_update(key_share=True)
                 )
-                .scalars()
-                .all()
-            )
-            if not receivers:
-                continue
-
-            group_names = {
-                row[0]: row[1]
-                for row in session.execute(
-                    select(Group.id, Group.name).where(
-                        Group.tenant_id == tenant_id,
-                        Group.id.in_({r.group_id for r in receivers}),
+                receivers = (
+                    session.execute(
+                        select(Receiver)
+                        .where(
+                            Receiver.tenant_id == tenant_id,
+                            Receiver.missing_severity.isnot(None),
+                            Receiver.status == ReceiverStatus.ACTIVE,
+                        )
+                        .with_for_update(skip_locked=True)
                     )
-                ).all()
-            }
-
-            for receiver in receivers:
-                schedule = schedule_from_receiver(receiver)
-                if schedule is None:
+                    .scalars()
+                    .all()
+                )
+                if not receivers:
                     continue
-                group_name = group_names.get(receiver.group_id, "?")
 
-                # Rientro: e' arrivato un invio vero DOPO l'allarme. Si valuta
-                # prima dell'assenza, cosi' un receiver tornato attivo non resta
-                # segnalato per un altro giro.
-                if (
-                    receiver.missing_alerted_at is not None
-                    and receiver.last_notification_at is not None
-                    and receiver.last_notification_at > receiver.missing_alerted_at
-                ):
+                group_names = {
+                    row[0]: row[1]
+                    for row in session.execute(
+                        select(Group.id, Group.name).where(
+                            Group.tenant_id == tenant_id,
+                            Group.id.in_({r.group_id for r in receivers}),
+                        )
+                    ).all()
+                }
+
+                for receiver in receivers:
+                    schedule = schedule_from_receiver(receiver)
+                    if schedule is None:
+                        continue
+                    group_name = group_names.get(receiver.group_id, "?")
+
+                    # Rientro: e' arrivato un invio vero DOPO l'allarme. Si valuta
+                    # prima dell'assenza, cosi' un receiver tornato attivo non resta
+                    # segnalato per un altro giro.
+                    if (
+                        receiver.missing_alerted_at is not None
+                        and receiver.last_notification_at is not None
+                        and receiver.last_notification_at > receiver.missing_alerted_at
+                    ):
+                        pending.extend(
+                            _synthetic_notification(
+                                session,
+                                tenant_id=tenant_id,
+                                receiver=receiver,
+                                content=recovered_content(
+                                    receiver_name=receiver.name,
+                                    group_name=group_name,
+                                    schedule=schedule,
+                                    missing_alerted_at=receiver.missing_alerted_at,
+                                    last_notification_at=receiver.last_notification_at,
+                                ),
+                                severity=Severity.INFO,
+                                source=SeveritySource.RECOVERED,
+                                now=now,
+                            )
+                        )
+                        receiver.missing_alerted_at = None
+                        recovered_total += 1
+                        logger.info(
+                            "expected_schedule_recovered",
+                            tenant_id=str(tenant_id),
+                            receiver_id=str(receiver.id),
+                        )
+                        continue
+
+                    # Assenza: una sola notifica finche' non torna un invio vero.
+                    if receiver.missing_alerted_at is not None:
+                        continue
+
+                    reference = reference_instant(receiver)
+                    if reference is None:
+                        continue
+
+                    try:
+                        deadline = alert_deadline(schedule, reference=reference)
+                    except InvalidScheduleError as exc:
+                        # Senza questa protezione un solo receiver con cron o fuso non
+                        # calcolabile faceva morire il job a ogni giro, spegnendo la
+                        # sorveglianza di TUTTI i tenant in silenzio.
+                        logger.warning(
+                            "expected_schedule_invalid",
+                            tenant_id=str(tenant_id),
+                            receiver_id=str(receiver.id),
+                            slug=receiver.slug,
+                            error=str(exc),
+                        )
+                        continue
+                    if now <= deadline:
+                        continue
+
+                    assert receiver.missing_severity is not None
                     pending.extend(
                         _synthetic_notification(
                             session,
                             tenant_id=tenant_id,
                             receiver=receiver,
-                            content=recovered_content(
+                            content=missing_content(
                                 receiver_name=receiver.name,
                                 group_name=group_name,
                                 schedule=schedule,
-                                missing_alerted_at=receiver.missing_alerted_at,
                                 last_notification_at=receiver.last_notification_at,
+                                last_start_at=receiver.last_start_at,
+                                expected_since=receiver.expected_since,
+                                deadline=deadline,
+                                now=now,
                             ),
-                            severity=Severity.INFO,
-                            source=SeveritySource.RECOVERED,
+                            severity=receiver.missing_severity,
+                            source=SeveritySource.MISSING,
                             now=now,
                         )
                     )
-                    receiver.missing_alerted_at = None
-                    recovered_total += 1
-                    logger.info(
-                        "expected_schedule_recovered",
-                        tenant_id=str(tenant_id),
-                        receiver_id=str(receiver.id),
-                    )
-                    continue
-
-                # Assenza: una sola notifica finche' non torna un invio vero.
-                if receiver.missing_alerted_at is not None:
-                    continue
-
-                reference = reference_instant(receiver)
-                if reference is None:
-                    continue
-
-                try:
-                    deadline = alert_deadline(schedule, reference=reference)
-                except InvalidScheduleError as exc:
-                    # Senza questa protezione un solo receiver con cron o fuso non
-                    # calcolabile faceva morire il job a ogni giro, spegnendo la
-                    # sorveglianza di TUTTI i tenant in silenzio.
+                    receiver.missing_alerted_at = now
+                    missing_total += 1
                     logger.warning(
-                        "expected_schedule_invalid",
+                        "expected_schedule_missing",
                         tenant_id=str(tenant_id),
                         receiver_id=str(receiver.id),
                         slug=receiver.slug,
-                        error=str(exc),
+                        deadline=deadline.isoformat(),
                     )
-                    continue
-                if now <= deadline:
-                    continue
-
-                assert receiver.missing_severity is not None
-                pending.extend(
-                    _synthetic_notification(
-                        session,
-                        tenant_id=tenant_id,
-                        receiver=receiver,
-                        content=missing_content(
-                            receiver_name=receiver.name,
-                            group_name=group_name,
-                            schedule=schedule,
-                            last_notification_at=receiver.last_notification_at,
-                            last_start_at=receiver.last_start_at,
-                            expected_since=receiver.expected_since,
-                            deadline=deadline,
-                            now=now,
-                        ),
-                        severity=receiver.missing_severity,
-                        source=SeveritySource.MISSING,
-                        now=now,
-                    )
-                )
-                receiver.missing_alerted_at = now
-                missing_total += 1
-                logger.warning(
-                    "expected_schedule_missing",
-                    tenant_id=str(tenant_id),
-                    receiver_id=str(receiver.id),
-                    slug=receiver.slug,
-                    deadline=deadline.isoformat(),
-                )
+        except Exception as exc:  # noqa: BLE001
+            # Un tenant che fallisce (deadlock, errore DB) non deve fermare la
+            # sorveglianza di tutti gli altri: il suo rollback annulla anche le
+            # notifiche di assenza gia' preparate, e il giro dopo le riprova.
+            logger.error(
+                "expected_schedule_tenant_failed",
+                tenant_id=str(tenant_id),
+                error=type(exc).__name__,
+            )
+            pending.clear()
+            continue
 
         # Accodamento fuori dalla transazione: commit-poi-enqueue come
         # nell'ingestion (spec 8.3). Se il processo muore qui le righe restano

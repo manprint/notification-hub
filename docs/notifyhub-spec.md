@@ -846,7 +846,7 @@ Job Celery Beat. Tutti girano con il ruolo `notifyhub_app`, senza alcun privileg
 | `purge_notifications` | ogni notte 03:00 | Per ogni tenant con `retention_days` non NULL, elimina le notifiche più vecchie. A batch di 10.000 righe per non bloccare la tabella |
 | `purge_audit_events` | ogni notte 05:00 | Per ogni tenant con `audit_retention_days` non NULL (default 365), elimina gli eventi di audit più vecchi, a batch di 10.000 righe. Ritenzione separata da quella delle notifiche, che di default è 90 giorni: l'audit deve sopravvivere a ciò che descrive. Non usa `SELECT … FOR UPDATE SKIP LOCKED` come le altre purge, perché bloccare una riga richiederebbe il privilegio di UPDATE, revocato apposta su questa tabella |
 | `purge_deliveries` | ogni notte 03:30 | Elimina le delivery `sent` più vecchie di 30 giorni; le `dead` restano finché non archiviate manualmente |
-| `cleanup_tokens` | ogni ora | Elimina refresh token scaduti/revocati e inviti scaduti |
+| `cleanup_tokens` | ogni ora | Elimina refresh token scaduti e inviti scaduti (un token revocato resta fino alla scadenza, per il rilevamento del riuso di §4.1) |
 | `reconcile_deliveries` | ogni 5 min | Ripesca le delivery `pending`/`failed` con `next_attempt_at` scaduto e le `sending` con `locked_at` più vecchio di 10 minuti |
 | `drain_object_deletions` | ogni 10 min | Svuota `pending_object_deletions` cancellando gli oggetti da MinIO. Dopo 10 tentativi falliti la riga resta e alimenta una metrica di allarme |
 | `purge_orphan_objects` | ogni notte 04:00 | Elimina gli oggetti del bucket più vecchi di 24h senza riga corrispondente in `notifications.storage_key`. Recupera i PUT riusciti con commit fallito. ⚠️ Le `storage_key` note vanno raccolte **iterando i tenant** con `SET LOCAL app.tenant_id`: `notifications` ha `FORCE ROW LEVEL SECURITY` e una lettura senza contesto di tenant torna zero righe *senza errore*, facendo risultare orfano ogni oggetto |
@@ -886,7 +886,7 @@ Job Celery Beat. Tutti girano con il ruolo `notifyhub_app`, senza alcun privileg
 |---|---|
 | `nginx` | Reverse proxy, TLS, `client_max_body_size`, `proxy_request_buffering off` su `/ingest/`, serve la SPA buildata |
 | `api` | FastAPI su uvicorn/gunicorn. Porta 8000 pubblica, 9100 interna per `/metrics` |
-| `worker` | Celery worker (coda `delivery`), engine SQLAlchemy sincrono |
+| `worker` | Celery worker (code `delivery` e `maintenance`), engine SQLAlchemy sincrono |
 | `beat` | Celery Beat (purge, riconciliazione, manutenzione oggetti) |
 | `postgres` | PostgreSQL 16 con volume persistente |
 | `redis` | Broker Celery + rate limiting + idempotenza + (v2) pub/sub SSE |

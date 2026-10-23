@@ -6,6 +6,8 @@ scriva davvero una notifica, che la mandi ai canali, che non ne scriva due, e ch
 si riarmi quando il job torna a inviare.
 """
 
+import asyncio
+import threading
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -14,6 +16,7 @@ from sqlalchemy import select, update
 
 from app.core.crypto import encrypt_secret
 from app.db.session import tenant_session
+from app.db.sync_session import tenant_session_sync
 from app.db.types import Severity, SeveritySource, TenantStatus
 from app.models.binding import GroupChannelBinding
 from app.models.channel import DeliveryChannel
@@ -532,3 +535,76 @@ async def test_riaccensione_recente_batte_un_invio_piu_vecchio(two_tenants):
     _esegui_job()
 
     assert await _notifiche(tenant_id, receiver_id) == []
+
+
+@pytest.mark.integration
+async def test_un_tenant_che_fallisce_non_ferma_la_sorveglianza_degli_altri(
+    two_tenants, monkeypatch
+):
+    """Un errore sul tenant A (per esempio un deadlock) non deve saltare il tenant
+    B nello stesso giro: il giro dopo riprova A, B riceve il suo allarme ora."""
+    from app.tasks import maintenance
+
+    tenant_a, tenant_b = two_tenants
+    receiver_a = await create_receiver(tenant_a, uuid.uuid4().hex[:22])
+    receiver_b = await create_receiver(tenant_b, uuid.uuid4().hex[:22])
+    for tenant_id, receiver_id in ((tenant_a, receiver_a), (tenant_b, receiver_b)):
+        await _sorveglia(
+            tenant_id,
+            receiver_id,
+            last_notification_at=datetime.now(UTC) - timedelta(days=2),
+        )
+
+    schedule_reale = maintenance.schedule_from_receiver
+
+    def schedule_guasto(receiver):
+        if receiver.tenant_id == tenant_a:
+            raise RuntimeError("errore simulato sul tenant A")
+        return schedule_reale(receiver)
+
+    monkeypatch.setattr(maintenance, "schedule_from_receiver", schedule_guasto)
+
+    _esegui_job()
+
+    assert len(await _notifiche(tenant_b, receiver_b)) == 1
+    assert await _notifiche(tenant_a, receiver_a) == []
+
+
+@pytest.mark.integration
+async def test_sorveglianza_chiede_il_tenant_prima_dei_receiver(two_tenants):
+    """Ordine dei lock come in enforce_tenant_quotas: la sorveglianza prende prima il
+    tenant. Con il tenant tenuto da un'ingestion con quota, la sorveglianza non deve
+    aver gia' preso il receiver: il NOWAIT sul receiver riesce."""
+    tenant_id, _ = two_tenants
+    receiver_id = await create_receiver(tenant_id, uuid.uuid4().hex[:22])
+    await _sorveglia(
+        tenant_id, receiver_id, last_notification_at=datetime.now(UTC) - timedelta(days=2)
+    )
+
+    errori: list[BaseException] = []
+
+    def sorveglianza() -> None:
+        try:
+            check_expected_schedules()
+        except BaseException as exc:  # noqa: BLE001
+            errori.append(exc)
+
+    set_enqueue_function(lambda delivery_id, tid: None)
+    thread = threading.Thread(target=sorveglianza)
+    try:
+        with tenant_session_sync(tenant_id) as tenta:
+            # Il tenant lo tiene l'ingestion con quota (FOR UPDATE, come in quota.py).
+            tenta.execute(select(Tenant.id).where(Tenant.id == tenant_id).with_for_update())
+            thread.start()
+            await asyncio.sleep(1.5)
+            # Se la sorveglianza avesse gia' il receiver, questo NOWAIT fallirebbe.
+            tenta.execute(
+                select(Receiver.id).where(Receiver.id == receiver_id).with_for_update(nowait=True)
+            ).one()
+    finally:
+        thread.join(timeout=30)
+        reset_enqueue_function()
+
+    assert not thread.is_alive()
+    assert errori == []
+    assert len(await _notifiche(tenant_id, receiver_id)) == 1
