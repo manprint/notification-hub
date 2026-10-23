@@ -93,7 +93,7 @@ describe("ChannelBindings", () => {
     );
     renderWithProviders(<ChannelBindings groupId={GROUP_ID} channels={canali} />);
 
-    expect(await screen.findByText(/Caricamento dei collegamenti/)).toBeInTheDocument();
+    expect(await screen.findByText("Caricamento…")).toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
 
     rispondi();
