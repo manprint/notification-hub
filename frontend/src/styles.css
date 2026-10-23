@@ -1780,6 +1780,12 @@ button.stats-toggle:hover:not(:disabled) {
   td {
     padding-inline: var(--space-2);
   }
+
+  /* Sul riepilogo per gruppo l'intestazione del nome va a capo: nowrap la
+     rendeva la colonna più larga dei 343px disponibili e nascondeva "Non lette". */
+  .home-groups th {
+    white-space: normal;
+  }
 }
 
 /* --- componenti condivisi: stati di errore, confini di errore --- */

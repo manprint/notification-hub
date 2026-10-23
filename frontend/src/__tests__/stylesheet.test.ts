@@ -177,6 +177,13 @@ describe("cascata: regole che devono vincere sui pulsanti", () => {
     const mobile = rules.filter((r) => r.selectors.includes(".app-sidebar"));
     expect(mobile.some((r) => r.decls["grid-template-columns"] === "minmax(0, 1fr) auto")).toBe(true);
   });
+
+  it("sul riepilogo per gruppo l'intestazione del nome va a capo sotto i 760px, le altre restano su una riga", () => {
+    // Con nowrap l'intestazione "Gruppo / Receiver" fissava la colonna piu' larga
+    // dello schermo e "Non lette" finiva fuori dal riquadro che scorre.
+    expect(declared(".home-groups th", "white-space")).toBe("normal");
+    expect(declared("th", "white-space")).toBe("nowrap");
+  });
 });
 
 describe("distanze e breakpoint", () => {
