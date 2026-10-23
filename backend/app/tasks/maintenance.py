@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
@@ -275,16 +275,38 @@ def drain_object_deletions() -> None:
     )
 
     with sync_session_factory() as session:
-        rows = session.execute(
-            select(PendingObjectDeletion.id, PendingObjectDeletion.storage_key)
-            .where(PendingObjectDeletion.attempts < 10)
-            .order_by(PendingObjectDeletion.enqueued_at)
-            .limit(PURGE_BATCH_SIZE)
-            .with_for_update(skip_locked=True)
-        ).all()
-
         drained = 0
-        for row_id, storage_key in rows:
+        # Una riga alla volta, con cursore keyset: ogni riga e' bloccata (SKIP
+        # LOCKED) e committata da sola, cosi' il lock non sopravvive al commit e un
+        # run concorrente non la riprende. Una riga che fallisce non viene ritentata
+        # nello stesso run: il cursore passa oltre.
+        ultima: tuple[datetime, uuid.UUID] | None = None
+        for _ in range(PURGE_BATCH_SIZE):
+            query = select(
+                PendingObjectDeletion.id,
+                PendingObjectDeletion.storage_key,
+                PendingObjectDeletion.enqueued_at,
+            ).where(PendingObjectDeletion.attempts < 10)
+            if ultima is not None:
+                ultimo_enqueued_at, ultimo_id = ultima
+                query = query.where(
+                    or_(
+                        PendingObjectDeletion.enqueued_at > ultimo_enqueued_at,
+                        and_(
+                            PendingObjectDeletion.enqueued_at == ultimo_enqueued_at,
+                            PendingObjectDeletion.id > ultimo_id,
+                        ),
+                    )
+                )
+            riga = session.execute(
+                query.order_by(PendingObjectDeletion.enqueued_at, PendingObjectDeletion.id)
+                .limit(1)
+                .with_for_update(skip_locked=True)
+            ).first()
+            if riga is None:
+                break
+            row_id, storage_key, enqueued_at = riga
+            ultima = (enqueued_at, row_id)
             try:
                 s3.delete_object(Bucket=settings.notifyhub_s3_bucket, Key=storage_key)
                 session.execute(
@@ -473,7 +495,11 @@ def check_expected_schedules() -> None:
                 # enforce_tenant_quotas. Con l'ordine inverso questo job teneva i
                 # receiver e chiedeva il tenant (FK delle notifiche) mentre
                 # un'ingestion con quota teneva il tenant e chiedeva un receiver.
-                session.execute(select(Tenant.id).where(Tenant.id == tenant_id).with_for_update())
+                # FOR NO KEY UPDATE: confligge con il FOR UPDATE dell'ingestion con
+                # quota, ma non con il FOR KEY SHARE che ogni INSERT prende via FK.
+                session.execute(
+                    select(Tenant.id).where(Tenant.id == tenant_id).with_for_update(key_share=True)
+                )
                 receivers = (
                     session.execute(
                         select(Receiver)
