@@ -814,8 +814,15 @@ async def replay_severity_rules(
         # replay li rimette in gioco con le politiche di adesso. Senza, una
         # notifica decisa dall'exit code risulterebbe sempre "cambiata" solo
         # perche il replay non sapeva che il comando era fallito.
+        # Una severity dichiarata dal mittente (X-Severity o ?severity=) vince su ogni
+        # regola, come al momento dell'ingestione: il replay la riprende cosi com'e,
+        # senza far comparire un "cambia" che nessuna regola ha prodotto.
         resolution = await resolve_severity_async(
-            header_severity=None,
+            header_severity=(
+                notification.severity
+                if notification.severity_source == SeveritySource.EXPLICIT
+                else None
+            ),
             query_severity=None,
             rules=rules,
             content=content,

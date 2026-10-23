@@ -735,6 +735,11 @@ quelle che differiscono. Exit code e durata di ogni esecuzione sono conservati
 sulla notifica, quindi la rivalutazione è fedele: è il modo per vedere su quali
 notti passate una soglia appena scelta avrebbe suonato.
 
+Una notifica con severity dichiarata dal mittente (`X-Severity` o `?severity=`)
+non viene riclassificata: il replay riprende la severity registrata, con sorgente
+`explicit`, senza riapplicare regole, exit code o durata. Non compare quindi mai
+come `cambia`, come al momento dell'arrivo.
+
 È il modo per rispondere alla domanda che il testo inventato non copre: *questa
 modifica che effetto ha sul traffico vero?*
 

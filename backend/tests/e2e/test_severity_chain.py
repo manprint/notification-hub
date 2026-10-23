@@ -519,6 +519,28 @@ async def test_riordino_richiede_elenco_completo(api_client, two_tenants, owner_
     assert resp.status_code == 422
 
 
+@pytest.mark.e2e
+async def test_riordino_rifiuta_gli_id_ripetuti_senza_toccare_le_priorita(
+    api_client, two_tenants, owner_token
+):
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, tenant_id, owner_token)
+    receiver = await _make_receiver(api_client, headers, tenant_id)
+    _, alfa = await _add_rule(api_client, headers, receiver["id"], "alfa", "error")
+    _, beta = await _add_rule(api_client, headers, receiver["id"], "beta", "info")
+    url = f"/api/v1/receivers/{receiver['id']}/severity-rules"
+    prima = (await api_client.get(url, headers=headers)).json()
+
+    # Stesso insieme di id, ma alfa due volte: prima passava e cambiava l'ordine.
+    resp = await api_client.put(
+        f"{url}/order",
+        json={"rule_ids": [alfa["id"], beta["id"], alfa["id"]]},
+        headers=headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert (await api_client.get(url, headers=headers)).json() == prima
+
+
 # --- replay sulle notifiche reali -----------------------------------------
 
 
@@ -551,6 +573,49 @@ async def test_replay_mostra_cosa_cambierebbe(api_client, two_tenants, owner_tok
     assert item["replayed_source"] == "rule"
     assert item["matched_pattern"] == "ERRORE"
     assert item["changed"] is True
+
+
+@pytest.mark.e2e
+async def test_replay_non_segnala_cambi_sulle_severity_dichiarate(
+    api_client, two_tenants, owner_token
+):
+    """Una severity esplicita (X-Severity) vince su ogni regola: il replay deve
+    riprenderla com'e, senza un "cambia" che nessuna regola ha prodotto."""
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, tenant_id, owner_token)
+    ingest_headers = {"Content-Type": "text/plain", "X-Severity": "error"}
+
+    # Senza regole: il default del receiver e info, il mittente dichiara error.
+    receiver = await _make_receiver(api_client, headers, tenant_id)
+    resp = await api_client.post(
+        f"/ingest/{receiver['slug']}", content="disco pieno", headers=ingest_headers
+    )
+    assert resp.status_code == 201, resp.text
+    replay = await api_client.get(
+        f"/api/v1/receivers/{receiver['id']}/severity-rules/replay", headers=headers
+    )
+    body = replay.json()
+    assert body["changed_count"] == 0
+    item = body["items"][0]
+    assert item["stored_source"] == "explicit"
+    assert item["replayed_severity"] == "error"
+    assert item["replayed_source"] == "explicit"
+    assert item["changed"] is False
+
+    # Con una regola che direbbe altro, la dichiarazione del mittente resta vincente.
+    receiver = await _make_receiver(api_client, headers, tenant_id)
+    await _add_rule(api_client, headers, receiver["id"], "disco", "critical")
+    resp = await api_client.post(
+        f"/ingest/{receiver['slug']}", content="disco pieno", headers=ingest_headers
+    )
+    assert resp.status_code == 201, resp.text
+    replay = await api_client.get(
+        f"/api/v1/receivers/{receiver['id']}/severity-rules/replay", headers=headers
+    )
+    item = replay.json()["items"][0]
+    assert item["replayed_severity"] == "error"
+    assert item["replayed_source"] == "explicit"
+    assert item["changed"] is False
 
 
 @pytest.mark.e2e
