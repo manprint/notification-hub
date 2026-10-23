@@ -51,6 +51,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     (kind: ToastKind, message: string) => {
       const id = nextId.current++;
       setToasts((prev) => [...prev, { id, kind, message }]);
+      // Un errore non sparisce da solo: chi legge con lo screen reader, o ha
+      // distolto lo sguardo un attimo, non deve perdere il motivo del fallimento.
+      if (kind === "error") return;
       const timer = window.setTimeout(() => dismiss(id), AUTO_DISMISS_MS);
       timers.current.push(timer);
     },
@@ -80,7 +83,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <div className="toast-stack" aria-live="polite" aria-atomic="false">
         {toasts.map((toast) => (
-          <div key={toast.id} className={`toast toast-${toast.kind}`} role="status">
+          <div
+            key={toast.id}
+            className={`toast toast-${toast.kind}`}
+            role={toast.kind === "error" ? "alert" : "status"}
+          >
             <span className="toast-icon" aria-hidden="true">
               {ICONS[toast.kind]}
             </span>

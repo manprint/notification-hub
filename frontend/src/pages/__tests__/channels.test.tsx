@@ -114,6 +114,26 @@ describe("ChannelsPage override", () => {
     expect(screen.queryByText("silenziato")).not.toBeInTheDocument();
   });
 
+  it("la soglia di un override si legge come il badge della severity", async () => {
+    setRefreshToken("refresh-token-fixture");
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/v1/receivers/r1/channels", () =>
+        HttpResponse.json([
+          { id: "o2", receiver_id: "r1", channel_id: "c1", mode: "override", min_severity: "critical" },
+        ]),
+      ),
+    );
+    renderWithProviders(<ChannelsPage />);
+
+    await user.selectOptions(
+      await screen.findByLabelText(/^receiver$/i),
+      await screen.findByRole("option", { name: "Server Produzione / Backup notturno" }),
+    );
+    const cella = (await screen.findByText("soglia sostituita")).closest("tr") as HTMLElement;
+    expect(within(cella).getByText("Critica")).toHaveClass("severity-badge", "severity-critical");
+  });
+
   it("T-CH3 cambiando gruppo lo stato della riga salvata non passa al gruppo nuovo", async () => {
     setRefreshToken("refresh-token-fixture");
     const user = userEvent.setup();

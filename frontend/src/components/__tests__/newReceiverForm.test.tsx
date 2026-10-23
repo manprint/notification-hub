@@ -1,5 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { describe, expect, it, vi } from "vitest";
@@ -9,6 +9,19 @@ import { server } from "../../api/mocks/server";
 import { renderWithProviders } from "../../pages/__tests__/testUtils";
 
 describe("NewReceiverForm", () => {
+  it("la severity di default si sceglie con le etichette italiane, il valore resta quello dell'API", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<NewReceiverForm groupId="g1" />);
+    await user.click(screen.getByText("Nuovo receiver"));
+
+    const tendina = screen.getByLabelText("Severity di default");
+    expect(within(tendina).getByRole("option", { name: "Critica" })).toHaveAttribute(
+      "value",
+      "critical",
+    );
+    expect(within(tendina).queryByRole("option", { name: "critical" })).toBeNull();
+  });
+
   it("T-NRF1 il receiver creato compare in tutti gli elenchi, non solo nel gruppo", async () => {
     const user = userEvent.setup();
     const invalida = vi.spyOn(QueryClient.prototype, "invalidateQueries");
