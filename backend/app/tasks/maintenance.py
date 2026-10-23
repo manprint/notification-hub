@@ -248,8 +248,19 @@ def reconcile_deliveries() -> None:
                     .all()
                 )
 
+        # Un broker che rifiuta un messaggio non deve fermare il giro: la riga resta
+        # pending (o failed, se riclamata) e la riprende il giro successivo.
         for delivery_id in list(due) + list(reclaimed):
-            enqueue_delivery(str(delivery_id), str(tenant_id))
+            try:
+                enqueue_delivery(str(delivery_id), str(tenant_id))
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "reconcile_enqueue_failed",
+                    tenant_id=str(tenant_id),
+                    delivery_id=str(delivery_id),
+                    exc_info=True,
+                )
+                continue
             requeued += 1
 
     logger.info("reconcile_deliveries_done", requeued=requeued)

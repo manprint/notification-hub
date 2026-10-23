@@ -612,6 +612,62 @@ def test_drain_object_deletions_non_perde_l_avanzamento_se_il_job_si_interrompe(
 
 
 @pytest.mark.integration
+async def test_reconcile_con_il_broker_che_rifiuta_un_accodamento_continua_il_giro(two_tenants):
+    """Il primo accodamento del giro fallisce: l'errore non esce dal job e la
+    delivery dell'altro tenant viene comunque riaccodata."""
+    attese: set[str] = set()
+    for tenant_id in two_tenants:
+        receiver_id = await create_receiver(tenant_id, uuid.uuid4().hex[:22])
+        notification_id = await _insert_notification(tenant_id, receiver_id, datetime.now(UTC))
+        channel_id, delivery_id = uuid.uuid4(), uuid.uuid4()
+        async with tenant_session(tenant_id) as session:
+            session.add(
+                DeliveryChannel(
+                    id=channel_id,
+                    tenant_id=tenant_id,
+                    name="Slack #ops",
+                    type="slack",
+                    webhook_url=encrypt_secret("https://hooks.slack.com/services/T/B/X"),
+                    enabled=True,
+                )
+            )
+            await session.flush()
+            session.add(
+                Delivery(
+                    id=delivery_id,
+                    tenant_id=tenant_id,
+                    notification_id=notification_id,
+                    channel_id=channel_id,
+                    status=DeliveryStatus.PENDING,
+                    attempts=0,
+                    next_attempt_at=datetime.now(UTC) - timedelta(minutes=1),
+                )
+            )
+            await session.flush()
+        attese.add(str(delivery_id))
+
+    tentati: list[str] = []
+    riaccodati: list[str] = []
+
+    # Il database di test puo' contenere delivery di altri test: fallisce il primo
+    # accodamento di una delle due delivery di questo test.
+    def accoda(delivery_id: str, tid: str) -> None:
+        tentati.append(delivery_id)
+        if delivery_id in attese and not attese & set(tentati[:-1]):
+            raise ConnectionError("broker irraggiungibile")
+        riaccodati.append(delivery_id)
+
+    set_enqueue_function(accoda)
+    try:
+        reconcile_deliveries()
+    finally:
+        reset_enqueue_function()
+
+    assert attese <= set(tentati)
+    assert len(attese & set(riaccodati)) == 1
+
+
+@pytest.mark.integration
 async def test_reconcile_non_riapre_una_delivery_completata_durante_il_riclaim(two_tenants):
     """Il worker proprietario committa `sent` fra la SELECT delle righe bloccate e
     il riclaim: reconcile non la riporta a `failed` e non la riaccoda."""
