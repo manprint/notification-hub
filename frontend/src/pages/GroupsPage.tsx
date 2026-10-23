@@ -276,7 +276,9 @@ export default function GroupsPage() {
       header: "Nome",
       render: (g) => (
         <div className="cell-preview">
-          <span>{g.name}</span>
+          {/* Il nome è un collegamento: `td a` va a capo, così una colonna stretta
+              non obbliga a scorrere la tabella per aprire il gruppo. */}
+          <Link to={`/groups/${g.id}`}>{g.name}</Link>
           {g.description && <div className="cell-diagnostics">{g.description}</div>}
         </div>
       ),

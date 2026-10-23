@@ -253,4 +253,17 @@ describe("GroupsPage", () => {
     expect(container.querySelector(".table-wrap")?.closest(".card")).not.toBeNull();
     expect(screen.getByLabelText("Nome")).toHaveAttribute("maxlength", "255");
   });
+
+  it("il nome del gruppo nella tabella è un collegamento al dettaglio, oltre al pulsante Apri", async () => {
+    setRefreshToken("refresh-token-fixture");
+    renderWithProviders(<GroupsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Server Produzione")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("link", { name: "Server Produzione" })).toHaveAttribute(
+      "href",
+      `/groups/${fixtureGroups[0].id}`,
+    );
+  });
 });
