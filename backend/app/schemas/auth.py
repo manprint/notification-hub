@@ -10,6 +10,9 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from app.core import emails as _emails  # noqa: F401
 from app.db.types import UserRole, UserStatus
 
+# Policy minima della password (spec 8): la usano anche bootstrap da CLI.
+PASSWORD_MIN_LENGTH = 12
+
 
 class LoginIn(BaseModel):
     email: EmailStr
@@ -19,7 +22,7 @@ class LoginIn(BaseModel):
 class RegisterIn(BaseModel):
     tenant_name: str = Field(min_length=1, max_length=255)
     email: EmailStr
-    password: str = Field(min_length=12)
+    password: str = Field(min_length=PASSWORD_MIN_LENGTH)
 
 
 class TokenPairOut(BaseModel):
@@ -80,7 +83,7 @@ class UserPatchIn(BaseModel):
 
 class UserCreateIn(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=12)
+    password: str = Field(min_length=PASSWORD_MIN_LENGTH)
     role: UserRole
     group_ids: list[uuid.UUID] = Field(default_factory=list)
 
@@ -103,7 +106,7 @@ class InvitationOut(BaseModel):
 
 class InvitationAcceptIn(BaseModel):
     token: str
-    password: str = Field(min_length=12)
+    password: str = Field(min_length=PASSWORD_MIN_LENGTH)
 
 
 class InvitationSummaryOut(BaseModel):

@@ -77,8 +77,9 @@ async def test_bootstrap_crea_tenant_owner_e_permette_il_login(api_client, migra
 
     tenant = await _tenant_per_nome(nome)
     assert tenant.status == "active"
-    # Lo slug del tenant nasce dal nome, minuscolo e senza spazi.
-    assert tenant.slug == nome.lower().replace(" ", "-")
+    # Lo slug del tenant nasce dal nome, minuscolo e senza spazi, con il suffisso
+    # univoco di register (il nome non e univoco, lo slug si).
+    assert tenant.slug.startswith(nome.lower().replace(" ", "-") + "-")
 
     async with tenant_session(tenant.id) as session:
         result = await session.execute(select(User).where(User.email == email))
@@ -149,6 +150,36 @@ async def test_bootstrap_con_email_gia_registrata_non_lascia_meta_lavoro(migrate
             assert list(utenti.scalars().all()), (
                 "tenant creato senza owner: installazione inutilizzabile e invisibile"
             )
+
+
+@pytest.mark.e2e
+async def test_bootstrap_con_stesso_nome_tenant_esce_con_messaggio_pulito(migrated_db):
+    """Il nome del tenant non e univoco, lo slug si: un secondo bootstrap con lo
+    stesso nome deve riuscire, con uno slug suffissato come in register, e non
+    deve mai uscire con un traceback."""
+    nome = _nome_tenant()
+    primo = _cli(
+        "bootstrap",
+        "--tenant-name",
+        nome,
+        "--email",
+        f"a-{uuid.uuid4().hex[:8]}@acme-notifyhub.com",
+        "--password",
+        PASSWORD,
+    )
+    assert primo.returncode == 0, primo.stderr
+
+    secondo = _cli(
+        "bootstrap",
+        "--tenant-name",
+        nome,
+        "--email",
+        f"b-{uuid.uuid4().hex[:8]}@acme-notifyhub.com",
+        "--password",
+        PASSWORD,
+    )
+    assert "Traceback" not in secondo.stderr
+    assert secondo.returncode == 0, secondo.stderr
 
 
 @pytest.mark.e2e
