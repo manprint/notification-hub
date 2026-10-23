@@ -52,7 +52,19 @@ async def _attendi_richiesta_bloccata(richiesta: asyncio.Task) -> None:
             if bloccate:
                 return
             await asyncio.sleep(0.02)
-    raise AssertionError("la richiesta concorrente non si e' mai bloccata sul lock")
+        # Diagnostica: cosa stanno facendo le sessioni del database quando l'attesa scade.
+        sessioni = (
+            await osservatore.execute(
+                text(
+                    "SELECT state, wait_event_type, wait_event, left(query, 120)"
+                    " FROM pg_stat_activity WHERE datname = current_database()"
+                    " AND pid <> pg_backend_pid()"
+                )
+            )
+        ).all()
+    raise AssertionError(
+        f"la richiesta concorrente non si e' mai bloccata sul lock; sessioni: {sessioni}"
+    )
 
 
 async def _channel(api_client, headers) -> str:
