@@ -32,7 +32,9 @@ export function useDialogKeyboard(
   onEscape: () => void,
 ): void {
   const escapeRef = useRef(onEscape);
-  escapeRef.current = onEscape;
+  useEffect(() => {
+    escapeRef.current = onEscape;
+  }, [onEscape]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
