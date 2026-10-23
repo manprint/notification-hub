@@ -3,11 +3,13 @@ per tenant, immutabilita' per l'applicazione, ritenzione propria."""
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import cast, func, select, update
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import select, text, update
+from sqlalchemy.dialects import postgresql
 
+from app.api.v1.audit import _notification_event_ids
 from app.db.session import tenant_session
 from app.db.types import AuditOutcome, UserRole
 from app.models.audit_event import AuditEvent
@@ -117,9 +119,11 @@ async def test_l_indice_gin_serve_la_ricerca_per_notifica(two_tenants):
     portano gli id dentro `context`."""
     tenant_a, _ = two_tenants
     notification_id = uuid.uuid4()
+    event_id = uuid.uuid4()
     async with tenant_session(tenant_a) as session:
         session.add(
             AuditEvent(
+                id=event_id,
                 tenant_id=tenant_a,
                 actor_user_id=None,
                 actor_email="attore@test.com",
@@ -131,16 +135,13 @@ async def test_l_indice_gin_serve_la_ricerca_per_notifica(two_tenants):
             )
         )
 
-    # Stessa espressione dell'endpoint /audit/notification-status: quella che
-    # l'indice GIN della migrazione 0016 e' li per servire.
-    async with tenant_session(tenant_a) as session:
-        result = await session.execute(
-            select(func.count())
-            .select_from(AuditEvent)
-            .where(
-                cast(AuditEvent.context["notification_ids"], JSONB).op("@>")(
-                    func.jsonb_build_array(str(notification_id))
-                )
-            )
+    # La query che l'endpoint usa davvero, con i valori scritti nel SQL: deve
+    # trovare il bulk-read che porta l'id dentro `context`.
+    sql = str(
+        _notification_event_ids(SimpleNamespace(tid=str(tenant_a)), notification_id).compile(
+            dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
         )
-        assert result.scalar_one() == 1
+    )
+    async with tenant_session(tenant_a) as session:
+        result = await session.execute(text(sql))
+        assert [row[0] for row in result] == [event_id]

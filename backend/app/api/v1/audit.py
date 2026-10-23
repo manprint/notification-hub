@@ -17,9 +17,10 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import Select, cast, func, or_, select
+from sqlalchemy import Select, func, literal_column, select, union
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 from starlette.responses import StreamingResponse
 
 from app.api.deps import db, require_admin
@@ -86,6 +87,43 @@ def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
         ) from exc
 
 
+# Il contesto di un bulk-read si legge con `->` e la chiave come letterale: solo
+# l'espressione identica a quella indicizzata dal GIN (migrazione 0016) puo'
+# usarlo. La forma a sottoscrizione `context['notification_ids']` non ci
+# corrisponde e fa scorrere la tabella.
+_NOTIFICATION_IDS = AuditEvent.context.op("->", return_type=JSONB)(
+    literal_column("'notification_ids'")
+)
+
+
+def notification_in_context(notification_id: uuid.UUID) -> ColumnElement[bool]:
+    """Il bulk-read che ha toccato questa notifica, per l'indice GIN."""
+    return _NOTIFICATION_IDS.contains(func.jsonb_build_array(str(notification_id)))
+
+
+def _notification_event_ids(claims: AccessClaims, notification_id: uuid.UUID) -> Select[Any]:
+    """Id degli eventi che riguardano una notifica: la PATCH singola la porta in
+    `resource_id`, il bulk-read in `context`, che e' l'unico posto dove puo'
+    stare visto che un evento solo ne copre N.
+
+    Due rami e un CTE materializzato, non un OR fra le colonne: con l'OR
+    Postgres sceglie l'indice per tenant in ordine di data e scarta riga per
+    riga, anche duecentomila eventi per una notifica toccata una volta sola.
+    """
+    tenant_id = uuid.UUID(claims.tid)
+    by_resource = select(AuditEvent.id).where(
+        AuditEvent.tenant_id == tenant_id,
+        AuditEvent.resource_type == "notification",
+        AuditEvent.resource_id == notification_id,
+    )
+    by_context = select(AuditEvent.id).where(
+        AuditEvent.tenant_id == tenant_id,
+        notification_in_context(notification_id),
+    )
+    matched = union(by_resource, by_context).cte("notification_events").prefix_with("MATERIALIZED")
+    return select(matched.c.id)
+
+
 def _base_query(
     claims: AccessClaims,
     *,
@@ -117,19 +155,7 @@ def _base_query(
     if only_notification_status:
         conditions.append(AuditEvent.action.in_(NOTIFICATION_STATUS_ACTIONS))
     if notification_id is not None:
-        # Due forme per lo stesso fatto: la PATCH singola porta l'id in
-        # `resource_id`, il bulk-read lo porta dentro `context`, che e' l'unico
-        # posto dove puo' stare visto che un evento solo ne copre N. L'indice
-        # GIN su (context -> 'notification_ids') rende il secondo ramo
-        # indicizzato quanto il primo (migrazione 0016).
-        conditions.append(
-            or_(
-                AuditEvent.resource_id == notification_id,
-                cast(AuditEvent.context["notification_ids"], JSONB).op("@>")(
-                    func.jsonb_build_array(str(notification_id))
-                ),
-            )
-        )
+        conditions.append(AuditEvent.id.in_(_notification_event_ids(claims, notification_id)))
     return select(AuditEvent).where(*conditions)
 
 

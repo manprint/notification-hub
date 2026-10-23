@@ -410,7 +410,7 @@ async def test_export_csv_neutralizza_le_formule(api_client, two_tenants, owner_
     )
     righe = list(csv.DictReader(io.StringIO(resp.text)))
     assert [riga["action"] for riga in righe] == ["notification.marked_read"]
-    assert righe[0]["resource_label"] == "'=HYPERLINK(\"http://attacco.test\",\"Apri\")"
+    assert righe[0]["resource_label"] == '\'=HYPERLINK("http://attacco.test","Apri")'
 
 
 @pytest.mark.e2e
@@ -733,3 +733,35 @@ async def test_delete_di_un_member_finisce_nell_audit_senza_corpo(
         "/api/v1/audit/events", params={"resource_id": rifiutata["id"]}, headers=owner
     )
     assert audit_rifiutata.json()["events"] == []
+
+
+@pytest.mark.e2e
+async def test_notification_status_trova_ogni_notifica_del_bulk_read(
+    api_client, two_tenants, owner_token
+):
+    """Il bulk-read porta gli id in `context`: la ricerca per notifica deve
+    ritrovare ciascuno dei tre, e solo quello."""
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    slug = uuid.uuid4().hex[:22]
+    receiver_id = await create_receiver(tenant_id, slug)
+    ids = [
+        (await api_client.post(f"/ingest/{slug}", content=f"bulk {i}")).json()["id"]
+        for i in range(3)
+    ]
+
+    bulk = await api_client.post(
+        "/api/v1/notifications/bulk-read", json={"receiver_id": str(receiver_id)}, headers=owner
+    )
+    assert bulk.json() == {"marked_read": 3}
+
+    for notification_id in ids:
+        eventi = await api_client.get(
+            "/api/v1/audit/notification-status",
+            params={"notification_id": notification_id},
+            headers=owner,
+        )
+        assert [evento["action"] for evento in eventi.json()["events"]] == [
+            "notification.bulk_marked_read"
+        ]
+        assert eventi.json()["events"][0]["context"]["count"] == 3
