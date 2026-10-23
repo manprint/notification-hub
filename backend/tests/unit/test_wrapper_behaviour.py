@@ -6,7 +6,10 @@ scopre l'operatore quando il job non parla piu'. `--dry-run` permette di
 verificarlo senza rete e senza NotifyHub.
 """
 
+import os
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -308,3 +311,31 @@ def test_tentativi_esauriti_restituiscono_comunque_lexit_code_del_comando():
     assert esito.returncode == 0
     assert len(webhook.richieste) == 2
     assert "tentativi=2" in esito.stderr
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("segnale", "nome"),
+    [(signal.SIGTERM, "SIGTERM"), (signal.SIGINT, "SIGINT"), (signal.SIGHUP, "SIGHUP")],
+)
+def test_segnale_al_solo_wrapper_ferma_il_comando_e_dichiara_interrotto(segnale, nome):
+    """Un kill sul wrapper (o un Ctrl-C) deve fermare anche il comando: prima il
+    comando andava avanti fino in fondo e la notifica lo dichiarava interrotto."""
+    ambiente = {**os.environ, "NOTIFYHUB_URL": "https://notifyhub.com", "NOTIFYHUB_SLUG": SLUG}
+    processo = subprocess.Popen(  # noqa: S603
+        ["/bin/bash", str(WRAPPER), "--dry-run", "--", "sleep", "30"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=ambiente,
+    )
+    time.sleep(1.0)
+    inizio = time.monotonic()
+    processo.send_signal(segnale)
+    out, _ = processo.communicate(timeout=20)
+    durata = time.monotonic() - inizio
+
+    assert durata < 15, "il comando sleep 30 non e' stato fermato dal segnale al wrapper"
+    assert f"esito=interrotto-{nome}" in out
+    assert "exit=143" in out
+    assert processo.returncode == 143
