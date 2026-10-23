@@ -150,6 +150,71 @@ async def test_override_concorrente_aggiorna_la_riga_gia_inserita(
 
 
 @pytest.mark.e2e
+async def test_bind_su_canale_cancellato_nel_frattempo_e_409_non_500(
+    api_client, two_tenants, owner_token
+):
+    """Il canale esiste alla lettura iniziale, poi un'altra transazione lo cancella prima
+    dell'inserimento: la violazione di FK non ha una riga da aggiornare, quindi e' un 409."""
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, tenant_id, owner_token)
+    group_id = await create_group(tenant_id, f"gruppo-{uuid.uuid4().hex[:8]}")
+    channel_id = await _channel(api_client, headers)
+
+    altra = await _altra_transazione(
+        tenant_id,
+        "DELETE FROM delivery_channels WHERE id = :c",
+        {"c": uuid.UUID(channel_id)},
+    )
+    try:
+        richiesta = asyncio.create_task(
+            api_client.post(
+                f"/api/v1/groups/{group_id}/channels",
+                json={"channel_id": channel_id, "min_severity": "error"},
+                headers=headers,
+            )
+        )
+        await _attendi_richiesta_bloccata(richiesta)
+        await altra.commit()
+        resp = await richiesta
+    finally:
+        await altra.close()
+
+    assert resp.status_code == 409, resp.text
+
+
+@pytest.mark.e2e
+async def test_override_su_canale_cancellato_nel_frattempo_e_409_non_500(
+    api_client, two_tenants, owner_token
+):
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, tenant_id, owner_token)
+    group_id = await create_group(tenant_id, f"gruppo-{uuid.uuid4().hex[:8]}")
+    receiver_id = await create_receiver(tenant_id, uuid.uuid4().hex[:22], group_id=group_id)
+    channel_id = await _channel(api_client, headers)
+
+    altra = await _altra_transazione(
+        tenant_id,
+        "DELETE FROM delivery_channels WHERE id = :c",
+        {"c": uuid.UUID(channel_id)},
+    )
+    try:
+        richiesta = asyncio.create_task(
+            api_client.post(
+                f"/api/v1/receivers/{receiver_id}/channels",
+                json={"channel_id": channel_id, "mode": "override", "min_severity": "critical"},
+                headers=headers,
+            )
+        )
+        await _attendi_richiesta_bloccata(richiesta)
+        await altra.commit()
+        resp = await richiesta
+    finally:
+        await altra.close()
+
+    assert resp.status_code == 409, resp.text
+
+
+@pytest.mark.e2e
 async def test_regola_a_priorita_automatica_concorrente_viene_accodata(
     api_client, two_tenants, owner_token
 ):

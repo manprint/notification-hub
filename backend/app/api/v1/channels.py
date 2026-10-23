@@ -349,7 +349,11 @@ async def create_receiver_override(
                         ReceiverChannelOverride.tenant_id == tenant_id,
                     )
                 )
-            ).scalar_one()
+            ).scalar_one_or_none()
+            if override is None:
+                # Non e' una coppia gia' inserita: il canale o il receiver sono
+                # spariti nel frattempo (violazione di FK). Si rilancia, e diventa un 409.
+                raise
             override.mode = body.mode
             override.min_severity = min_severity
             response.status_code = 200

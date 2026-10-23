@@ -292,7 +292,11 @@ async def bind_group_channel(
                         GroupChannelBinding.tenant_id == tenant_id,
                     )
                 )
-            ).scalar_one()
+            ).scalar_one_or_none()
+            if binding is None:
+                # Non e' una coppia gia' inserita: il canale e' sparito nel frattempo
+                # (violazione di FK). Si rilancia l'errore, che diventa un 409.
+                raise
             binding.min_severity = body.min_severity
             binding.enabled = body.enabled
     await session.flush()
