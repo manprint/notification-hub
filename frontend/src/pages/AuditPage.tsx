@@ -12,6 +12,7 @@ import {
   describeChanges,
   endOfDay,
   resourceLabel,
+  shortLabel,
   startOfDay,
 } from "../lib/audit";
 import { formatDate, formatTime, roleLabel } from "../lib/format";
@@ -84,7 +85,15 @@ export default function AuditPage() {
       render: (event) => (
         <div className="cell-preview">
           {resourceLabel(event.resource_type)}
-          <div className="cell-diagnostics">{event.resource_label ?? event.resource_id ?? "—"}</div>
+          {/* Accorciata come nel registro delle letture: una notifica porta
+              una sua anteprima di 255 caratteri, intera allargherebbe la riga. */}
+          <div className="cell-diagnostics">
+            <span title={event.resource_label ?? undefined}>
+              {event.resource_label
+                ? shortLabel(event.resource_label)
+                : (event.resource_id ?? "—")}
+            </span>
+          </div>
         </div>
       ),
     },

@@ -64,6 +64,11 @@ describe("actionLabel", () => {
     expect(actionLabel("notification.marked_read")).toBe("Segnata come letta");
   });
 
+  it("l'eliminazione di una notifica ha un'etichetta sua, non un codice", () => {
+    // Il backend la scrive come `notification.deleted`: senza voce si vedeva il codice.
+    expect(actionLabel("notification.deleted")).toBe("Notifica eliminata");
+  });
+
   it("le azioni generiche `<risorsa>.<tipo>` si leggono in italiano", () => {
     expect(actionLabel("group.created")).toBe("Creazione: Gruppo");
     expect(actionLabel("receiver.updated")).toBe("Modifica: Receiver");

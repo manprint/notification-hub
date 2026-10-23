@@ -1,4 +1,4 @@
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import type { AuditEventOut } from "../api/types";
 import AuditExportButton from "../components/AuditExportButton";
 import DataTable, { type DataTableColumn } from "../components/DataTable";
@@ -21,6 +21,7 @@ import { formatDate, formatTime, roleLabel } from "../lib/format";
  * ricorrente — chi ha gestito questa notifica. */
 export default function AuditNotificationStatusPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   // Nell'URL il giorno scelto, all'API l'intervallo di quel giorno nel fuso di
   // chi guarda: vedi startOfDay/endOfDay.
   const fromDay = searchParams.get("from") ?? "";
@@ -100,7 +101,13 @@ export default function AuditNotificationStatusPage() {
             </span>
             <div className="cell-diagnostics">
               {event.receiver_id !== null ? (
-                <Link to={`/notifications/${event.resource_id}`}>Apri</Link>
+                <Link
+                  to={`/notifications/${event.resource_id}`}
+                  state={{ from: `${location.pathname}${location.search}` }}
+                  aria-label={`Apri la notifica del ${formatDate(event.occurred_at)} ${formatTime(event.occurred_at)}`}
+                >
+                  Apri
+                </Link>
               ) : (
                 "notifica non più presente"
               )}

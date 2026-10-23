@@ -6,6 +6,7 @@ import NotificationsPage from "../NotificationsPage";
 import { setRefreshToken } from "../../api/client";
 import { server } from "../../api/mocks/server";
 import {
+  fixtureGroups,
   fixtureNotificationDetailObject,
   fixtureNotificationsPage1,
   fixtureReceiver,
@@ -87,7 +88,7 @@ describe("NotificationsPage", () => {
       expect(urls.some((u) => new URL(u).searchParams.get("group_id") === "g1")).toBe(true);
     });
     const tabella = within(await screen.findByRole("table"));
-    expect(tabella.getAllByRole("link", { name: "Apri" })).toHaveLength(2);
+    expect(tabella.getAllByRole("link", { name: /^Apri/ })).toHaveLength(2);
   });
 
   it("T-GRP3 'Torna ai gruppi' torna alla griglia senza combobox gruppo", async () => {
@@ -393,8 +394,8 @@ describe("NotificationsPage", () => {
     const rigaN1 = riga("n1");
     const rigaN2 = riga("n2");
     // I pulsanti di riga possono dipendere dal ruolo: si aspettano.
-    expect(await within(rigaN1).findByRole("button", { name: "Segna come letta" })).toBeInTheDocument();
-    expect(within(rigaN2).getByRole("button", { name: "Segna come non letta" })).toBeInTheDocument();
+    expect(await within(rigaN1).findByRole("button", { name: /^Segna come letta/ })).toBeInTheDocument();
+    expect(within(rigaN2).getByRole("button", { name: /^Segna come non letta/ })).toBeInTheDocument();
   });
 
   it("T-LIST2 segna come non letta manda status unread", async () => {
@@ -413,7 +414,7 @@ describe("NotificationsPage", () => {
     const rigaN2 = riga("n2");
     await userEvent
       .setup()
-      .click(await within(rigaN2).findByRole("button", { name: "Segna come non letta" }));
+      .click(await within(rigaN2).findByRole("button", { name: /^Segna come non letta/ }));
     await waitFor(() => expect(patchBody).toEqual({ status: "unread" }));
   });
 
@@ -468,7 +469,7 @@ describe("NotificationsPage", () => {
     const rigaN2 = riga("n2");
     await userEvent
       .setup()
-      .click(await within(rigaN2).findByRole("button", { name: "Segna come verificata" }));
+      .click(await within(rigaN2).findByRole("button", { name: /^Segna come verificata/ }));
     await waitFor(() => expect(patchBody).toEqual({ verified: true }));
     await waitFor(() => {
       expect(within(rigaN2).getByText("Verificata")).toBeInTheDocument();
@@ -503,8 +504,8 @@ describe("NotificationsPage", () => {
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
     await screen.findByRole("table");
     const rigaN2 = riga("n2");
-    const btnNonLetta = await within(rigaN2).findByRole("button", { name: "Segna come non letta" });
-    const btnVerificata = within(rigaN2).getByRole("button", { name: "Segna come verificata" });
+    const btnNonLetta = await within(rigaN2).findByRole("button", { name: /^Segna come non letta/ });
+    const btnVerificata = within(rigaN2).getByRole("button", { name: /^Segna come verificata/ });
 
     expect(btnNonLetta.parentElement).toBe(btnVerificata.parentElement);
     expect(btnNonLetta.parentElement as HTMLElement).toHaveClass("row-actions");
@@ -571,8 +572,8 @@ describe("NotificationsPage", () => {
     const rigaN1 = riga("n1");
     expect(within(rigaN1).getByText("Verificata").closest(".status-cell")).not.toBeNull();
 
-    const btnLetta = await within(rigaN1).findByRole("button", { name: "Segna come letta" });
-    const btnVerificata = within(rigaN1).getByRole("button", { name: "Segna come non verificata" });
+    const btnLetta = await within(rigaN1).findByRole("button", { name: /^Segna come letta/ });
+    const btnVerificata = within(rigaN1).getByRole("button", { name: /^Segna come non verificata/ });
     expect(btnLetta.parentElement).toBe(btnVerificata.parentElement);
     expect(btnLetta.parentElement as HTMLElement).toHaveClass("row-actions");
 
@@ -820,7 +821,7 @@ describe("NotificationsPage", () => {
     });
     // La tabella dell'altro receiver non e' cresciuta.
     const tabellaR2 = screen.getByRole("region", { name: "Notifiche di Rsync offsite" });
-    expect(within(tabellaR2).getAllByRole("link", { name: "Apri" })).toHaveLength(1);
+    expect(within(tabellaR2).getAllByRole("link", { name: /^Apri/ })).toHaveLength(1);
   });
 
   it("T-SPLIT4 un gruppo senza receiver lo dice, invece di mostrare una tabella vuota", async () => {
@@ -830,5 +831,156 @@ describe("NotificationsPage", () => {
 
     expect(await screen.findByText("Nessun receiver in questo gruppo.")).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  /** Due receiver, ciascuno con una notifica sua: la risposta dipende da receiver_id. */
+  function dueReceiver(chiamate: string[]) {
+    const receivers = [fixtureReceiver, { ...fixtureReceiver, id: "r2", name: "Rsync offsite" }];
+    server.use(
+      http.get("/api/v1/groups/:groupId/receivers", () => HttpResponse.json(receivers)),
+      http.get("/api/v1/notifications", ({ request }) => {
+        const receiverId = new URL(request.url).searchParams.get("receiver_id") ?? "";
+        chiamate.push(receiverId);
+        const id = receiverId === "r2" ? "m1" : "a1";
+        return HttpResponse.json({
+          notifications: [
+            { ...fixtureNotificationsPage1.notifications[0], id, receiver_id: receiverId },
+          ],
+          next_cursor: null,
+          unread_count: 1,
+        });
+      }),
+    );
+  }
+
+  it("segnare una riga rilegge solo la tabella del suo receiver e la griglia dei gruppi", async () => {
+    const chiamate: string[] = [];
+    dueReceiver(chiamate);
+    let gruppi = 0;
+    server.use(
+      http.get("/api/v1/groups", () => {
+        gruppi += 1;
+        return HttpResponse.json(fixtureGroups);
+      }),
+    );
+
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+    const user = userEvent.setup();
+    await waitFor(() => expect(chiamate).toEqual(expect.arrayContaining(["r1", "r2"])));
+    const gruppiPrima = gruppi;
+    const r2Prima = chiamate.filter((r) => r === "r2").length;
+
+    const bottone = await within(riga("a1")).findByRole("button", { name: /^Segna come letta/ });
+    await user.click(bottone);
+
+    // Prima ogni click rileggeva le pagine di tutte le tabelle del gruppo.
+    await waitFor(() => expect(chiamate.filter((r) => r === "r1").length).toBeGreaterThan(1));
+    expect(chiamate.filter((r) => r === "r2")).toHaveLength(r2Prima);
+    // La griglia dei gruppi porta i conteggi "non lette": va riletta.
+    await waitFor(() => expect(gruppi).toBeGreaterThan(gruppiPrima));
+  });
+
+  it("con un errore di caricamento le liste non dicono 'nessun gruppo' né 'nessun receiver'", async () => {
+    server.use(
+      http.get("/api/v1/groups", () =>
+        HttpResponse.json({ type: "/problems/internal", title: "Errore", status: 500 }, { status: 500 }),
+      ),
+    );
+    renderWithProviders(<NotificationsPage />, ["/notifications"]);
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByText("Nessun gruppo configurato.")).not.toBeInTheDocument();
+  });
+
+  it("con l'errore dei receiver non compare 'Nessun receiver in questo gruppo.'", async () => {
+    server.use(
+      http.get("/api/v1/groups/:groupId/receivers", () =>
+        HttpResponse.json({ type: "/problems/internal", title: "Errore", status: 500 }, { status: 500 }),
+      ),
+    );
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByText("Nessun receiver in questo gruppo.")).not.toBeInTheDocument();
+  });
+
+  it("con l'errore delle notifiche una tabella non dice 'Nessuna notifica trovata.'", async () => {
+    server.use(
+      http.get("/api/v1/notifications", () =>
+        HttpResponse.json({ type: "/problems/internal", title: "Errore", status: 500 }, { status: 500 }),
+      ),
+    );
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByText("Nessuna notifica trovata.")).not.toBeInTheDocument();
+  });
+
+  it("il testo cercato va nell'URL e restringe la lista", async () => {
+    const cercati: (string | null)[] = [];
+    server.use(
+      http.get("/api/v1/notifications", ({ request }) => {
+        cercati.push(new URL(request.url).searchParams.get("q"));
+        return HttpResponse.json(fixtureNotificationsPage1);
+      }),
+    );
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+    const user = userEvent.setup();
+
+    await user.type(await screen.findByLabelText("Cerca nel contenuto"), "disco");
+
+    // Dopo la pausa di chi scrive la ricerca parte con il testo nell'URL.
+    await waitFor(() => expect(cercati).toContain("disco"));
+    expect(screen.getByLabelText("Cerca nel contenuto")).toHaveValue("disco");
+  });
+
+  it("il testo cercato in URL pre-compila il campo e filtra al primo caricamento", async () => {
+    const cercati: (string | null)[] = [];
+    server.use(
+      http.get("/api/v1/notifications", ({ request }) => {
+        cercati.push(new URL(request.url).searchParams.get("q"));
+        return HttpResponse.json(fixtureNotificationsPage1);
+      }),
+    );
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1&q=disco"]);
+
+    expect(await screen.findByLabelText("Cerca nel contenuto")).toHaveValue("disco");
+    await waitFor(() => expect(cercati).toContain("disco"));
+  });
+
+  it("il campo di ricerca ha un segnaposto che descrive il testo, non il nome del campo", async () => {
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+
+    const campo = await screen.findByLabelText("Cerca nel contenuto");
+    expect(campo).toHaveAttribute("placeholder", "Testo del messaggio…");
+  });
+
+  it("'segna tutte come lette' con un receiver scelto nomina il receiver nel messaggio", async () => {
+    server.use(
+      http.post("/api/v1/notifications/bulk-read", () => HttpResponse.json({ marked_read: 3 })),
+    );
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1&receiver_id=r1"]);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "Segna tutte come lette" }));
+
+    expect(
+      await screen.findByText("Notifiche di Backup notturno segnate come lette."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Notifiche del gruppo segnate come lette.")).not.toBeInTheDocument();
+  });
+
+  it("con filtri attivi il messaggio non dice che sono state segnate tutte le notifiche del gruppo", async () => {
+    server.use(
+      http.post("/api/v1/notifications/bulk-read", () => HttpResponse.json({ marked_read: 1 })),
+    );
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1&severity_min=critical"]);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "Segna tutte come lette" }));
+
+    expect(
+      await screen.findByText("Notifiche del gruppo che corrispondono ai filtri segnate come lette."),
+    ).toBeInTheDocument();
   });
 });

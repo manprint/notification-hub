@@ -80,7 +80,22 @@ export default function AcceptInvitePage() {
             {validationError}
           </div>
         )}
-        <form className="form-stacked" onSubmit={(event) => void handleSubmit(event)}>
+        {!token && (
+          // Senza token il modulo non serve: chi l'ha aperto lo sa subito, invece
+          // di scegliere due password e scoprirlo all'invio.
+          <div className="error-banner" role="alert">
+            Il collegamento non è valido: chiedi a chi ti ha invitato un nuovo invito.
+          </div>
+        )}
+        {token && (
+        /* noValidate: i controlli (lunghezza, ripetizione) li fa il modulo e li
+           dice in italiano sotto il campo; il fumetto del browser comparirebbe
+           prima e con un altro testo. */
+        <form
+          className="form-stacked"
+          onSubmit={(event) => void handleSubmit(event)}
+          noValidate
+        >
           <RequiredLegend />
           <Field
             id="password"
@@ -116,6 +131,7 @@ export default function AcceptInvitePage() {
             </button>
           </div>
         </form>
+        )}
       </div>
     </main>
   );

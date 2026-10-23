@@ -9,6 +9,7 @@ export const ACTION_LABELS: Record<string, string> = {
   "notification.marked_verified": "Segnata come verificata",
   "notification.marked_unverified": "Verifica annullata",
   "notification.bulk_marked_read": "Segnate come lette in blocco",
+  "notification.deleted": "Notifica eliminata",
   "auth.login": "Accesso",
   "auth.login_failed": "Accesso rifiutato",
   "auth.logout": "Uscita",

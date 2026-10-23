@@ -79,8 +79,7 @@ describe("AcceptInvitePage", () => {
     expect(await screen.findByText(/Account attivato/)).toBeInTheDocument();
   });
 
-  it("senza token nel collegamento lo dice invece di provare l'attivazione", async () => {
-    const user = userEvent.setup();
+  it("senza token nel collegamento lo dice subito e non mostra il modulo", async () => {
     let chiamate = 0;
     server.use(
       http.post("/api/v1/invitations/accept", () => {
@@ -91,11 +90,36 @@ describe("AcceptInvitePage", () => {
     window.location.hash = "";
 
     renderWithProviders(<AcceptInvitePage />);
-    await user.type(screen.getByLabelText("Scegli una password"), "password-lunga-123");
-    await user.type(screen.getByLabelText("Ripeti la password"), "password-lunga-123");
+
+    // Niente campi password: chi ha un collegamento senza token non compila
+    // due password per poi scoprire che il link non serve.
+    expect(screen.queryByLabelText("Scegli una password")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Ripeti la password")).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Il collegamento non è valido: chiedi a chi ti ha invitato un nuovo invito.",
+    );
+    expect(chiamate).toBe(0);
+  });
+
+  it("una password di 8 caratteri mostra il messaggio italiano, non il fumetto del browser", async () => {
+    const user = userEvent.setup();
+    let chiamate = 0;
+    server.use(
+      http.post("/api/v1/invitations/accept", () => {
+        chiamate += 1;
+        return HttpResponse.json({}, { status: 201 });
+      }),
+    );
+
+    renderWithProviders(<AcceptInvitePage />);
+    await user.type(screen.getByLabelText("Scegli una password"), "12345678");
+    await user.type(screen.getByLabelText("Ripeti la password"), "12345678");
     await user.click(screen.getByRole("button", { name: "Attiva account" }));
 
-    expect(await screen.findByText(/Token di invito mancante/)).toBeInTheDocument();
+    // Con il vincolo minLength nativo il browser bloccava l'invio prima del
+    // controllo del modulo: il messaggio in italiano non compariva mai.
+    expect(await screen.findByText(/almeno 12 caratteri\./)).toBeInTheDocument();
+    expect(screen.getByLabelText("Scegli una password")).toHaveAttribute("aria-invalid", "true");
     expect(chiamate).toBe(0);
   });
 

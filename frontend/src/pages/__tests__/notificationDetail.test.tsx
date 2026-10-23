@@ -5,7 +5,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
-import { Route, Routes } from "react-router-dom";
+import { Link, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import NotificationDetailPage from "../NotificationDetailPage";
 import { setRefreshToken } from "../../api/client";
@@ -408,5 +408,45 @@ describe("NotificationDetailPage", () => {
     await screen.findByText(/Dettaglio notifica/);
 
     expect(screen.queryByRole("link", { name: /Chi l'ha letta o verificata/ })).not.toBeInTheDocument();
+  });
+
+  // Il ritorno riapre la lista da cui si è arrivati, gruppo e filtri compresi,
+  // passata dallo stato del link: un link diretto torna all'elenco generale.
+  it("il ritorno riporta alla lista di partenza, col gruppo e i filtri", async () => {
+    serviDettaglio(fixtureNotificationDetailInline);
+    const user = userEvent.setup();
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/"
+          element={
+            <Link to="/notifications/n1" state={{ from: "/notifications?group_id=g1&q=disco" }}>
+              Apri
+            </Link>
+          }
+        />
+        <Route path="/notifications/:id" element={<NotificationDetailPage />} />
+      </Routes>,
+    );
+
+    await user.click(screen.getByRole("link", { name: "Apri" }));
+    expect(await screen.findByRole("link", { name: "← Torna alla lista" })).toHaveAttribute(
+      "href",
+      "/notifications?group_id=g1&q=disco",
+    );
+  });
+
+  it("con l'errore di caricamento il ritorno resta disponibile", async () => {
+    server.use(
+      http.get("/api/v1/notifications/n1", () =>
+        HttpResponse.json({ detail: "boom" }, { status: 500 }),
+      ),
+    );
+    renderDetail("n1");
+
+    expect(await screen.findByRole("link", { name: "← Torna alle notifiche" })).toHaveAttribute(
+      "href",
+      "/notifications",
+    );
   });
 });
