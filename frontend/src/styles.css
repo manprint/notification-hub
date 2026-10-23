@@ -1106,6 +1106,18 @@ tbody tr:last-child td {
   font-size: var(--text-base);
 }
 
+/* Avviso che non è un errore (stato voluto, non un'operazione fallita): stessa
+   forma del banner di errore, tono giallo dello stato «warn». */
+.warning-banner {
+  background: var(--color-warning-soft);
+  border: 1px solid var(--color-warning-border);
+  color: var(--color-text);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  margin-bottom: var(--space-3);
+  font-size: var(--text-base);
+}
+
 /* I campi non validi dentro un banner: come .chain-list, senza il margine e il
    rientro che il browser mette a un elenco senza stile. */
 .error-details {

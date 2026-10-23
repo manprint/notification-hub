@@ -83,7 +83,8 @@ describe("ReceiverDetailPage", () => {
     await user.click(screen.getByRole("button", { name: "Salva" }));
 
     await waitFor(() => expect(inviato).not.toBeNull());
-    expect(inviato).toMatchObject({ duration_threshold_seconds: 900, duration_severity: "error" });
+    // Solo la soglia è cambiata: la severity salvata non viaggia nella PATCH.
+    expect(inviato).toEqual({ duration_threshold_seconds: 900 });
   });
 
   it("rifiuta la coppia soglia/severity mezza configurata senza chiamare l'API", async () => {
@@ -559,7 +560,7 @@ describe("ReceiverDetailPage", () => {
     await waitFor(() => expect(inviato).toMatchObject({ status: "disabled" }));
     // Lo stato si legge nella pagina, non solo nel toast che sparisce.
     expect(await screen.findByRole("button", { name: "Riattiva receiver" })).toBeInTheDocument();
-    await waitFor(() => expect(campo("Stato del receiver")).toContain("disabilitato"));
+    await waitFor(() => expect(campo("Stato del receiver")).toContain("Disabilitato"));
 
     await user.click(screen.getByRole("button", { name: "Riattiva receiver" }));
     await user.click(
@@ -690,9 +691,12 @@ describe("ReceiverDetailPage", () => {
     await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
     expect(screen.getByLabelText("Nome")).toHaveValue("Pulizia log");
     expect(screen.getByLabelText("Rate limit (al minuto)")).toHaveValue(5);
+    await user.clear(screen.getByLabelText("Rate limit (al minuto)"));
+    await user.type(screen.getByLabelText("Rate limit (al minuto)"), "7");
     await user.click(screen.getByRole("button", { name: "Salva" }));
     await waitFor(() => expect(patchSuB).not.toBeNull());
-    expect(patchSuB).toMatchObject({ name: "Pulizia log", rate_limit_per_min: 5 });
+    // Il nome scritto su A non arriva a B, e nemmeno il nome di B: non è cambiato.
+    expect(patchSuB).toEqual({ rate_limit_per_min: 7 });
   });
 
   it("T-TZ1 un cron salvato senza fuso resta in UTC e una rinomina non lo riscrive", async () => {
@@ -995,4 +999,43 @@ describe("ReceiverDetailPage", () => {
       invalida.mockRestore();
     }
   });
+  it("il receiver disabilitato dice cosa succede senza il rosso dell'errore", async () => {
+    server.use(
+      http.get("/api/v1/receivers/r1", () =>
+        HttpResponse.json({ ...fixtureReceiver, status: "disabled", rejected_last_24h: 3 }),
+      ),
+    );
+
+    renderReceiverDetail();
+
+    const avviso = (await screen.findByText(/Receiver disabilitato:/)).closest("div");
+    expect(avviso).toHaveTextContent("Receiver disabilitato: 3 richieste rifiutate");
+    expect(avviso).toHaveClass("warning-banner");
+    expect(avviso).not.toHaveClass("error-banner");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("i titoli delle card sono h3, come nelle altre pagine", async () => {
+    renderReceiverDetail();
+
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+    expect(screen.getByRole("heading", { level: 3, name: "Configurazione" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 3, name: "Come inviare qui" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Sorveglianza dell'attesa" }),
+    ).toBeInTheDocument();
+  });
+  it("i select marcati obbligatori portano l'attributo required", async () => {
+    const user = userEvent.setup();
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+
+    expect(screen.getByLabelText("Severity di default")).toBeRequired();
+    expect(screen.getByLabelText("Attesa")).toBeRequired();
+    expect(screen.getByLabelText("Severity dell'assenza")).toBeRequired();
+  });
+
 });

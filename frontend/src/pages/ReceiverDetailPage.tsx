@@ -391,6 +391,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
         <Field id="receiver-edit-severity" label="Severity di default" required>
           <select
             {...fieldAria("receiver-edit-severity")}
+            required
             value={defaultSeverity}
             onChange={(event) => setDefaultSeverity(event.target.value as Severity)}
           >
@@ -520,6 +521,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
         >
           <select
             {...fieldAria("receiver-edit-expected-mode", { hint: true })}
+            required
             value={expectedMode}
             onChange={(event) => setExpectedMode(event.target.value as ExpectedMode)}
           >
@@ -584,6 +586,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
               <Field id="receiver-edit-expected-timezone" label="Fuso dell'espressione" required>
                 <select
                   {...fieldAria("receiver-edit-expected-timezone")}
+                  required
                   value={timezone}
                   onChange={(event) => setTimezone(event.target.value)}
                 >
@@ -661,6 +664,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
             <Field id="receiver-edit-missing-severity" label="Severity dell'assenza" required>
               <select
                 {...fieldAria("receiver-edit-missing-severity")}
+                required
                 value={missingSeverity}
                 onChange={(event) => setMissingSeverity(event.target.value as Severity)}
               >
@@ -819,7 +823,7 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
       <div className="page-header">
         <h1>
           {receiver.name}
-          {disabled && <span className="status-pill warn">disabilitato</span>}
+          {disabled && <span className="status-pill warn">Disabilitato</span>}
         </h1>
         {!editing && (
           <div className="page-header-actions">
@@ -856,7 +860,7 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
       {editing ? (
         <div className="card">
           <div className="card-header">
-            <h2>Modifica receiver</h2>
+            <h3>Modifica receiver</h3>
           </div>
           <EditReceiverForm
             key={receiver.id}
@@ -868,7 +872,7 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
         <>
           <div className="card">
             <div className="card-header">
-              <h2>Come inviare qui</h2>
+              <h3>Come inviare qui</h3>
             </div>
             <div className="detail-grid">
               <Detail label="Slug">
@@ -895,7 +899,7 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
               scritti in due variabili in cima al file e modificabili a mano.
             </p>
             {disabled && (
-              <div className="error-banner">
+              <div className="warning-banner" role="status">
                 Receiver disabilitato: {receiver.rejected_last_24h ?? 0} richieste rifiutate nelle
                 ultime 24 ore.
               </div>
@@ -904,12 +908,12 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
 
           <div className="card">
             <div className="card-header">
-              <h2>Configurazione</h2>
+              <h3>Configurazione</h3>
             </div>
             <div className="detail-grid">
               <Detail label="Stato del receiver">
                 <span className={`status-pill ${disabled ? "warn" : "ok"}`}>
-                  {disabled ? "disabilitato" : "attivo"}
+                  {disabled ? "Disabilitato" : "Attivo"}
                 </span>
               </Detail>
               <Detail label="Severity di default">{receiver.default_severity}</Detail>
@@ -932,7 +936,7 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
 
           <div className="card">
             <div className="card-header">
-              <h2>Sorveglianza dell'attesa</h2>
+              <h3>Sorveglianza dell'attesa</h3>
             </div>
             {receiver.expected_late && (
               <div className="error-banner" role="alert">
