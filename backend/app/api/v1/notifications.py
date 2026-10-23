@@ -98,8 +98,10 @@ async def _apply_filters(
     from_: datetime | None,
     to: datetime | None,
     write: bool = False,
-) -> bool:
-    """Costruisce le condizioni di filtro. Restituisce False quando il
+) -> tuple[bool, list[uuid.UUID] | None]:
+    """Costruisce le condizioni di filtro. Restituisce anche i gruppi visibili
+    al chiamante (None = tutti), perche' il conteggio non li ricalcoli. Il primo
+    valore e' False quando il
     chiamante non puo vedere nulla (member/viewer senza gruppi associati):
     senza il vincolo di appartenenza, member e viewer leggevano le notifiche
     di tutti i gruppi del tenant, non solo dei propri.
@@ -137,14 +139,14 @@ async def _apply_filters(
     allowed = await accessible_group_ids(session, claims)
     if allowed is not None:
         if not allowed:
-            return False
+            return False, allowed
         receiver_conditions.append(Receiver.group_id.in_(allowed))
 
     if len(receiver_conditions) > 1:
         conditions.append(
             Notification.receiver_id.in_(select(Receiver.id).where(*receiver_conditions))
         )
-    return True
+    return True, allowed
 
 
 async def _handler_emails(
@@ -189,7 +191,7 @@ async def list_notifications(
     arrivano nuove notifiche fra una pagina e l'altra."""
     tenant_id = uuid.UUID(claims.tid)
     conditions: list = []
-    visible = await _apply_filters(
+    visible, allowed = await _apply_filters(
         conditions,
         session,
         claims,
@@ -230,7 +232,6 @@ async def list_notifications(
         Notification.tenant_id == tenant_id,
         Notification.status == NotificationStatus.UNREAD,
     ]
-    allowed = await accessible_group_ids(session, claims)
     if allowed is not None:
         unread_conditions.append(
             Notification.receiver_id.in_(
@@ -446,7 +447,7 @@ async def bulk_mark_read(
 ) -> BulkReadOut:
     """Come PATCH: e una scrittura, quindi serve il ruolo member."""
     conditions: list = []
-    visible = await _apply_filters(
+    visible, _ = await _apply_filters(
         conditions,
         session,
         claims,

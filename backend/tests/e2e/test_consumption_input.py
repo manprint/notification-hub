@@ -191,3 +191,33 @@ async def test_cursore_delle_notifiche_con_received_at_uguale(api_client, two_te
 
     assert len(ids) == 7
     assert len(set(ids)) == 7
+
+
+@pytest.mark.e2e
+async def test_lista_del_member_calcola_i_gruppi_visibili_una_volta(
+    api_client, two_tenants, monkeypatch
+):
+    """Il conteggio non rifa il calcolo dei gruppi visibili gia' fatto per il
+    filtro: una lista di member costa una query di visibilita' in meno."""
+    from app.api.v1 import notifications as notifications_api
+
+    tenant_id, _ = two_tenants
+    gruppo = await create_group(tenant_id, f"Gruppo {uuid.uuid4().hex[:6]}")
+    slug = uuid.uuid4().hex[:22]
+    await create_receiver(tenant_id, slug, gruppo)
+    await api_client.post(f"/ingest/{slug}", content="visibile")
+    member = {"Authorization": f"Bearer {await _member_token(api_client, tenant_id, gruppo)}"}
+    chiamate: list[int] = []
+    originale = notifications_api.accessible_group_ids
+
+    async def conta(session, claims):  # type: ignore[no-untyped-def]
+        chiamate.append(1)
+        return await originale(session, claims)
+
+    monkeypatch.setattr(notifications_api, "accessible_group_ids", conta)
+    resp = await api_client.get("/api/v1/notifications", headers=member)
+
+    assert resp.status_code == 200
+    assert len(resp.json()["notifications"]) == 1
+    assert resp.json()["unread_count"] == 1
+    assert len(chiamate) == 1
