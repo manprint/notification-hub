@@ -72,13 +72,19 @@ echo "CREATE TABLE t_demo (id int);"
 STUB
 
     # Registra l'input SQL. Con -tAc risponde STUB_PSQL_COUNT; stampa su stderr
-    # STUB_PSQL_STDERR ed esce con STUB_PSQL_RC.
+    # STUB_PSQL_STDERR ed esce con STUB_PSQL_RC. Con STUB_FAIL_ALTER=1 fallisce
+    # quando l'input contiene ALTER ROLE (la riallineatura delle password).
     cat > "${SANDBOX}/pgbin/psql" <<STUB
 #!/bin/bash
 case " \$* " in
     *" -tAc "*) echo "\${STUB_PSQL_COUNT:-0}"; exit 0 ;;
 esac
-cat >> "${SANDBOX}/psql-input.sql"
+in_file="${SANDBOX}/psql-stdin.tmp"
+cat > "\${in_file}"
+cat "\${in_file}" >> "${SANDBOX}/psql-input.sql"
+if [ "\${STUB_FAIL_ALTER:-0}" = 1 ] && grep -q 'ALTER ROLE' "\${in_file}"; then
+    echo "ERROR:  simulated ALTER ROLE failure" >&2; exit 1
+fi
 if [ -n "\${STUB_PSQL_STDERR:-}" ]; then printf '%s\n' "\${STUB_PSQL_STDERR}" >&2; fi
 exit "\${STUB_PSQL_RC:-0}"
 STUB

@@ -95,6 +95,9 @@ segreti persistiti e ricompone l'ambiente prima di eseguire il comando (`bootstr
 | 5432 / 6379 | PostgreSQL e Redis | mai raggiungibili da fuori dal container |
 
 nginx non instrada `/metrics`: come nello stack Compose, le metriche restano su una porta separata.
+La porta 9100 somma i valori di API e worker (`PROMETHEUS_MULTIPROC_DIR=/run/notifyhub/metrics`).
+Quella directory si svuota a ogni avvio del container: i contatori ripartono da zero dopo un riavvio,
+come per ogni esportatore Prometheus.
 
 ## Persistenza: un solo volume `/data`
 
@@ -259,6 +262,19 @@ resta compatibile per tutta la vita di questa base. Se una futura immagine cambi
 container si ferma prima di toccare i dati e stampa la procedura (backup con la vecchia immagine,
 cluster nuovo, `notifyhub-restore`).
 
+**Coda Celery dei job di manutenzione**: fino alla v0.0.10 compresa i job di manutenzione di beat
+(per esempio `check_expected_schedules`) finivano sulla coda Celery di default, `celery`, che il
+worker non consumava. Dopo l'aggiornamento quei messaggi restano in Redis senza che nessuno li legga.
+Una volta sola, dopo l'aggiornamento:
+
+```bash
+docker compose exec notifyhub redis-cli -n 1 LLEN celery   # messaggi residui
+docker compose exec notifyhub redis-cli -n 1 DEL celery
+```
+
+Il database 1 e' quello del broker Celery (`CELERY_BROKER_URL`). Il comando non tocca le code
+`delivery` e `maintenance`.
+
 ## Backup e ripristino
 
 ```bash
@@ -282,8 +298,14 @@ decifrano. Per questo:
 - `notifyhub-restore` riporta la chiave del backup in `secrets.env`, e rifiuta se l'archivio manca
   (`--senza-configurazione` accetta il rischio) o se `NOTIFYHUB_SECRET_KEY` e' impostata
   nell'ambiente del container con un valore diverso;
-- dopo un ripristino che cambia la chiave occorre riavviare il container: API e worker la usano
-  ancora quella vecchia finche' non ripartono.
+- dopo un ripristino che cambia la chiave i servizi applicativi (nginx, API, worker, beat, metrics)
+  restano fermi e occorre riavviare il container: finche' non ripartono la dashboard non risponde, e
+  un programma ripartito ora avrebbe ancora la chiave vecchia, quindi il worker marcherebbe `dead` le
+  delivery ripristinate. Se una delivery finisce comunque `dead`, la si ri-accoda dalla dashboard
+  (`POST /api/v1/deliveries/{id}/retry`).
+
+Dopo un ripristino con chiave cambiata riavviare il container, non usare `notifyhub-ctl restart`: il
+worker ripartirebbe con la chiave vecchia.
 
 Il dump non contiene gli oggetti MinIO: stanno nello stesso volume `/data` e per una copia completa
 conviene fare lo snapshot del volume a container fermo. Attenzione: anche `/data/backups` sta nel
@@ -332,6 +354,8 @@ manuali sul database.
 - Nessun servizio applicativo gira da root: API, worker, beat, Redis, MinIO e i worker nginx
   girano come `notifyhub` (uid 1000), PostgreSQL come `postgres`. Restano root solo l'entrypoint,
   supervisord e il master nginx (per la porta 80).
+- nginx aggiunge a ogni risposta della SPA `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`
+  e `Referrer-Policy`, come nello stack Compose (`deploy/all-in-one/tests/test_nginx_headers.sh`).
 - I segreti generati stanno in `/data/config/secrets.env` con permessi `0600`, mai nell'immagine.
 - HTTPS non e' incluso: davanti al container va messo un reverse proxy con i certificati, e in quel
   caso vanno valorizzate `TRUSTED_PROXIES` e `NOTIFYHUB_PUBLIC_BASE_URL`.

@@ -72,6 +72,17 @@ ensure_layout() {
     ensure_owner "${PGDATA}" postgres:postgres 0700
 }
 
+# Directory delle metriche multiprocess: si svuota a ogni avvio. I file di un run
+# precedente (pid ormai morti) verrebbero sommati dal server 9100 per sempre.
+# Va pronta prima di qualunque processo Python del container, quindi prima di
+# pg_prepare, dove partono alembic e sync-presets.
+metrics_prepare() {
+    rm -rf "${PROMETHEUS_MULTIPROC_DIR}"
+    mkdir -p "${PROMETHEUS_MULTIPROC_DIR}"
+    chown "${APP_USER}:${APP_GROUP}" "${PROMETHEUS_MULTIPROC_DIR}"
+    chmod 0755 "${PROMETHEUS_MULTIPROC_DIR}"
+}
+
 # ---------------------------------------------------------------------------
 # PostgreSQL
 # ---------------------------------------------------------------------------
@@ -470,6 +481,7 @@ boot() {
 
     load_secrets
     export_runtime_env
+    metrics_prepare
     check_version_transition
 
     pg_prepare

@@ -1,0 +1,35 @@
+name: Deploy tests
+
+# Test dei file di deploy (backup, restore, entrypoint, nginx), che publish-image.yml non esegue.
+# Il job senza Docker gira su ogni PR e su main; quello con nginx reale gira nello stesso job.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Test di deploy in sandbox
+        run: make test-deploy
+
+      - name: Test di deploy con nginx reale
+        run: make test-deploy-docker

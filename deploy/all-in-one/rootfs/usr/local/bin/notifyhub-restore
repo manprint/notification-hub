@@ -15,8 +15,9 @@
 #   - rifiuta se NOTIFYHUB_SECRET_KEY e' fissata nell'ambiente del container o in
 #     overrides.env con un valore diverso da quello del backup;
 #   - riscrive in secrets.env la sola chiave del backup, se diversa.
-# Il container va riavviato dopo un ripristino che cambia la chiave: l'API e i
-# worker hanno ancora in memoria quella vecchia.
+# Con una chiave cambiata i servizi applicativi (nginx, API, worker, beat, metrics)
+# restano fermi finche' il container non viene riavviato: la dashboard non risponde
+# e con la chiave vecchia le delivery ripristinate finirebbero dead.
 #
 # Gli oggetti MinIO non sono nel dump: se il backup e' stato preso in un momento
 # diverso dallo stato di /data/minio, alcune notifiche possono riferirsi a
@@ -38,12 +39,24 @@ BENIGN_ERRORS='current user cannot be dropped|role "postgres" already exists'
 
 CONFIG_WORK=""
 SERVICES_STOPPED=0
+# Vero dal momento in cui il dump viene caricato: da qui il database contiene righe
+# ripristinate, e con una chiave diversa i servizi non devono ripartire (vedi sotto).
+DB_LOADED=0
 
 # Riavvia i servizi applicativi se li abbiamo fermati, anche quando il ripristino
 # esce per un errore: altrimenti un die lascerebbe l'applicazione spenta.
+# Con una chiave cambiata e il database gia' caricato non si riavviano: un programma
+# ripartito qui erediterebbe la chiave vecchia dall'ambiente di supervisord, e il
+# worker marcherebbe dead le delivery ripristinate (webhook non decifrabile). Ripartono
+# col container, che rilegge secrets.env all'avvio. Se il dump non e' stato caricato
+# il database e' ancora quello di prima, con la chiave di prima: si riparte come sempre.
 restart_services() {
     [ "${SERVICES_STOPPED}" = "1" ] || return 0
     SERVICES_STOPPED=0
+    if [ "${KEY_CHANGE:-0}" = "1" ] && [ "${DB_LOADED}" = "1" ]; then
+        log_warn "servizi applicativi (nginx, API, worker, beat, metrics) lasciati fermi: il database e' stato ripristinato con una chiave diversa, riavviare il container"
+        return 0
+    fi
     log_info "riavvio i servizi applicativi"
     # shellcheck disable=SC2086
     ${SUPERVISORCTL} start ${APP_PROGRAMS} >/dev/null 2>&1 \
@@ -64,7 +77,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --yes|-y) ASSUME_YES=1; shift ;;
         --senza-configurazione) SKIP_CONFIG=1; shift ;;
-        -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) DUMP="$1"; shift ;;
     esac
 done
@@ -166,6 +179,7 @@ fi
 log_info "ripristino da ${DUMP}"
 RESTORE_LOG="${LOG_DIR}/init/restore-$(date -u +%Y%m%dT%H%M%SZ).log"
 RESTORE_ERRORS=0
+DB_LOADED=1
 if ! gzip -dc "${DUMP}" | as_postgres "${PG_BIN}/psql" --no-psqlrc -h "${PG_SOCKET_DIR}" -U postgres -d postgres \
         -v ON_ERROR_STOP=0 -q > "${RESTORE_LOG}" 2>&1; then
     log_error "psql ha segnalato errori"
@@ -182,8 +196,6 @@ fi
 
 # Il dump riporta le password dei ruoli a quelle del momento del backup: qui si
 # riallineano a quelle correnti, altrimenti i servizi non si riconnettono.
-# Avviene prima di toccare secrets.env, perche' i servizi in esecuzione usano
-# ancora le password di prima.
 reapply_role_passwords() {
     [ -f "${SECRETS_FILE}" ] || return 0
     set -a
@@ -199,14 +211,20 @@ ALTER ROLE notifyhub_ingest WITH PASSWORD $(sql_lit "${PG_INGEST_PASSWORD}");
 ALTER ROLE postgres         WITH PASSWORD $(sql_lit "${POSTGRES_SUPERUSER_PASSWORD}");
 SQL
 }
-reapply_role_passwords
 
+# La chiave si riscrive prima di riallineare le password. set_secret_key tocca solo
+# NOTIFYHUB_SECRET_KEY e reapply_role_passwords legge solo i PG_* e POSTGRES_*, quindi
+# l'ordine non cambia il risultato. Conta il caso di errore: se reapply fallisce, set -e
+# termina lo script con la chiave del backup gia' in secrets.env, e il trap di uscita
+# non riavvia i servizi perche' KEY_CHANGE e DB_LOADED sono impostati (vedi restart_services).
 RESTART_REQUIRED=0
 if [ "${KEY_CHANGE}" = "1" ]; then
     set_secret_key "${ARCHIVE_KEY}"
     RESTART_REQUIRED=1
     log_warn "NOTIFYHUB_SECRET_KEY ripristinata dall'archivio di configurazione"
 fi
+
+reapply_role_passwords
 
 restart_services
 
@@ -215,6 +233,6 @@ if [ "${RESTORE_ERRORS}" -gt 0 ]; then
 fi
 
 if [ "${RESTART_REQUIRED}" = "1" ]; then
-    log_warn "riavviare il container: l'API e i worker usano ancora la chiave precedente, e finche' non ripartono i canali non si decifrano"
+    log_warn "riavviare il container: nginx, API, worker, beat e metrics sono fermi e ripartono con la chiave del backup; finche' non ripartono la dashboard non risponde e i canali non si decifrano"
 fi
 log_info "ripristino completato. Un riavvio del container riallinea anche lo schema (alembic upgrade head)."

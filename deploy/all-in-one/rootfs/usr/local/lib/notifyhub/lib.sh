@@ -350,4 +350,9 @@ export_runtime_env() {
     export LOG_MAX_BYTES="${LOG_MAX_BYTES:-10485760}"
     export LOG_BACKUPS="${LOG_BACKUPS:-5}"
     export TZ="${TZ:-UTC}"
+
+    # Modalita' multiprocess di prometheus_client: API, worker e beat scrivono ognuno i
+    # propri valori qui e il server 9100 li somma (come nel compose). Il programma
+    # supervisord li eredita dall'ambiente, quindi basta esportarla qui.
+    export PROMETHEUS_MULTIPROC_DIR="${RUN_DIR}/metrics"
 }

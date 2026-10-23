@@ -152,3 +152,58 @@ def test_immagine_api_senza_compilatore_nello_stadio_finale():
     assert "gcc" not in stadio_finale
     assert "libpq-dev" not in stadio_finale
     assert "COPY --from=builder /opt/venv /opt/venv" in stadio_finale
+
+
+@pytest.mark.unit
+def test_all_in_one_metriche_multiprocess_pulite_all_avvio():
+    # Come nel compose, API, worker e beat scrivono in una directory multiprocess che il 9100
+    # somma. Nell'all-in-one la esporta lib.sh (i programmi di supervisord la ereditano, quindi
+    # supervisord.conf non la ridefinisce) e l'entrypoint la svuota prima di qualunque processo.
+    radice = REPO / "deploy/all-in-one"
+    lib = (radice / "rootfs/usr/local/lib/notifyhub/lib.sh").read_text(encoding="utf-8")
+    entrypoint = (radice / "rootfs/usr/local/bin/notifyhub-entrypoint").read_text(encoding="utf-8")
+    supervisord = (radice / "config/supervisord.conf").read_text(encoding="utf-8")
+    boot = entrypoint[entrypoint.index("boot() {") :]
+
+    assert 'export PROMETHEUS_MULTIPROC_DIR="${RUN_DIR}/metrics"' in lib
+    assert "PROMETHEUS_MULTIPROC_DIR" not in supervisord
+    assert (
+        boot.index("export_runtime_env")
+        < boot.index("metrics_prepare")
+        < boot.index('exec "${VENV_BIN}/supervisord"')
+    )
+    # La CLI (docker exec) ricompone l'ambiente con export_runtime_env: senza unset, ogni
+    # invocazione creerebbe un file di metriche nella directory che il 9100 somma.
+    cli = (radice / "rootfs/usr/local/bin/notifyhub-cli").read_text(encoding="utf-8")
+    assert cli.index("export_runtime_env") < cli.index("unset PROMETHEUS_MULTIPROC_DIR")
+
+
+@pytest.mark.unit
+def test_all_in_one_nginx_intestazioni_ereditate_dalla_spa():
+    # nginx non eredita gli add_header del server in una location che ne definisce una propria:
+    # le intestazioni di sicurezza stanno nel server, e index.html e gli asset non ne definiscono.
+    nginx = (REPO / "deploy/all-in-one/config/nginx.conf").read_text(encoding="utf-8")
+
+    for intestazione in (
+        "X-Content-Type-Options nosniff always",
+        "X-Frame-Options DENY always",
+        "Referrer-Policy strict-origin-when-cross-origin always",
+    ):
+        assert f"add_header {intestazione};" in nginx
+    for location in ("location = /index.html {", "location /assets/ {"):
+        inizio = nginx.index(location)
+        blocco = nginx[inizio : nginx.index("}", inizio)]
+        assert "add_header" not in blocco
+
+
+@pytest.mark.unit
+def test_restore_riscrive_la_chiave_prima_del_riallineamento_password():
+    # Se il riallineamento (ALTER ROLE) fallisce, set -e termina lo script: la chiave del backup
+    # deve essere gia' in secrets.env, altrimenti il riavvio del container ripartirebbe con la
+    # chiave vecchia. Il comportamento e' coperto da test_restore.sh; qui si blocca l'ordine.
+    restore = (REPO / "deploy/all-in-one/rootfs/usr/local/bin/notifyhub-restore").read_text(
+        encoding="utf-8"
+    )
+    chiamata_chiave = restore.index('set_secret_key "${ARCHIVE_KEY}"')
+    chiamata_password = restore.index("\nreapply_role_passwords\n")
+    assert chiamata_chiave < chiamata_password

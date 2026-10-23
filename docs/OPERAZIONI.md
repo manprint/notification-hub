@@ -331,6 +331,22 @@ La tabella e append-only per l'applicazione (`REVOKE UPDATE`, migrazione 0016): 
 non si corregge dall'API. Un DBA con accesso diretto al database resta fidato — non c'e firma ne
 catena di hash sulle righe.
 
+## Aggiornamento
+
+### Coda Celery dei job di manutenzione
+
+Fino alla v0.0.10 compresa i job di manutenzione di beat finivano sulla coda Celery di default,
+`celery`, che il worker (`-Q delivery,maintenance`) non consumava. Dopo l'aggiornamento i messaggi
+residui restano in Redis senza che nessuno li legga. Una volta sola:
+
+```bash
+docker compose exec redis redis-cli -n 1 LLEN celery   # messaggi residui
+docker compose exec redis redis-cli -n 1 DEL celery
+```
+
+Il database 1 e' quello del broker (`CELERY_BROKER_URL`). Il comando non tocca `delivery` e
+`maintenance`.
+
 ## Backup e Ripristino
 
 I dati vivono in tre posti:
