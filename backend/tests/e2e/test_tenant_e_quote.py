@@ -10,10 +10,11 @@ import asyncio
 import uuid
 
 import pytest
-from sqlalchemy import text, update
+from sqlalchemy import select, text, update
 
 from app.db.session import tenant_session
-from app.db.types import UserRole
+from app.db.types import ReceiverStatus, Severity, UserRole
+from app.models.receiver import Receiver
 from app.models.tenant import Tenant
 from app.models.user import User
 
@@ -235,9 +236,10 @@ async def test_max_storage_bytes_oltre_bigint_e_422_non_500(api_client, two_tena
 async def test_cap_tenant_e_receiver_non_si_scavalcano_in_parallelo(
     api_client, two_tenants, owner_token, owner_conn
 ):
-    """Il PATCH che abbassa il cap a 1 MB resta aperto mentre un receiver da 5 MB
-    viene creato: il receiver deve leggere il cap nuovo e rifiutarsi con 409,
-    non accettare il valore vecchio (write skew)."""
+    """Il PATCH che abbassa il cap a 1 MB resta in attesa mentre un receiver da 5 MB
+    viene creato sotto lo stesso lock del tenant (come fa la validazione in
+    creazione): quando il PATCH riprende deve vedere il receiver e rifiutarsi con
+    409, non abbassare il cap (write skew)."""
     tenant_id, _ = two_tenants
     headers = await _headers(api_client, owner_token, tenant_id)
     await owner_conn.execute(
@@ -249,17 +251,26 @@ async def test_cap_tenant_e_receiver_non_si_scavalcano_in_parallelo(
     )
     group_id = gruppo.json()["id"]
 
-    async with tenant_session(tenant_id) as abbassa:
-        await abbassa.execute(
-            update(Tenant).where(Tenant.id == tenant_id).values(max_body_bytes=1048576)
-        )
-        creazione = asyncio.create_task(
-            api_client.post(
-                f"/api/v1/groups/{group_id}/receivers",
-                json={"name": "grosso", "max_body_bytes": 5 * 1024 * 1024},
-                headers=headers,
-            )
+    async with tenant_session(tenant_id) as creazione:
+        await creazione.execute(select(Tenant.id).where(Tenant.id == tenant_id).with_for_update())
+        abbassa = asyncio.create_task(
+            api_client.patch("/api/v1/tenant", json={"max_body_bytes": 1048576}, headers=headers)
         )
         await asyncio.sleep(0.3)
-    resp = await creazione
+        assert not abbassa.done()
+        creazione.add(
+            Receiver(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                group_id=uuid.UUID(group_id),
+                slug=f"grosso-{uuid.uuid4().hex[:8]}",
+                name="grosso",
+                status=ReceiverStatus.ACTIVE,
+                max_body_bytes=5 * 1024 * 1024,
+                rate_limit_per_min=60,
+                default_severity=Severity.INFO,
+            )
+        )
+        await creazione.flush()
+    resp = await abbassa
     assert resp.status_code == 409
