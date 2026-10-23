@@ -95,7 +95,8 @@ export default function ReceiverPresetsPanel({ receiverId }: { receiverId: strin
         <ol className="chain-list" aria-label="Preset applicati">
           {appliedList.map((preset, index) => (
             <li key={preset.preset_id}>
-              <strong>{preset.name}</strong> — {preset.rules_count} regole
+              <strong>{preset.name}</strong> — {preset.rules_count}{" "}
+              {preset.rules_count === 1 ? "regola" : "regole"}
               {preset.description && <div className="cell-diagnostics">{preset.description}</div>}
               {canManage && (
                 <div className="row-actions">
@@ -137,23 +138,22 @@ export default function ReceiverPresetsPanel({ receiverId }: { receiverId: strin
           <ul className="check-list" aria-label="Preset disponibili">
             {available.map((preset) => (
               <li key={preset.id}>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={false}
+                <div className="row-actions">
+                  <button
                     aria-label={`Applica ${preset.name}`}
                     disabled={locked}
-                    onChange={() =>
+                    onClick={() =>
                       void save([...appliedIds, preset.id], `Preset «${preset.name}» applicato.`)
                     }
-                  />
+                  >
+                    Applica
+                  </button>
                   <span>
-                    <strong>{preset.name}</strong> — {preset.rules_count} regole
-                    {preset.description && (
-                      <div className="cell-diagnostics">{preset.description}</div>
-                    )}
+                    <strong>{preset.name}</strong> — {preset.rules_count}{" "}
+                    {preset.rules_count === 1 ? "regola" : "regole"}
                   </span>
-                </label>
+                </div>
+                {preset.description && <div className="cell-diagnostics">{preset.description}</div>}
               </li>
             ))}
           </ul>
