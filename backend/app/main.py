@@ -69,7 +69,15 @@ def create_app() -> FastAPI:
         esterna) e un conflitto sui dati della richiesta, non un guasto del
         server. Gli endpoint la prevengono a monte, ma senza questo handler
         ogni caso non previsto uscirebbe come 500 opaco."""
-        logger.warning("integrity_error", error=str(exc.orig))
+        # Solo vincolo e tabella: il messaggio di Postgres (DETAIL) riporta il valore
+        # duplicato, per esempio l'email, e nei log non deve finire. L'eccezione
+        # del driver asyncpg e' la causa di quella che SQLAlchemy incarta in orig.
+        driver = exc.orig.__cause__ or exc.orig
+        logger.warning(
+            "integrity_error",
+            constraint=getattr(driver, "constraint_name", None),
+            table=getattr(driver, "table_name", None),
+        )
         p = Problem(
             status=status.HTTP_409_CONFLICT,
             type=PROBLEM_TYPES["conflict"],
