@@ -356,26 +356,28 @@ async def get_notification_content(
     notification = await _get_notification_or_404(session, claims, notification_id)
 
     if notification.storage_backend == "inline":
-        content = notification.content or ""
-        body = content.encode()
+        body = (notification.content or "").encode()
+
+        async def _inline() -> AsyncIterator[bytes]:
+            yield body
+
+        length, chunks = len(body), _inline()
     else:
-        from app.services.storage import fetch_object
+        from app.services.storage import stream_object
 
         assert notification.storage_key is not None
-        body = await fetch_object(notification.storage_key)
-
-    async def _stream() -> AsyncIterator[bytes]:
-        yield body
+        length, chunks = await stream_object(notification.storage_key)
 
     # Content-Length sui byte che si stanno davvero mandando, non su
     # content_size: quello e la dimensione del corpo ORIGINALE, e per un payload
     # inline normalizzato (UTF-8 non valido sostituito con U+FFFD, byte NUL
     # rimossi, spec 6.2) le due misure non coincidono. Dichiarare la lunghezza
-    # sbagliata fa troncare la risposta o fallire il client.
+    # sbagliata fa troncare la risposta o fallire il client. Per un oggetto la
+    # lunghezza e' quella che MinIO dichiara per il blocco che si sta inviando.
     return StreamingResponse(
-        _stream(),
+        chunks,
         media_type="text/plain",
-        headers={"Content-Length": str(len(body))},
+        headers={"Content-Length": str(length)},
     )
 
 
