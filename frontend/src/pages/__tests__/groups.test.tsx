@@ -266,4 +266,69 @@ describe("GroupsPage", () => {
       `/groups/${fixtureGroups[0].id}`,
     );
   });
+
+  it("la creazione con nome vuoto mostra il messaggio italiano, non il fumetto del browser", async () => {
+    let chiamate = 0;
+    server.use(
+      http.post("/api/v1/groups", () => {
+        chiamate += 1;
+        return HttpResponse.json(fixtureGroups[0], { status: 201 });
+      }),
+    );
+    setRefreshToken("refresh-token-fixture");
+    const user = userEvent.setup();
+    renderWithProviders(<GroupsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Server Produzione")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Crea gruppo" }));
+
+    expect(await screen.findByText("Il nome del gruppo è obbligatorio.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Crea gruppo" }).closest("form")).toHaveAttribute(
+      "novalidate",
+    );
+    expect(chiamate).toBe(0);
+  });
+
+  it("la modifica con nome svuotato mostra il messaggio italiano e non salva", async () => {
+    let chiamate = 0;
+    server.use(
+      http.patch("/api/v1/groups/:groupId", () => {
+        chiamate += 1;
+        return HttpResponse.json(fixtureGroups[0]);
+      }),
+    );
+    setRefreshToken("refresh-token-fixture");
+    const user = userEvent.setup();
+    renderWithProviders(<GroupsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Server Produzione")).toBeInTheDocument();
+    });
+    await user.click(screen.getAllByRole("button", { name: "Modifica gruppo" })[0]);
+    const dialogo = within(screen.getByRole("dialog"));
+    await user.clear(dialogo.getByLabelText("Nome"));
+    await user.click(dialogo.getByRole("button", { name: "Salva" }));
+
+    expect(await dialogo.findByText("Il nome del gruppo è obbligatorio.")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(chiamate).toBe(0);
+  });
+
+  it("T-GRP8 un errore nel caricare i gruppi non dice che non ce ne sono", async () => {
+    server.use(
+      http.get("/api/v1/groups", () =>
+        HttpResponse.json(
+          { type: "/problems/internal", title: "Internal", status: 500, detail: "Boom." },
+          { status: 500 },
+        ),
+      ),
+    );
+    setRefreshToken("refresh-token-fixture");
+    renderWithProviders(<GroupsPage />);
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByText("Nessun gruppo configurato.")).not.toBeInTheDocument();
+  });
 });
