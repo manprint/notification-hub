@@ -668,3 +668,43 @@ async def test_il_legame_gruppo_canale_dice_di_quale_gruppo_parla(
     evento = audit.json()["events"][0]
     assert evento["group_name"] == "Server Produzione"
     assert evento["receiver_name"] is None
+
+
+@pytest.mark.e2e
+async def test_delete_di_un_member_finisce_nell_audit_senza_corpo(
+    api_client, two_tenants, owner_token
+):
+    """Il DELETE ha un attore: l'owner lo vede in audit, senza copiare il corpo.
+    Un viewer riceve 403 e non lascia traccia."""
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    member_id, member_email, member_token = await _user_with_token(
+        api_client, tenant_id, UserRole.MEMBER
+    )
+    member = {"Authorization": f"Bearer {member_token}"}
+    _, _, viewer_token = await _user_with_token(api_client, tenant_id, UserRole.VIEWER)
+    viewer = {"Authorization": f"Bearer {viewer_token}"}
+    group_id = await create_group(tenant_id, f"Gruppo {uuid.uuid4().hex[:6]}")
+    await _join_group(tenant_id, member_id, group_id)
+    slug = uuid.uuid4().hex[:22]
+    await create_receiver(tenant_id, slug, group_id)
+    cancellata = (await api_client.post(f"/ingest/{slug}", content="corpo da non copiare")).json()
+    rifiutata = (await api_client.post(f"/ingest/{slug}", content="resta")).json()
+
+    deleted = await api_client.delete(f"/api/v1/notifications/{cancellata['id']}", headers=member)
+    assert deleted.status_code == 204
+    denied = await api_client.delete(f"/api/v1/notifications/{rifiutata['id']}", headers=viewer)
+    assert denied.status_code == 403
+
+    audit = await api_client.get(
+        "/api/v1/audit/events", params={"resource_id": cancellata["id"]}, headers=owner
+    )
+    eventi = audit.json()["events"]
+    assert [evento["action"] for evento in eventi] == ["notification.deleted"]
+    assert eventi[0]["actor_email"] == member_email
+    assert eventi[0]["resource_label"] is None
+    assert "corpo da non copiare" not in audit.text
+    audit_rifiutata = await api_client.get(
+        "/api/v1/audit/events", params={"resource_id": rifiutata["id"]}, headers=owner
+    )
+    assert audit_rifiutata.json()["events"] == []

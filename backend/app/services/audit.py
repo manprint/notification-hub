@@ -134,7 +134,9 @@ ACTION_MARKED_UNREAD = "notification.marked_unread"
 ACTION_MARKED_VERIFIED = "notification.marked_verified"
 ACTION_MARKED_UNVERIFIED = "notification.marked_unverified"
 ACTION_BULK_MARKED_READ = "notification.bulk_marked_read"
+ACTION_NOTIFICATION_DELETED = "notification.deleted"
 
+# Solo letture e verifiche: la cancellazione sta nell'audit ma non in questa vista.
 NOTIFICATION_STATUS_ACTIONS = (
     ACTION_MARKED_READ,
     ACTION_MARKED_UNREAD,
@@ -396,10 +398,16 @@ def _pending_events(session: Session, ctx: AuditContext) -> list[dict[str, Any]]
                     {**common, "action": action, "changes": {field_key: changes[field_key]}}
                 )
             return
+        if spec.resource_type == "notification" and kind == "deleted":
+            # Il DELETE di un member ha un attore e va in audit come gli altri
+            # fatti. L'etichetta resta fuori: il corpo non si copia nel registro.
+            pending.append(
+                {**common, "action": ACTION_NOTIFICATION_DELETED, "resource_label": None}
+            )
+            return
         if spec.resource_type == "notification":
-            # Le notifiche nascono dall'ingestion, che non ha attore: un
-            # create/delete con contesto di richiesta e' la purge o un replay,
-            # gia' raccontati altrove.
+            # Le notifiche nascono dall'ingestion, che non ha attore: un create
+            # con contesto di richiesta non esiste, e la purge job non ha contesto.
             return
 
         pending.append({**common, "action": f"{spec.resource_type}.{kind}"})
