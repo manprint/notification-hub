@@ -205,11 +205,15 @@ describe("cascata: regole che devono vincere sui pulsanti", () => {
     expect(mobile.some((r) => r.decls["grid-template-columns"] === "minmax(0, 1fr) auto")).toBe(true);
   });
 
-  it("sul riepilogo per gruppo l'intestazione del nome va a capo sotto i 760px, le altre restano su una riga", () => {
-    // Con nowrap l'intestazione "Gruppo / Receiver" fissava la colonna piu' larga
-    // dello schermo e "Non lette" finiva fuori dal riquadro che scorre.
-    expect(declared(".home-groups th", "white-space")).toBe("normal");
-    expect(declared("th", "white-space")).toBe("nowrap");
+  it("le intestazioni restano su una riga su schermo largo e vanno a capo sotto i 760px", () => {
+    // Con nowrap anche su telefono un'intestazione lunga fissava la colonna piu'
+    // larga del dato: il nome accanto si spezzava a meta' parola o "Non lette"
+    // del riepilogo finiva fuori dal riquadro che scorre.
+    const th = rules.filter((r) => r.selectors.includes("th") && "white-space" in r.decls);
+    expect(th.map((r) => r.decls["white-space"])).toEqual(["nowrap", "normal"]);
+    expect(sheetOutsideRoot.indexOf("@media (max-width: 760px)")).toBeLessThan(
+      sheetOutsideRoot.lastIndexOf("white-space: normal"),
+    );
   });
 
   it("il pattern RE2 in tabella ha una larghezza minima: la colonna non si schiaccia a un carattere per riga", () => {

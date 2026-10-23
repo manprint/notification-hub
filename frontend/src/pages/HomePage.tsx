@@ -128,7 +128,7 @@ export default function HomePage() {
             tabella, come negli altri elenchi vuoti. */}
         {data.by_group.length > 0 && (
         <div className="table-wrap">
-          <table className="home-groups">
+          <table>
             <thead>
               <tr>
                 <th className="stats-toggle-col"></th>

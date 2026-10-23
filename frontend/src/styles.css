@@ -1840,9 +1840,11 @@ button.stats-toggle:hover:not(:disabled) {
     padding-inline: var(--space-2);
   }
 
-  /* Sul riepilogo per gruppo l'intestazione del nome va a capo: nowrap la
-     rendeva la colonna più larga dei 343px disponibili e nascondeva "Non lette". */
-  .home-groups th {
+  /* Su telefono le intestazioni vanno a capo fra le parole: con nowrap
+     "Receiver configurati" o "Gruppo / Receiver" fissavano colonne più larghe
+     del dato e schiacciavano il nome accanto, spezzato a metà parola, o
+     spingevano fuori "Non lette" dal riepilogo. */
+  th {
     white-space: normal;
   }
 }
