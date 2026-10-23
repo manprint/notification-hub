@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useSession } from "../hooks/useSession";
 import type { UserRole } from "../api/types";
@@ -7,6 +7,17 @@ interface MenuItem {
   to: string;
   label: string;
   allowed: UserRole[];
+}
+
+/** Un indirizzo lungo senza spazi andrebbe a capo a metà parola: un <wbr> dopo
+ *  @ e punto lascia spezzare solo fra le sue parti. Il testo resta lo stesso. */
+function breakableAddress(address: string) {
+  return address.split(/(?<=[@.])/).map((part, index) => (
+    <Fragment key={index}>
+      {index > 0 && <wbr />}
+      {part}
+    </Fragment>
+  ));
 }
 
 const MENU_ITEMS: MenuItem[] = [
@@ -46,8 +57,8 @@ export default function Layout() {
         <div className="app-brand">
           <strong>NotifyHub</strong>
           {user && (
-            <span className="app-brand-user">
-              {user.email} · {user.tenant_name}
+            <span className="app-brand-user" title={`${user.email} · ${user.tenant_name}`}>
+              {breakableAddress(user.email)} · {user.tenant_name}
             </span>
           )}
         </div>
