@@ -130,7 +130,7 @@ async def _assert_name_free(
 @router.get("/severity-presets", response_model=list[SeverityPresetOut])
 async def list_presets(
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[SeverityPresetOut]:
     tenant_id = uuid.UUID(claims.tid)
 
@@ -174,7 +174,7 @@ async def list_presets(
 @router.get("/severity-presets/catalog", response_model=list[BuiltinPresetOut])
 async def list_builtin_catalog(
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[BuiltinPresetOut]:
     """Il catalogo dei preset predefiniti con l'indicazione di quali sono gia
     installati in questo tenant. Serve alla dashboard per proporre
@@ -202,7 +202,7 @@ async def list_builtin_catalog(
 @router.post("/severity-presets/sync-builtin", response_model=SyncBuiltinPresetsOut)
 async def sync_builtin(
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> SyncBuiltinPresetsOut:
     """Installa i preset del catalogo che mancano a questo tenant.
 
@@ -225,7 +225,7 @@ async def sync_builtin(
 async def create_preset(
     body: SeverityPresetCreate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> SeverityPresetDetailOut:
     tenant_id = uuid.UUID(claims.tid)
     await _assert_name_free(session, tenant_id, body.name)
@@ -246,7 +246,7 @@ async def create_preset(
 async def get_preset(
     preset_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> SeverityPresetDetailOut:
     preset = await _get_preset_or_404(session, uuid.UUID(claims.tid), preset_id)
     return await _detail(session, preset)
@@ -257,7 +257,7 @@ async def update_preset(
     preset_id: uuid.UUID,
     body: SeverityPresetUpdate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> SeverityPresetDetailOut:
     tenant_id = uuid.UUID(claims.tid)
     preset = await _get_preset_or_404(session, tenant_id, preset_id)
@@ -276,7 +276,7 @@ async def update_preset(
 async def delete_preset(
     preset_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     """Elimina il preset. Le regole e le associazioni ai receiver spariscono in
     cascata: i receiver che lo usavano tornano a valutare solo le proprie
@@ -290,7 +290,7 @@ async def delete_preset(
 async def reset_preset(
     preset_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> SeverityPresetDetailOut:
     """Riporta un preset predefinito ai valori del catalogo, scartando le
     modifiche locali."""
@@ -367,7 +367,7 @@ async def create_preset_rule(
     preset_id: uuid.UUID,
     body: SeverityPresetRuleCreate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> SeverityPresetRuleOut:
     tenant_id = uuid.UUID(claims.tid)
     preset = await _get_preset_or_404(session, tenant_id, preset_id)
@@ -420,7 +420,7 @@ async def reorder_preset_rules(
     preset_id: uuid.UUID,
     body: SeverityPresetRuleReorderIn,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[SeverityPresetRuleOut]:
     """Rinumera le regole del preset nell'ordine dato.
 
@@ -476,7 +476,7 @@ async def update_preset_rule(
     rule_id: uuid.UUID,
     body: SeverityPresetRuleUpdate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> SeverityPresetRuleOut:
     tenant_id = uuid.UUID(claims.tid)
     rule = await _get_preset_rule_or_404(session, tenant_id, rule_id)
@@ -509,7 +509,7 @@ async def update_preset_rule(
 async def delete_preset_rule(
     rule_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     rule = await _get_preset_rule_or_404(session, uuid.UUID(claims.tid), rule_id)
     await session.delete(rule)

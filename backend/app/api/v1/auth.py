@@ -405,7 +405,7 @@ async def refresh(body: RefreshIn) -> TokenPairOut:
 async def logout(
     body: LogoutIn,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     # Stesso ordine di refresh e rimozione (tenant, utente, token). Il lock
     # sull'utente attende le rotazioni in corso: i successori che ne escono
@@ -476,7 +476,7 @@ async def logout(
 @router.get("/me", response_model=MeOut)
 async def me(  # noqa: B008
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> MeOut:
     user_result = await session.execute(select(User).where(User.id == uuid.UUID(claims.sub)))
     user = user_result.scalar_one()
@@ -530,7 +530,7 @@ async def create_invitation(
     body: InvitationIn,
     request: Request,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> InvitationOut:
     if body.role == UserRole.OWNER and claims.role != UserRole.OWNER:
         raise Problem(
@@ -582,7 +582,7 @@ async def create_invitation(
 @invitations_router.get("", response_model=list[InvitationSummaryOut])
 async def list_invitations(
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[InvitationSummaryOut]:
     result = await session.execute(
         select(Invitation)
@@ -599,7 +599,7 @@ async def list_invitations(
 async def revoke_invitation(
     invitation_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     result = await session.execute(
         select(Invitation).where(

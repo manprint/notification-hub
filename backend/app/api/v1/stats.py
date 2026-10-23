@@ -23,7 +23,7 @@ router = APIRouter(prefix="/stats", tags=["stats"])
 @router.get("/summary", response_model=StatsSummaryOut)
 async def stats_summary(
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> StatsSummaryOut:
     tenant_id = uuid.UUID(claims.tid)
 

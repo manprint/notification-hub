@@ -502,6 +502,7 @@ Un cron che va in timeout di rete ritenta, e senza deduplica genera notifiche do
 - **prima occorrenza** → ingestion normale, risposta `201`, nel valore della chiave si memorizza l'id della notifica creata;
 - **occorrenza ripetuta entro la finestra** → nessuna scrittura, risposta **`200`** con lo stesso corpo della `201` originale (`{"id": …, "severity": …, "forwarded_to": …}`) e header `Idempotent-Replay: true`;
 - header assente → nessuna deduplica, comportamento identico a oggi.
+- se il salvataggio del replay fallisce dopo un commit riuscito (degrado, log `idempotency_store_failed`), la chiave resta `in elaborazione` fino alla scadenza della finestra: un retry con lo stesso `X-Request-Id` in quel tempo riceve `409`, non il replay. Nessun doppione; la risposta della prima occorrenza resta `201`.
 
 La finestra di 5 minuti copre il retry di rete senza impedire l'invio legittimo dello stesso messaggio più tardi (un check di backup che gira ogni ora manda la stessa riga, e va salvata ogni volta).
 
@@ -750,6 +751,8 @@ Le sotto-risorse sono identificate da `channel_id`: `PUT`/`DELETE` su una collez
 | GET | `/api/v1/stats/summary` | Conteggi per severity / non lette e albero gruppo → receiver (`by_group[].receivers[]`, con `total` e `unread_count` per receiver, compresi quelli a zero), per la home della dashboard |
 
 La lista **non** restituisce il `content` completo ma i primi 500 caratteri di `content_preview` + `content_size`.
+
+Le date `from` e `to` (liste delle notifiche ed eventi di audit, export compreso) senza indicazione di fuso si interpretano come UTC, non come ora locale del server: lo stesso filtro seleziona le stesse righe qualunque sia il fuso del container.
 
 Dentro un gruppo la dashboard consuma questa lista **un receiver alla volta** (`receiver_id`), una tabella per receiver del gruppo, ciascuna col proprio cursore: con un cursore unico di gruppo un receiver molto attivo riempirebbe la pagina e gli altri resterebbero vuoti pur avendo notifiche piu' vecchie. Nella tabella il contenuto non viene stampato: la cella porta un link *Apri* al dettaglio. `content_preview` resta comunque nella risposta, perche' e' parte del contratto dell'API e non un dettaglio della dashboard.
 

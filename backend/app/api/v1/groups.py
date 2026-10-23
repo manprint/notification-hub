@@ -114,7 +114,7 @@ async def _notification_counts(
 @router.get("", response_model=list[GroupOut])
 async def list_groups(
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[GroupOut]:
     """member e viewer vedono solo i gruppi a cui sono associati: senza questo
     filtro, togliere l'associazione a un utente non gli toglieva il gruppo
@@ -137,7 +137,7 @@ async def list_groups(
 async def create_group(
     body: GroupCreate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> GroupOut:
     tenant_id = uuid.UUID(claims.tid)
 
@@ -156,7 +156,7 @@ async def create_group(
 async def get_group(
     group_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> GroupOut:
     group = await _get_group_or_404(session, uuid.UUID(claims.tid), group_id)
     await assert_group_access(session, claims, group_id, write=False)
@@ -169,7 +169,7 @@ async def update_group(
     group_id: uuid.UUID,
     body: GroupUpdate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> GroupOut:
     group = await _get_group_or_404(session, uuid.UUID(claims.tid), group_id)
 
@@ -191,7 +191,7 @@ async def delete_group(
     group_id: uuid.UUID,
     confirm: str = Query(...),  # noqa: B008
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     """Cascade su receiver, notifiche, delivery e oggetti MinIO (via trigger),
     confermata digitando il nome esatto del gruppo (spec 9.3): niente
@@ -214,7 +214,7 @@ async def delete_group(
 async def list_group_channels(
     group_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[GroupChannelBindingOut]:
     tenant_id = uuid.UUID(claims.tid)
     await _get_group_or_404(session, tenant_id, group_id)
@@ -235,7 +235,7 @@ async def bind_group_channel(
     group_id: uuid.UUID,
     body: GroupChannelBindingCreate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> GroupChannelBindingOut:
     """Idempotente: un secondo POST sulla stessa coppia (gruppo, canale)
     aggiorna il binding esistente invece di violare il vincolo di unicita e
@@ -308,7 +308,7 @@ async def unbind_group_channel(
     group_id: uuid.UUID,
     channel_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     result = await session.execute(
         select(GroupChannelBinding).where(

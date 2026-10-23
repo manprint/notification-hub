@@ -127,7 +127,7 @@ async def _get_receiver_or_404(
 @router.get("/channels", response_model=list[DeliveryChannelOut])
 async def list_channels(
     claims: AccessClaims = Depends(require_member),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[DeliveryChannelOut]:
     result = await session.execute(
         select(DeliveryChannel)
@@ -141,7 +141,7 @@ async def list_channels(
 async def create_channel(
     body: DeliveryChannelCreate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> DeliveryChannelOut:
     _validate_webhook_url(body.webhook_url)
     channel = DeliveryChannel(
@@ -161,7 +161,7 @@ async def create_channel(
 async def get_channel(
     channel_id: uuid.UUID,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> DeliveryChannelOut:
     channel = await _get_channel_or_404(session, uuid.UUID(claims.tid), channel_id)
     return _channel_out(channel)
@@ -172,7 +172,7 @@ async def update_channel(
     channel_id: uuid.UUID,
     body: DeliveryChannelUpdate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> DeliveryChannelOut:
     channel = await _get_channel_or_404(session, uuid.UUID(claims.tid), channel_id)
     if body.name is not None:
@@ -190,7 +190,7 @@ async def update_channel(
 async def delete_channel(
     channel_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     """Rimuove prima binding, override e storico delivery del canale: le FK
     verso delivery_channels non hanno ON DELETE, quindi senza questa pulizia
@@ -214,7 +214,7 @@ async def delete_channel(
 async def test_channel(
     channel_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> DeliveryChannelTestOut:
     channel = await _get_channel_or_404(session, uuid.UUID(claims.tid), channel_id)
     webhook_url = decrypt_secret(channel.webhook_url)
@@ -239,7 +239,7 @@ async def update_group_channel_binding(
     channel_id: uuid.UUID,
     body: GroupChannelBindingUpdate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> GroupChannelBindingOut:
     result = await session.execute(
         select(GroupChannelBinding).where(
@@ -268,7 +268,7 @@ async def update_group_channel_binding(
 async def list_receiver_overrides(
     receiver_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[ReceiverChannelOverrideOut]:
     tenant_id = uuid.UUID(claims.tid)
     receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
@@ -304,7 +304,7 @@ async def create_receiver_override(
     body: ReceiverChannelOverrideCreate,
     response: Response,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> ReceiverChannelOverrideOut:
     """Idempotente sulla coppia (receiver, canale): un secondo salvataggio
     aggiorna l'override esistente e risponde 200. Prima violava il vincolo di
@@ -373,7 +373,7 @@ async def update_receiver_override(
     channel_id: uuid.UUID,
     body: ReceiverChannelOverrideUpdate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> ReceiverChannelOverrideOut:
     tenant_id = uuid.UUID(claims.tid)
     result = await session.execute(
@@ -409,7 +409,7 @@ async def delete_receiver_override(
     receiver_id: uuid.UUID,
     channel_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     tenant_id = uuid.UUID(claims.tid)
     result = await session.execute(
@@ -468,7 +468,7 @@ async def list_deliveries(
     limit: int = Query(default=100, ge=1, le=500),  # noqa: B008
     cursor: str | None = Query(default=None),  # noqa: B008
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> DeliveryListOut:
     """Storico degli inoltri verso i canali, per diagnosticare i fallimenti
     (spec 9.4). Ogni riga porta con se il canale di destinazione, il receiver
@@ -528,7 +528,7 @@ async def list_deliveries(
 async def retry_delivery(
     delivery_id: uuid.UUID,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> DeliveryOut:
     """Ri-accoda una delivery `dead`: azzera attempts, last_error e locked_at
     (spec 4.3, macchina a stati: dead -> pending solo per questa via)."""

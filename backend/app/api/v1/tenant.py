@@ -19,7 +19,7 @@ router = APIRouter(prefix="/tenant", tags=["tenant"])
 @router.get("", response_model=TenantOut)
 async def get_tenant(
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> TenantOut:
     result = await session.execute(select(Tenant).where(Tenant.id == uuid.UUID(claims.tid)))
     tenant = result.scalar_one()
@@ -38,7 +38,7 @@ UNLIMITED_WHEN_NULL = (
 async def update_tenant(
     body: TenantUpdate,
     claims: AccessClaims = Depends(require_owner),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> TenantOut:
     tenant_id = uuid.UUID(claims.tid)
     # FOR UPDATE: un receiver creato o modificato in parallelo legge il cap sotto

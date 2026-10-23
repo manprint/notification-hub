@@ -123,6 +123,12 @@ async def db(  # noqa: B008
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     _audit: None = Depends(audit_scope),  # noqa: B008
 ) -> AsyncIterator[AsyncSession]:
+    """Sessione della richiesta, con commit a fine richiesta.
+
+    Ogni uso dichiara `Depends(db, scope="function")`: con lo scope di default
+    FastAPI chiude questa dipendenza dopo l'invio della risposta, e un errore del
+    commit arriverebbe al client come 2xx gia partito.
+    """
     async with tenant_session(uuid.UUID(claims.tid)) as session:
         yield session
 

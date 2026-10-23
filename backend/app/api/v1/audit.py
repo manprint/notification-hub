@@ -26,6 +26,7 @@ from starlette.responses import StreamingResponse
 from app.api.deps import db, require_admin
 from app.core.errors import PROBLEM_TYPES, Problem
 from app.core.security import AccessClaims
+from app.db.session import tenant_session
 from app.db.types import AuditOutcome
 from app.models.audit_event import AuditEvent
 from app.schemas.audit import AuditEventListOut, AuditEventOut
@@ -237,7 +238,7 @@ async def list_audit_events(
     cursor: str | None = Query(default=None),  # noqa: B008
     limit: int = Query(default=50, ge=1, le=200),  # noqa: B008
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> AuditEventListOut:
     """Paginazione a cursore su (occurred_at, id) DESC, come le notifiche."""
     query = _base_query(
@@ -263,7 +264,7 @@ async def list_notification_status_events(
     cursor: str | None = Query(default=None),  # noqa: B008
     limit: int = Query(default=50, ge=1, le=200),  # noqa: B008
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> AuditEventListOut:
     """Vista filtrata sulle sole letture e verifiche: stessa tabella, stessa
     ritenzione, stessa verita' (decisione D5 del piano)."""
@@ -295,7 +296,7 @@ async def export_audit_events(
     from_: UtcDatetime | None = Query(default=None, alias="from"),  # noqa: B008
     to: UtcDatetime | None = Query(default=None),  # noqa: B008
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> StreamingResponse:
     """Esporta cio' che i filtri selezionano, fino a EXPORT_MAX_ROWS righe."""
     query = _base_query(
@@ -326,6 +327,7 @@ async def export_audit_events(
             extra={"max_rows": EXPORT_MAX_ROWS},
         )
 
+    tenant_id = uuid.UUID(claims.tid)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")  # noqa: DTZ005
     if format == "json":
         media_type = "application/json"
@@ -334,7 +336,7 @@ async def export_audit_events(
         media_type = "text/csv"
         filename = f"audit-{stamp}.csv"
 
-    async def _stream() -> AsyncIterator[bytes]:
+    async def _righe(session: AsyncSession) -> AsyncIterator[bytes]:
         # Le righe escono a blocchi in ordine (occurred_at, id) DESC, con un
         # cursore sull'ultima di ciascun blocco: l'export intero non sta mai in
         # memoria. Il blocco e' piccolo perche' una riga puo' portare fino a
@@ -385,6 +387,14 @@ async def export_audit_events(
 
         if format == "json":
             yield b"]"
+
+    async def _stream() -> AsyncIterator[bytes]:
+        # La sessione della richiesta chiude (e fa il commit) prima che il corpo parta,
+        # perche' `db` ha scope "function": lo streaming legge con una sessione sua,
+        # sullo stesso tenant, e cosi' RLS resta attiva per tutta la lettura.
+        async with tenant_session(tenant_id) as sessione:
+            async for blocco in _righe(sessione):
+                yield blocco
 
     return StreamingResponse(
         _stream(),
