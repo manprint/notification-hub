@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -234,12 +234,14 @@ async def list_group_channels(
 async def bind_group_channel(
     group_id: uuid.UUID,
     body: GroupChannelBindingCreate,
+    response: Response,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
     session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> GroupChannelBindingOut:
     """Idempotente: un secondo POST sulla stessa coppia (gruppo, canale)
     aggiorna il binding esistente invece di violare il vincolo di unicita e
-    far uscire un 500 dal database."""
+    far uscire un 500 dal database. Come l'override di canale, l'aggiornamento
+    risponde 200 e la creazione 201."""
     tenant_id = uuid.UUID(claims.tid)
     await _get_group_or_404(session, tenant_id, group_id)
 
@@ -266,6 +268,7 @@ async def bind_group_channel(
     )
     binding = existing_result.scalar_one_or_none()
     if binding is not None:
+        response.status_code = 200
         binding.min_severity = body.min_severity
         binding.enabled = body.enabled
     else:
@@ -297,6 +300,7 @@ async def bind_group_channel(
                 # Non e' una coppia gia' inserita: il canale e' sparito nel frattempo
                 # (violazione di FK). Si rilancia l'errore, che diventa un 409.
                 raise
+            response.status_code = 200
             binding.min_severity = body.min_severity
             binding.enabled = body.enabled
     await session.flush()
