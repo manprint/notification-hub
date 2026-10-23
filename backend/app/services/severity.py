@@ -33,6 +33,12 @@ SCAN_THREAD_THRESHOLD_CHARS = 256 * 1024
 # singola ingestione.
 COMPILED_PATTERN_CACHE_SIZE = 512
 
+# Limiti delle colonne numeriche degli header di esecuzione (exit_code INTEGER,
+# duration_ms BIGINT): fuori da questi intervalli l'header viene ignorato (I-7).
+_INT32_MIN = -(2**31)
+_INT32_MAX = 2**31 - 1
+_INT64_MAX = 2**63 - 1
+
 
 class InvalidPatternError(ValueError):
     """Sollevato quando un pattern non e compilabile da RE2 (spec: 422 in creazione)."""
@@ -54,6 +60,10 @@ def compile_pattern(pattern: str, case_insensitive: bool) -> Any:
     RE2 sono immutabili e riusabili fra richieste e fra thread. Un pattern non
     valido solleva e non entra in cache, quindi la validazione resta esatta.
     """
+    # Postgres non accetta il byte NUL in una colonna text: un pattern che lo
+    # contiene verrebbe rifiutato in fase di INSERT con un 500 opaco.
+    if "\x00" in pattern:
+        raise InvalidPatternError("il pattern non può contenere il carattere NUL")
     effective = f"(?i){pattern}" if case_insensitive else pattern
     try:
         return _compile_cached(effective)
@@ -119,9 +129,12 @@ def parse_exit_code(value: str | None) -> int | None:
     if value is None:
         return None
     try:
-        return int(value.strip())
+        parsed = int(value.strip())
     except (ValueError, AttributeError):
         return None
+    # Fuori dall'intero a 32 bit della colonna `exit_code`: scartato come un valore
+    # non numerico, altrimenti l'INSERT fallisce e la richiesta risponde 500.
+    return parsed if _INT32_MIN <= parsed <= _INT32_MAX else None
 
 
 def parse_phase(value: str | None) -> NotificationPhase | None:
@@ -159,7 +172,8 @@ def parse_duration_ms(value: str | None) -> int | None:
         parsed = int(value.strip())
     except (ValueError, AttributeError):
         return None
-    return parsed if parsed >= 0 else None
+    # Oltre il BIGINT della colonna `duration_ms` l'INSERT fallirebbe: scartato.
+    return parsed if 0 <= parsed <= _INT64_MAX else None
 
 
 def duration_exceeds_threshold(

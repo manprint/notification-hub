@@ -7,6 +7,8 @@ import ReceiverDetailPage from "../ReceiverDetailPage";
 import { setRefreshToken } from "../../api/client";
 import { copyText } from "../../lib/clipboard";
 import { fixtureReceiver } from "../../api/mocks/handlers";
+import { server } from "../../api/mocks/server";
+import { HttpResponse, http } from "msw";
 import { renderWithProviders } from "./testUtils";
 
 vi.mock("../../lib/clipboard", () => ({
@@ -47,9 +49,9 @@ describe("GroupDetailPage", () => {
     const slugCell = screen.getByText(slug, { selector: "code" });
     expect(slugCell).toHaveAttribute("title", slug);
 
-    await user.click(screen.getByRole("button", { name: "Copia" }));
+    await user.click(screen.getByRole("button", { name: "Copia slug" }));
 
-    expect(copyText).toHaveBeenCalledWith(fixtureReceiver.ingest_url);
+    expect(copyText).toHaveBeenCalledWith(fixtureReceiver.slug);
     expect(await screen.findByText("Copiato!")).toBeInTheDocument();
   });
 
@@ -69,5 +71,65 @@ describe("GroupDetailPage", () => {
         screen.getByRole("heading", { name: "Backup notturno" }),
       ).toBeInTheDocument();
     });
+  });
+  it("T-GRP8 il conteggio e il vuoto non mentono mentre i receiver caricano o non si leggono", async () => {
+    let rispondi: () => void = () => undefined;
+    server.use(
+      http.get("/api/v1/groups/g1/receivers", async () => {
+        await new Promise<void>((resolve) => {
+          rispondi = resolve;
+        });
+        return HttpResponse.json([]);
+      }),
+    );
+    renderGroupDetail();
+
+    expect(await screen.findByText("Caricamento…")).toBeInTheDocument();
+    expect(screen.queryByText(/configurati/)).not.toBeInTheDocument();
+
+    rispondi();
+    expect(await screen.findByText("Nessun receiver in questo gruppo.")).toBeInTheDocument();
+    expect(screen.getByText("0 configurati")).toBeInTheDocument();
+  });
+
+  it("T-GRP9 se i receiver non si leggono non dice che il gruppo è vuoto", async () => {
+    server.use(
+      http.get("/api/v1/groups/g1/receivers", () =>
+        HttpResponse.json(
+          { type: "/problems/internal", title: "Internal", status: 500, detail: "Boom." },
+          { status: 500 },
+        ),
+      ),
+    );
+    renderGroupDetail();
+
+    expect(await screen.findByText(/Elenco non disponibile/)).toBeInTheDocument();
+    expect(screen.queryByText("Nessun receiver in questo gruppo.")).not.toBeInTheDocument();
+    expect(screen.queryByText(/configurati/)).not.toBeInTheDocument();
+  });
+
+  it("T-GRP10 un gruppo non visibile tiene ritorno e titolo, e dice 'gruppo' non 'receiver'", async () => {
+    const negato = {
+      type: "/problems/forbidden",
+      title: "Forbidden",
+      status: 403,
+      detail: "Not a member of this receiver group.",
+    };
+    server.use(
+      http.get("/api/v1/groups/g1", () => HttpResponse.json(negato, { status: 403 })),
+      http.get("/api/v1/groups/g1/receivers", () => HttpResponse.json(negato, { status: 403 })),
+    );
+    setRefreshToken("refresh-token-fixture");
+    renderGroupDetail();
+
+    const avviso = await screen.findByRole("alert");
+    expect(avviso).toHaveTextContent("Non fai parte di questo gruppo.");
+    expect(avviso).not.toHaveTextContent("receiver");
+    expect(screen.getByRole("link", { name: "← Torna ai gruppi" })).toHaveAttribute(
+      "href",
+      "/groups",
+    );
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Gruppo");
+    expect(screen.queryByText("Receiver del gruppo")).not.toBeInTheDocument();
   });
 });

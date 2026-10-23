@@ -7,7 +7,7 @@ resta async, il worker no, per evitare un event loop per task.
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from app.core.crypto import decrypt_secret
 from app.core.logging import get_logger
@@ -34,11 +34,21 @@ def dispatch_delivery(delivery_id: str, tenant_id: str) -> None:
     # messaggio. Transazione breve: non tiene un lock durante la chiamata
     # di rete.
     with tenant_session_sync(tid) as session:
+        due_at = datetime.now(UTC)
         delivery = session.execute(
             select(Delivery)
             .where(
                 Delivery.id == did,
-                Delivery.status.in_((DeliveryStatus.PENDING, DeliveryStatus.FAILED)),
+                or_(
+                    Delivery.status == DeliveryStatus.PENDING,
+                    # Una `failed` rispetta il backoff (o il Retry-After): un duplicato
+                    # accodato da reconcile prima della scadenza non deve colpire il
+                    # webhook. Le `pending` no: le accoda il commit, senza attesa.
+                    and_(
+                        Delivery.status == DeliveryStatus.FAILED,
+                        Delivery.next_attempt_at <= due_at,
+                    ),
+                ),
             )
             .with_for_update(skip_locked=True)
         ).scalar_one_or_none()

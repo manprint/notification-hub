@@ -16,6 +16,25 @@ test_failed=0
 # processo bash. L'interpolazione di docker compose legge questa variabile dal
 # proprio ambiente prima di lanciare i container (vedi docker-compose.yml).
 export NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST="hooks.slack.com,chat.googleapis.com,mock-webhook"
+# Il mock interno parla http: e' l'unico host ammesso senza https (vedi config.py).
+export NOTIFYHUB_WEBHOOK_INSECURE_HTTP_HOSTS="mock-webhook"
+
+# Lo smoke test ha un suo progetto compose e le sue porte. Lo stack di sviluppo
+# (make up) usa lo stesso docker-compose.yml: il down -v qui sotto riguarda solo
+# questo progetto, e porte diverse permettono di tenere accesi entrambi.
+SMOKE_PROJECT="${SMOKE_PROJECT:-notifyhub-smoke}"
+SMOKE_HTTP_PORT="${SMOKE_HTTP_PORT:-18080}"
+SMOKE_WEBHOOK_PORT="${SMOKE_WEBHOOK_PORT:-18899}"
+SMOKE_MINIO_CONSOLE_PORT="${SMOKE_MINIO_CONSOLE_PORT:-19001}"
+BASE="http://localhost:${SMOKE_HTTP_PORT}"
+WEBHOOK_BASE="http://localhost:${SMOKE_WEBHOOK_PORT}"
+export HTTP_PORT="${SMOKE_HTTP_PORT}"
+export SMOKE_WEBHOOK_PORT
+export MINIO_CONSOLE_PORT="${SMOKE_MINIO_CONSOLE_PORT}"
+# Rete propria: la subnet fissa del compose di sviluppo non puo' esistere due volte.
+export NOTIFYHUB_SUBNET="${SMOKE_SUBNET:-172.30.251.0/24}"
+export NOTIFYHUB_NGINX_IP="${SMOKE_NGINX_IP:-172.30.251.10}"
+COMPOSE=(docker compose -p "${SMOKE_PROJECT}" --profile smoke)
 
 assert_eq() {
     local expected="$1"
@@ -51,16 +70,56 @@ assert_http_code() {
     fi
 }
 
+# Controlli che non passano da assert_*: anche il loro esito pesa sul risultato,
+# altrimenti una regressione finisce in SMOKE OK.
+check_idempotent_replay() {
+    if [ -z "$1" ]; then
+        echo -e "${COLOR_RED}✗${COLOR_NC} Response missing Idempotent-Replay header"
+        test_failed=$((test_failed+1))
+    else
+        echo -e "${COLOR_GREEN}✓${COLOR_NC} Idempotent replay confirmed"
+        test_passed=$((test_passed+1))
+    fi
+}
+
+check_storage_backend() {
+    if [ "$1" != "object" ]; then
+        echo -e "${COLOR_RED}✗${COLOR_NC} Large payload should use object storage, got: $1"
+        test_failed=$((test_failed+1))
+    else
+        echo -e "${COLOR_GREEN}✓${COLOR_NC} Large payload stored in object storage"
+        test_passed=$((test_passed+1))
+    fi
+}
+
+# Riepilogo finale: e' l'ultimo comando dello script, il suo codice e' quello
+# dello smoke test.
+riepilogo() {
+    echo ""
+    echo "======================================"
+    echo "Smoke test results:"
+    echo "  Passed: $test_passed"
+    echo "  Failed: $test_failed"
+    echo "======================================"
+
+    if [ "$test_failed" -eq 0 ]; then
+        echo -e "${COLOR_GREEN}SMOKE OK${COLOR_NC}"
+        return 0
+    fi
+    echo -e "${COLOR_RED}SMOKE FAILED${COLOR_NC}"
+    return 1
+}
+
 echo "Step 1: Starting stack..."
-docker compose --profile smoke down -v 2>/dev/null || true
-docker compose --profile smoke up -d
+"${COMPOSE[@]}" down -v 2>/dev/null || true
+"${COMPOSE[@]}" up -d
 echo "  Waiting for services to be ready..."
 
 # Wait for readyz endpoint
 max_retries=90
 retry=0
 while [ $retry -lt $max_retries ]; do
-    if curl -s -f http://localhost/readyz >/dev/null 2>&1; then
+    if curl -s -f ${BASE}/readyz >/dev/null 2>&1; then
         echo "  API ready"
         break
     fi
@@ -70,7 +129,7 @@ done
 
 if [ $retry -eq $max_retries ]; then
     echo -e "${COLOR_RED}✗${COLOR_NC} Services did not become ready within 90 seconds"
-    docker compose --profile smoke logs
+    "${COMPOSE[@]}" logs
     exit 1
 fi
 
@@ -83,9 +142,9 @@ echo "Step 2: Bootstrap tenant..."
 # verificata). Da quando API e CLI condividono la validazione (app/core/emails.py)
 # anche "@...local" e "@...test" sarebbero accettati.
 USER_EMAIL="owner@acme-notifyhub-smoke.io"
-USER_PASSWORD="password123"
+USER_PASSWORD="smoke-password-123"
 
-bootstrap_output=$(docker compose run --rm -T migrate \
+bootstrap_output=$("${COMPOSE[@]}" run --rm -T migrate \
     python -m app.cli bootstrap \
         --tenant-name "Test Tenant" \
         --email "$USER_EMAIL" \
@@ -108,9 +167,9 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} Tenant bootstrapped"
 # Step 3: Login
 echo ""
 echo "Step 3: Login..."
-login_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/api/v1/auth/login \
+login_response=$(curl -s -w "\n%{http_code}" -X POST ${BASE}/api/v1/auth/login \
     -H "Content-Type: application/json" \
-    -d "{\"email\": \"$USER_EMAIL\", \"password\": \"password123\"}")
+    -d "{\"email\": \"$USER_EMAIL\", \"password\": \"$USER_PASSWORD\"}")
 
 http_code=$(echo "$login_response" | tail -1)
 body=$(echo "$login_response" | head -n -1)
@@ -129,7 +188,7 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} Login successful, access_token obtained"
 # Step 4: Create group
 echo ""
 echo "Step 4: Create group..."
-group_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/api/v1/groups \
+group_response=$(curl -s -w "\n%{http_code}" -X POST ${BASE}/api/v1/groups \
     -H "Authorization: Bearer $access_token" \
     -H "Content-Type: application/json" \
     -d '{"name": "Server Produzione", "description": "Production servers"}')
@@ -151,7 +210,7 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} Group created (ID: $group_id)"
 # Step 5: Create receiver
 echo ""
 echo "Step 5: Create receiver..."
-receiver_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/api/v1/groups/$group_id/receivers \
+receiver_response=$(curl -s -w "\n%{http_code}" -X POST ${BASE}/api/v1/groups/$group_id/receivers \
     -H "Authorization: Bearer $access_token" \
     -H "Content-Type: application/json" \
     -d '{"name": "Backup notturno"}')
@@ -173,8 +232,8 @@ if [ "$slug_token" = "$receiver_slug" ] || [ "${#slug_token}" -ne 22 ]; then
     exit 1
 fi
 
-if [ "$receiver_ingest_url" != "http://localhost/ingest/$receiver_slug" ]; then
-    echo -e "${COLOR_RED}✗${COLOR_NC} ingest_url should be http://localhost/ingest/$receiver_slug, got $receiver_ingest_url"
+if [ "$receiver_ingest_url" != "${BASE}/ingest/$receiver_slug" ]; then
+    echo -e "${COLOR_RED}✗${COLOR_NC} ingest_url should be ${BASE}/ingest/$receiver_slug, got $receiver_ingest_url"
     exit 1
 fi
 
@@ -188,7 +247,7 @@ echo "Step 5b: Download wrapper script..."
 # scrivendo un corpo grande (lo script e' oltre 20KB), echo muore di SIGPIPE e
 # la pipeline risulta fallita anche se il testo c'era.
 script_response=$(curl -s -w "\n%{http_code}" -D /tmp/notifyhub-smoke-headers \
-    http://localhost/api/v1/receivers/$receiver_id/wrapper-script \
+    ${BASE}/api/v1/receivers/$receiver_id/wrapper-script \
     -H "Authorization: Bearer $access_token")
 http_code=$(echo "$script_response" | tail -1)
 script_body=$(echo "$script_response" | head -n -1)
@@ -205,7 +264,8 @@ if ! grep -qF "SLUG=\"\${NOTIFYHUB_SLUG:-$receiver_slug}\"" <<<"$script_body"; t
     exit 1
 fi
 
-if ! grep -qF 'URL="${NOTIFYHUB_URL:-http://localhost}"' <<<"$script_body"; then
+# URL pubblica di loopback in .env: vince quella della richiesta, porta compresa.
+if ! grep -qF "URL=\"\${NOTIFYHUB_URL:-$BASE}\"" <<<"$script_body"; then
     echo -e "${COLOR_RED}✗${COLOR_NC} Wrapper script should carry the public base URL"
     exit 1
 fi
@@ -223,7 +283,7 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} Wrapper script downloaded, precompiled and
 # Step 5c: ping di avvio (X-Phase: start)
 echo ""
 echo "Step 5c: start ping..."
-phase_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/ingest/$receiver_slug \
+phase_response=$(curl -s -w "\n%{http_code}" -X POST ${BASE}/ingest/$receiver_slug \
     -H "X-Phase: start" -H "X-Severity: debug" \
     --data "[notifyhub] job=smoke avvio")
 http_code=$(echo "$phase_response" | tail -1)
@@ -239,7 +299,7 @@ fi
 
 # Il ping di avvio non e' una conclusione: deve muovere last_start_at e lasciare
 # ferma la scadenza dell'attesa (last_notification_at).
-receiver_state=$(curl -s http://localhost/api/v1/receivers/$receiver_id \
+receiver_state=$(curl -s ${BASE}/api/v1/receivers/$receiver_id \
     -H "Authorization: Bearer $access_token")
 if [ "$(echo "$receiver_state" | jq -r '.last_start_at // "null"')" = "null" ]; then
     echo -e "${COLOR_RED}✗${COLOR_NC} Start ping should update last_start_at"
@@ -256,7 +316,7 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} Start ping recorded as a start, not as a c
 echo ""
 echo "Step 6: Create delivery channel..."
 
-channel_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/api/v1/channels \
+channel_response=$(curl -s -w "\n%{http_code}" -X POST ${BASE}/api/v1/channels \
     -H "Authorization: Bearer $access_token" \
     -H "Content-Type: application/json" \
     -d '{"name": "Slack #ops", "type": "slack", "webhook_url": "http://mock-webhook:8899/hook"}')
@@ -282,7 +342,7 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} Channel created (webhook masked in respons
 # Step 7: Bind group to channel
 echo ""
 echo "Step 7: Bind group to channel..."
-binding_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/api/v1/groups/$group_id/channels \
+binding_response=$(curl -s -w "\n%{http_code}" -X POST ${BASE}/api/v1/groups/$group_id/channels \
     -H "Authorization: Bearer $access_token" \
     -H "Content-Type: application/json" \
     -d "{\"channel_id\": \"$channel_id\", \"min_severity\": \"error\"}")
@@ -295,7 +355,7 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} Channel bound to group with min_severity=e
 # Step 8: Create severity rule
 echo ""
 echo "Step 8: Create severity rule..."
-rule_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/api/v1/receivers/$receiver_id/severity-rules \
+rule_response=$(curl -s -w "\n%{http_code}" -X POST ${BASE}/api/v1/receivers/$receiver_id/severity-rules \
     -H "Authorization: Bearer $access_token" \
     -H "Content-Type: application/json" \
     -d '{"priority": 0, "pattern": "FALL(ITO|IMENT)|ERROR", "severity": "error"}')
@@ -308,7 +368,7 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} Severity rule created"
 # Step 9: First ingestion (should match rule)
 echo ""
 echo "Step 9: Ingestion with pattern match..."
-ingest_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/ingest/$receiver_slug \
+ingest_response=$(curl -s -w "\n%{http_code}" -X POST ${BASE}/ingest/$receiver_slug \
     -H "X-Request-Id: smoke-1" \
     -d "Backup FALLITO: disco pieno su /var")
 
@@ -330,7 +390,7 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} Notification ingested and matched rule"
 # Step 10: Repeat ingestion (should be idempotent)
 echo ""
 echo "Step 10: Repeat ingestion (idempotency check)..."
-ingest_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/ingest/$receiver_slug \
+ingest_response=$(curl -s -w "\n%{http_code}" -X POST ${BASE}/ingest/$receiver_slug \
     -H "X-Request-Id: smoke-1" \
     -d "Backup FALLITO: disco pieno su /var")
 
@@ -339,20 +399,16 @@ body=$(echo "$ingest_response" | head -n -1)
 
 assert_http_code 200 "$http_code" "Repeat ingestion should return 200"
 
-idempotent_header=$(curl -s -i -X POST http://localhost/ingest/$receiver_slug \
+idempotent_header=$(curl -s -i -X POST ${BASE}/ingest/$receiver_slug \
     -H "X-Request-Id: smoke-1" \
     -d "Backup FALLITO: disco pieno su /var" | grep -i "Idempotent-Replay" || echo "")
 
-if [ -z "$idempotent_header" ]; then
-    echo -e "${COLOR_RED}✗${COLOR_NC} Response missing Idempotent-Replay header"
-else
-    echo -e "${COLOR_GREEN}✓${COLOR_NC} Idempotent replay confirmed"
-fi
+check_idempotent_replay "$idempotent_header"
 
 # Step 11: Ingestion on non-existent slug
 echo ""
 echo "Step 11: Ingestion on non-existent slug..."
-ingest_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/ingest/nonexistent-slug-12345678901 \
+ingest_response=$(curl -s -w "\n%{http_code}" -X POST ${BASE}/ingest/nonexistent-slug-12345678901 \
     -d "test message")
 
 http_code=$(echo "$ingest_response" | tail -1)
@@ -366,14 +422,14 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} Non-existent slug returned 404"
 # Step 12: Disable receiver and test 404 equivalence
 echo ""
 echo "Step 12: Disable receiver and verify 404 equivalence..."
-disable_response=$(curl -s -w "\n%{http_code}" -X PATCH http://localhost/api/v1/receivers/$receiver_id \
+disable_response=$(curl -s -w "\n%{http_code}" -X PATCH ${BASE}/api/v1/receivers/$receiver_id \
     -H "Authorization: Bearer $access_token" \
     -H "Content-Type: application/json" \
     -d '{"status": "disabled"}')
 
 sleep 1  # Give cache time to clear if any
 
-ingest_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/ingest/$receiver_slug \
+ingest_response=$(curl -s -w "\n%{http_code}" -X POST ${BASE}/ingest/$receiver_slug \
     -d "test message")
 
 http_code=$(echo "$ingest_response" | tail -1)
@@ -394,7 +450,7 @@ fi
 # Step 13: Re-enable receiver
 echo ""
 echo "Step 13: Re-enable receiver..."
-enable_response=$(curl -s -w "\n%{http_code}" -X PATCH http://localhost/api/v1/receivers/$receiver_id \
+enable_response=$(curl -s -w "\n%{http_code}" -X PATCH ${BASE}/api/v1/receivers/$receiver_id \
     -H "Authorization: Bearer $access_token" \
     -H "Content-Type: application/json" \
     -d '{"status": "active"}')
@@ -410,14 +466,14 @@ echo "Step 14: Ingest 2MB payload..."
 
 # Il receiver eredita il cap del tenant (1MB) alla creazione (spec 4.1): va
 # alzato in entrambi i punti prima di poter accettare un corpo da 2MB.
-cap_response=$(curl -s -w "\n%{http_code}" -X PATCH http://localhost/api/v1/tenant \
+cap_response=$(curl -s -w "\n%{http_code}" -X PATCH ${BASE}/api/v1/tenant \
     -H "Authorization: Bearer $access_token" \
     -H "Content-Type: application/json" \
     -d '{"max_body_bytes": 5242880}')
 http_code=$(echo "$cap_response" | tail -1)
 assert_http_code 200 "$http_code" "Raise tenant max_body_bytes should return 200"
 
-cap_response=$(curl -s -w "\n%{http_code}" -X PATCH http://localhost/api/v1/receivers/$receiver_id \
+cap_response=$(curl -s -w "\n%{http_code}" -X PATCH ${BASE}/api/v1/receivers/$receiver_id \
     -H "Authorization: Bearer $access_token" \
     -H "Content-Type: application/json" \
     -d '{"max_body_bytes": 5242880}')
@@ -426,7 +482,7 @@ assert_http_code 200 "$http_code" "Raise receiver max_body_bytes should return 2
 
 dd if=/dev/zero bs=1M count=2 2>/dev/null > /tmp/payload_2mb.txt
 
-ingest_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/ingest/$receiver_slug \
+ingest_response=$(curl -s -w "\n%{http_code}" -X POST ${BASE}/ingest/$receiver_slug \
     -H "Content-Type: text/plain" \
     --data-binary @/tmp/payload_2mb.txt)
 
@@ -436,11 +492,7 @@ body=$(echo "$ingest_response" | head -n -1)
 assert_http_code 201 "$http_code" "2MB ingestion should return 201"
 
 storage_backend=$(echo "$body" | jq -r '.storage_backend // empty')
-if [ "$storage_backend" != "object" ]; then
-    echo -e "${COLOR_RED}✗${COLOR_NC} Large payload should use object storage, got: $storage_backend"
-else
-    echo -e "${COLOR_GREEN}✓${COLOR_NC} Large payload stored in object storage"
-fi
+check_storage_backend "$storage_backend"
 
 notification_id=$(echo "$body" | jq -r '.id // empty')
 
@@ -449,7 +501,7 @@ echo ""
 echo "Step 15: Download and verify content..."
 if [ -n "$notification_id" ]; then
     http_code=$(curl -s -o /tmp/payload_2mb_downloaded.txt -w "%{http_code}" \
-        http://localhost/api/v1/notifications/$notification_id/content \
+        ${BASE}/api/v1/notifications/$notification_id/content \
         -H "Authorization: Bearer $access_token")
 
     assert_http_code 200 "$http_code" "Download content should return 200"
@@ -471,7 +523,7 @@ max_wait=30
 waited=0
 
 while [ $waited -lt $max_wait ]; do
-    received=$(curl -s http://localhost:8899/_received 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
+    received=$(curl -s ${WEBHOOK_BASE}/_received 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
     if [ "$received" -ge 1 ]; then
         webhook_received=1
         break
@@ -485,7 +537,7 @@ if [ $webhook_received -eq 0 ]; then
     echo "  Check worker/beat status"
     test_failed=$((test_failed+1))
 else
-    webhook_count=$(curl -s http://localhost:8899/_received | jq 'length')
+    webhook_count=$(curl -s ${WEBHOOK_BASE}/_received | jq 'length')
     if [ "$webhook_count" -eq 1 ]; then
         echo -e "${COLOR_GREEN}✓${COLOR_NC} Webhook delivered (exactly 1 request)"
         test_passed=$((test_passed+1))
@@ -500,14 +552,14 @@ echo ""
 echo "Step 17: Reject oversized payload..."
 
 # Set receiver max_body_bytes to a small value for this test
-receiver_update=$(curl -s -w "\n%{http_code}" -X PATCH http://localhost/api/v1/receivers/$receiver_id \
+receiver_update=$(curl -s -w "\n%{http_code}" -X PATCH ${BASE}/api/v1/receivers/$receiver_id \
     -H "Authorization: Bearer $access_token" \
     -H "Content-Type: application/json" \
     -d '{"max_body_bytes": 100}')
 
 sleep 1
 
-oversized_response=$(curl -s -w "\n%{http_code}" -X POST http://localhost/ingest/$receiver_slug \
+oversized_response=$(curl -s -w "\n%{http_code}" -X POST ${BASE}/ingest/$receiver_slug \
     -d "This is a message that is well over one hundred bytes long and therefore exceeds the configured per-receiver limit of 100 bytes set just above")
 
 http_code=$(echo "$oversized_response" | tail -1)
@@ -516,17 +568,4 @@ assert_http_code 413 "$http_code" "Oversized payload should return 413"
 echo -e "${COLOR_GREEN}✓${COLOR_NC} Oversized payload rejected"
 
 # Summary
-echo ""
-echo "======================================"
-echo "Smoke test results:"
-echo "  Passed: $test_passed"
-echo "  Failed: $test_failed"
-echo "======================================"
-
-if [ $test_failed -eq 0 ]; then
-    echo -e "${COLOR_GREEN}SMOKE OK${COLOR_NC}"
-    exit 0
-else
-    echo -e "${COLOR_RED}SMOKE FAILED${COLOR_NC}"
-    exit 1
-fi
+riepilogo

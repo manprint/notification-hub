@@ -17,7 +17,7 @@ export default function LoginPage() {
   // Messo da RequireAuth: la pagina chiesta prima del redirect al login.
   const target = safeRedirectTarget((location.state as { from?: unknown } | null)?.from);
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
     setSubmitting(true);
@@ -33,7 +33,15 @@ export default function LoginPage() {
 
   // Mentre si ricarica una sessione salvata il form non si mostra: un login
   // fatto in quel momento si incrocerebbe col refresh della sessione di prima.
-  if (loading) return <div className="empty-state">Caricamento…</div>;
+  // Stessa cornice della pagina vera: il testo non sta in alto e poi il
+  // riquadro del login compare al centro.
+  if (loading) {
+    return (
+      <main className="auth-shell">
+        <div className="empty-state">Caricamento…</div>
+      </main>
+    );
+  }
   // Chi è già dentro non rientra come un altro utente sopra la sessione
   // aperta: token e cache di A resterebbero sotto il nome di B. Per cambiare
   // utente si passa da "Esci", che revoca la sessione e svuota la cache.
@@ -42,16 +50,26 @@ export default function LoginPage() {
   const rateLimited = error?.status === 429;
   const retryAfterSeconds =
     typeof error?.extra?.retry_after === "number" ? error.extra.retry_after : null;
-  const retryAfterMinutes = retryAfterSeconds !== null ? Math.ceil(retryAfterSeconds / 60) : null;
+  // Zero secondi non è un'attesa da dire: come assente, niente «fra 0 minuti».
+  const retryAfterMinutes =
+    retryAfterSeconds !== null && retryAfterSeconds > 0 ? Math.ceil(retryAfterSeconds / 60) : null;
+  // Il singolare per un minuto solo: il backend manda secondi, e sotto i 60 il
+  // conto arrotondato fa 1. Senza il valore non si inventa un numero.
+  const messaggioRateLimit =
+    retryAfterMinutes === null
+      ? "Troppi tentativi, riprova più tardi."
+      : retryAfterMinutes === 1
+        ? "Troppi tentativi, riprova fra 1 minuto."
+        : `Troppi tentativi, riprova fra ${retryAfterMinutes} minuti.`;
 
   return (
-    <div className="auth-shell">
+    <main className="auth-shell">
       <div className="card auth-card">
         <h1 className="auth-title">NotifyHub</h1>
         <p className="auth-subtitle">Accedi per vedere le notifiche del tuo tenant.</p>
         {rateLimited ? (
           <div className="error-banner" role="alert">
-            {`Troppi tentativi, riprova fra ${retryAfterMinutes ?? "qualche"} minuti.`}
+            {messaggioRateLimit}
           </div>
         ) : (
           error && <ErrorBanner error={error} />
@@ -86,6 +104,6 @@ export default function LoginPage() {
           </div>
         </form>
       </div>
-    </div>
+    </main>
   );
 }

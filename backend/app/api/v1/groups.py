@@ -1,7 +1,8 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_claims, db, require_admin
@@ -113,7 +114,7 @@ async def _notification_counts(
 @router.get("", response_model=list[GroupOut])
 async def list_groups(
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[GroupOut]:
     """member e viewer vedono solo i gruppi a cui sono associati: senza questo
     filtro, togliere l'associazione a un utente non gli toglieva il gruppo
@@ -136,7 +137,7 @@ async def list_groups(
 async def create_group(
     body: GroupCreate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> GroupOut:
     tenant_id = uuid.UUID(claims.tid)
 
@@ -155,7 +156,7 @@ async def create_group(
 async def get_group(
     group_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> GroupOut:
     group = await _get_group_or_404(session, uuid.UUID(claims.tid), group_id)
     await assert_group_access(session, claims, group_id, write=False)
@@ -168,7 +169,7 @@ async def update_group(
     group_id: uuid.UUID,
     body: GroupUpdate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> GroupOut:
     group = await _get_group_or_404(session, uuid.UUID(claims.tid), group_id)
 
@@ -190,7 +191,7 @@ async def delete_group(
     group_id: uuid.UUID,
     confirm: str = Query(...),  # noqa: B008
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     """Cascade su receiver, notifiche, delivery e oggetti MinIO (via trigger),
     confermata digitando il nome esatto del gruppo (spec 9.3): niente
@@ -204,13 +205,16 @@ async def delete_group(
             detail="confirm must match the exact group name.",
         )
     await session.delete(group)
+    # Flush qui e non al commit dopo la risposta: una violazione di FK esce come
+    # 409 dall'handler globale invece di un 204 seguito da una cancellazione mancante.
+    await session.flush()
 
 
 @router.get("/{group_id}/channels", response_model=list[GroupChannelBindingOut])
 async def list_group_channels(
     group_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[GroupChannelBindingOut]:
     tenant_id = uuid.UUID(claims.tid)
     await _get_group_or_404(session, tenant_id, group_id)
@@ -230,12 +234,14 @@ async def list_group_channels(
 async def bind_group_channel(
     group_id: uuid.UUID,
     body: GroupChannelBindingCreate,
+    response: Response,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> GroupChannelBindingOut:
     """Idempotente: un secondo POST sulla stessa coppia (gruppo, canale)
     aggiorna il binding esistente invece di violare il vincolo di unicita e
-    far uscire un 500 dal database."""
+    far uscire un 500 dal database. Come l'override di canale, l'aggiornamento
+    risponde 200 e la creazione 201."""
     tenant_id = uuid.UUID(claims.tid)
     await _get_group_or_404(session, tenant_id, group_id)
 
@@ -262,6 +268,7 @@ async def bind_group_channel(
     )
     binding = existing_result.scalar_one_or_none()
     if binding is not None:
+        response.status_code = 200
         binding.min_severity = body.min_severity
         binding.enabled = body.enabled
     else:
@@ -273,7 +280,29 @@ async def bind_group_channel(
             min_severity=body.min_severity,
             enabled=body.enabled,
         )
-        session.add(binding)
+        try:
+            async with session.begin_nested():
+                session.add(binding)
+                await session.flush()
+        except IntegrityError:
+            # Richiesta concorrente sulla stessa coppia (gruppo, canale): si aggiorna
+            # la riga che ha gia inserito, senza un 409 per un salvataggio ripetuto.
+            binding = (
+                await session.execute(
+                    select(GroupChannelBinding).where(
+                        GroupChannelBinding.group_id == group_id,
+                        GroupChannelBinding.channel_id == body.channel_id,
+                        GroupChannelBinding.tenant_id == tenant_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if binding is None:
+                # Non e' una coppia gia' inserita: il canale e' sparito nel frattempo
+                # (violazione di FK). Si rilancia l'errore, che diventa un 409.
+                raise
+            response.status_code = 200
+            binding.min_severity = body.min_severity
+            binding.enabled = body.enabled
     await session.flush()
     return GroupChannelBindingOut.model_validate(binding)
 
@@ -283,7 +312,7 @@ async def unbind_group_channel(
     group_id: uuid.UUID,
     channel_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     result = await session.execute(
         select(GroupChannelBinding).where(
@@ -301,3 +330,4 @@ async def unbind_group_channel(
             detail="Binding not found.",
         )
     await session.delete(binding)
+    await session.flush()

@@ -11,6 +11,8 @@ class UserGroupMembership(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("user_id", "group_id", name="uq_user_group_memberships_user_id_group_id"),
         Index("ix_user_group_memberships_tenant_id_group_id", "tenant_id", "group_id"),
+        # FK con ON DELETE CASCADE: la cancellazione di un gruppo la usa per le appartenenze.
+        Index("ix_user_group_memberships_group_id", "group_id"),
     )
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)

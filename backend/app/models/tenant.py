@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String
+from sqlalchemy import BigInteger, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -17,7 +17,7 @@ class Tenant(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     slug: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     max_body_bytes: Mapped[int] = mapped_column(nullable=False, default=1048576)
     max_notifications_per_day: Mapped[int | None] = mapped_column(nullable=True)
-    max_storage_bytes: Mapped[int | None] = mapped_column(nullable=True)
+    max_storage_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     retention_days: Mapped[int | None] = mapped_column(nullable=True, default=90)
     # Ritenzione dell'audit, separata da quella delle notifiche: l'audit deve
     # sopravvivere a cio che descrive. NULL = conservazione illimitata.

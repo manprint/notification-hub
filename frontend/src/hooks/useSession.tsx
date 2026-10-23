@@ -1,7 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
-  createElement,
   useCallback,
   useContext,
   useEffect,
@@ -11,7 +10,9 @@ import {
 } from "react";
 import {
   apiGet,
+  apiGetWithToken,
   apiPost,
+  asApiError,
   clearTokens,
   getRefreshToken,
   onLogout,
@@ -25,21 +26,26 @@ interface SessionState {
   user: MeOut | null;
   role: UserRole | null;
   loading: boolean;
+  /** Il server non ha risposto al caricamento della sessione: la sessione
+   *  salvata resta, si può riprovare con `retryProfile`. */
+  unreachable: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   /** Rilegge il proprio profilo dopo una modifica fatta su se stessi (il
    *  ruolo, da Utenti): senza, la UI continuerebbe a mostrare il ruolo vecchio. */
   reloadProfile: () => Promise<void>;
+  retryProfile: () => void;
 }
 
 const SessionContext = createContext<SessionState | null>(null);
 
-export function SessionProvider({ children }: { children: ReactNode }): ReturnType<typeof createElement> {
+export function SessionProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [user, setUser] = useState<MeOut | null>(null);
   // Senza refresh token non c'è sessione da caricare: partire da "caricamento"
   // farebbe solo lampeggiare la schermata d'attesa.
   const [loading, setLoading] = useState(() => getRefreshToken() !== null);
+  const [unreachable, setUnreachable] = useState(false);
   // Ogni lettura del profilo ha un numero e vale solo l'ultima: un /me partito
   // prima di un logout (o di un cambio d'utente in un'altra scheda) non deve
   // riportare in vita l'utente di prima.
@@ -51,21 +57,42 @@ export function SessionProvider({ children }: { children: ReactNode }): ReturnTy
     profileRequest.current += 1;
     queryClient.clear();
     setUser(null);
+    setUnreachable(false);
     setLoading(false);
   }, [queryClient]);
 
-  const loadProfile = useCallback(async (suppressError = true) => {
+  // Gli aggiornamenti di stato stanno nelle callback della promise, non nel
+  // corpo sincrono: chi la chiama da un effetto non scatena render a cascata.
+  const loadProfile = useCallback((suppressError = true): Promise<void> => {
     const request = ++profileRequest.current;
-    try {
-      const me = await apiGet<MeOut>("/api/v1/auth/me");
-      if (request === profileRequest.current) setUser(me);
-    } catch (error) {
-      if (request === profileRequest.current) setUser(null);
-      if (!suppressError) throw error;
-    } finally {
-      if (request === profileRequest.current) setLoading(false);
-    }
+    return apiGet<MeOut>("/api/v1/auth/me")
+      .then(
+        (me) => {
+          if (request !== profileRequest.current) return;
+          setUser(me);
+          setUnreachable(false);
+        },
+        (error: unknown) => {
+          if (request === profileRequest.current) {
+            // Un guasto del server (502 di nginx, api che riparte) non dice che la
+            // sessione è finita: il refresh token resta, e si può riprovare. Senza
+            // questo si finiva al login, senza un messaggio, con la sessione viva.
+            const status = asApiError(error).status;
+            setUser(null);
+            setUnreachable(status === 0 || status >= 500);
+          }
+          if (!suppressError) throw error;
+        },
+      )
+      .finally(() => {
+        if (request === profileRequest.current) setLoading(false);
+      });
   }, []);
+
+  const retryProfile = useCallback(() => {
+    setLoading(true);
+    void loadProfile();
+  }, [loadProfile]);
 
   useEffect(() => {
     if (getRefreshToken()) void loadProfile();
@@ -89,22 +116,22 @@ export function SessionProvider({ children }: { children: ReactNode }): ReturnTy
   const login = useCallback(
     async (email: string, password: string) => {
       const tokens = await apiPost<TokenPairOut>("/api/v1/auth/login", { email, password });
-      storeTokens(tokens);
+      // Il profilo si legge con il token nuovo, senza salvarlo: se /me fallisce
+      // non resta in localStorage una sessione mai mostrata, e le altre schede
+      // non vedono un refresh token che sparisce (le farebbe uscire insieme).
+      // Dopo un login esplicito l'errore torna al form, altrimenti la UI naviga
+      // alla home e viene subito rimandata indietro senza alcun messaggio.
       // La cache è di chi c'era prima (o di nessuno): la sessione nuova riparte vuota.
       queryClient.clear();
-      try {
-        // Durante il bootstrap un errore viene gestito come sessione assente; dopo
-        // un login esplicito deve invece tornare al form, altrimenti la UI naviga
-        // alla home e viene subito rimandata indietro senza alcun messaggio.
-        await loadProfile(false);
-      } catch (error) {
-        // Token validi ma profilo illeggibile: tenerli lascerebbe una sessione mai
-        // mostrata, che si riaprirebbe da sola al prossimo caricamento della pagina.
-        clearTokens();
-        throw error;
-      }
+      const me = await apiGetWithToken<MeOut>(tokens.access_token, "/api/v1/auth/me");
+      storeTokens(tokens);
+      // Una lettura del profilo ancora in volo (bootstrap) non deve più scrivere.
+      profileRequest.current += 1;
+      setUnreachable(false);
+      setUser(me);
+      setLoading(false);
     },
-    [loadProfile, queryClient],
+    [queryClient],
   );
 
   const logout = useCallback(async () => {
@@ -142,10 +169,22 @@ export function SessionProvider({ children }: { children: ReactNode }): ReturnTy
     }
   }, [queryClient]);
 
-  return createElement(SessionContext.Provider, {
-    value: { user, role: user?.role ?? null, loading, login, logout, reloadProfile },
-    children,
-  });
+  return (
+    <SessionContext.Provider
+      value={{
+        user,
+        role: user?.role ?? null,
+        loading,
+        unreachable,
+        login,
+        logout,
+        reloadProfile,
+        retryProfile,
+      }}
+    >
+      {children}
+    </SessionContext.Provider>
+  );
 }
 
 export function useSession(): SessionState {

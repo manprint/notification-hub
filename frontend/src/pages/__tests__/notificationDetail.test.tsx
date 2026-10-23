@@ -5,7 +5,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
-import { Route, Routes } from "react-router-dom";
+import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import NotificationDetailPage from "../NotificationDetailPage";
 import { setRefreshToken } from "../../api/client";
@@ -15,6 +15,12 @@ import {
 } from "../../api/mocks/handlers";
 import { server } from "../../api/mocks/server";
 import { renderWithProviders } from "./testUtils";
+
+/** Mostra il percorso e la query in cui il router è arrivato, per le asserzioni sul ritorno. */
+function PosizioneCorrente() {
+  const { pathname, search } = useLocation();
+  return <p>{pathname + search}</p>;
+}
 
 function renderDetail(id: string) {
   return renderWithProviders(
@@ -76,14 +82,14 @@ describe("NotificationDetailPage", () => {
     serviDettaglio({ ...fixtureNotificationDetailInline, content_normalized: true });
     renderDetail("n1");
 
-    expect(await screen.findByText("contenuto normalizzato")).toBeInTheDocument();
+    expect(await screen.findByText("Contenuto normalizzato")).toBeInTheDocument();
   });
 
   it("un contenuto non normalizzato non porta la pill", async () => {
     renderDetail("n1");
     await screen.findByText("Origine della severity");
 
-    expect(screen.queryByText("contenuto normalizzato")).not.toBeInTheDocument();
+    expect(screen.queryByText("Contenuto normalizzato")).not.toBeInTheDocument();
   });
 
   it("T-UI11 test_origine_severity_mostrata: con severity_source rule compare il pattern vincente", async () => {
@@ -279,6 +285,23 @@ describe("NotificationDetailPage", () => {
     }
   });
 
+  it("durante il download il pulsante dice Scaricamento…, in italiano come gli altri stati", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/v1/notifications/n1", () =>
+        HttpResponse.json({ ...fixtureNotificationDetailObject, id: "n1" }),
+      ),
+      // Una risposta che non arriva mai: il pulsante resta nello stato di attesa.
+      http.get("/api/v1/notifications/n1/content", () => new Promise(() => {})),
+    );
+    renderDetail("n1");
+
+    await user.click(await screen.findByRole("button", { name: "Scarica contenuto completo" }));
+
+    expect(await screen.findByRole("button", { name: "Scaricamento…" })).toBeDisabled();
+    expect(screen.queryByText("Download…")).not.toBeInTheDocument();
+  });
+
   it("elimina e torna all'elenco", async () => {
     const user = userEvent.setup();
     let eliminata = false;
@@ -377,7 +400,7 @@ describe("NotificationDetailPage", () => {
     );
     renderDetail("n1");
 
-    expect(await screen.findByText(/Notification not found/)).toBeInTheDocument();
+    expect(await screen.findByText(/Notifica non trovata/)).toBeInTheDocument();
   });
 
   it("porta allo storico di chi l'ha letta o verificata, senza esporre l'id", async () => {
@@ -408,5 +431,78 @@ describe("NotificationDetailPage", () => {
     await screen.findByText(/Dettaglio notifica/);
 
     expect(screen.queryByRole("link", { name: /Chi l'ha letta o verificata/ })).not.toBeInTheDocument();
+  });
+
+  // Il ritorno riapre la lista da cui si è arrivati, gruppo e filtri compresi,
+  // passata dallo stato del link: un link diretto torna all'elenco generale.
+  it("il ritorno riporta alla lista di partenza, col gruppo e i filtri", async () => {
+    serviDettaglio(fixtureNotificationDetailInline);
+    const user = userEvent.setup();
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/"
+          element={
+            <Link to="/notifications/n1" state={{ from: "/notifications?group_id=g1&q=disco" }}>
+              Apri
+            </Link>
+          }
+        />
+        <Route path="/notifications/:id" element={<NotificationDetailPage />} />
+      </Routes>,
+    );
+
+    await user.click(screen.getByRole("link", { name: "Apri" }));
+    expect(await screen.findByRole("link", { name: "← Torna alla lista" })).toHaveAttribute(
+      "href",
+      "/notifications?group_id=g1&q=disco",
+    );
+  });
+
+  // Dopo l'eliminazione si torna alla lista da cui si era partiti, e non alla
+  // griglia dei gruppi: gruppo e filtri restano dove l'utente li aveva.
+  it("elimina dalla lista di partenza: torna lì, col gruppo e i filtri", async () => {
+    serviDettaglio(fixtureNotificationDetailInline);
+    server.use(
+      http.delete("/api/v1/notifications/n1", () => new HttpResponse(null, { status: 204 })),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/"
+          element={
+            <Link to="/notifications/n1" state={{ from: "/notifications?group_id=g1&q=disco" }}>
+              Apri
+            </Link>
+          }
+        />
+        <Route path="/notifications/:id" element={<NotificationDetailPage />} />
+        <Route path="/notifications" element={<PosizioneCorrente />} />
+      </Routes>,
+    );
+
+    await user.click(await screen.findByRole("link", { name: "Apri" }));
+    await user.click(await screen.findByRole("button", { name: "Elimina" }));
+    const dialogo = within(await screen.findByRole("dialog"));
+    await user.click(dialogo.getByRole("button", { name: "Elimina" }));
+
+    expect(
+      await screen.findByText("/notifications?group_id=g1&q=disco", { selector: "p" }),
+    ).toBeInTheDocument();
+  });
+
+  it("con l'errore di caricamento il ritorno resta disponibile", async () => {
+    server.use(
+      http.get("/api/v1/notifications/n1", () =>
+        HttpResponse.json({ detail: "boom" }, { status: 500 }),
+      ),
+    );
+    renderDetail("n1");
+
+    expect(await screen.findByRole("link", { name: "← Torna alle notifiche" })).toHaveAttribute(
+      "href",
+      "/notifications",
+    );
   });
 });

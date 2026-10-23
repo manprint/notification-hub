@@ -43,15 +43,17 @@ containerizzato: 22/22 assert, exit 0.
 
 ```bash
 cp .env.example .env
-# generare una chiave vera prima di qualunque uso non locale
+# generare una chiave vera prima di qualunque uso non locale: l'app non parte con il valore
+# di esempio change-me... di .env.example, e la chiave di .env e' solo per lo sviluppo
 sed -i "s/^NOTIFYHUB_SECRET_KEY=.*/NOTIFYHUB_SECRET_KEY=$(openssl rand -hex 32)/" .env
 make up
 ```
 
 `docker compose up -d` avvia Postgres, Redis, MinIO, esegue le migrazioni nel servizio one-shot
 `migrate`, poi `api`, `worker`, `beat` e `nginx` (che builda ed espone la SPA). Le URL di `.env`
-puntano a `localhost` per lo sviluppo fuori container e vengono sovrascritte nel compose con i nomi
-dei servizi.
+puntano a `localhost` per lo sviluppo fuori container e le connessioni (database, Redis, MinIO) vengono
+sovrascritte nel compose con i nomi dei servizi. `NOTIFYHUB_PUBLIC_BASE_URL` no: e' la URL che vedono
+gli utenti (link delle notifiche inoltrate compresi), va impostata in `.env` con la porta reale.
 
 ### Porte
 

@@ -75,7 +75,7 @@ types: ## Controlla i tipi del backend (mypy)
 
 ##@ Test|suite backend, copertura, smoke test e gate di qualità
 
-.PHONY: test test-unit test-int cov smoke gates
+.PHONY: test test-unit test-int cov smoke gates test-deploy test-deploy-docker
 
 test: ## Esegue l'intera suite di test backend (pytest)
 	cd backend && pytest -q
@@ -92,7 +92,20 @@ cov: ## Esegue i test backend con report di copertura
 smoke: ## Smoke test end-to-end sullo stack containerizzato
 	bash scripts/smoke.sh
 
-gates: fmt-check lint types test ## Gate completo backend: fmt-check, lint, types, test
+test-deploy: ## Test dei file di deploy in sandbox (shell e logpipe), senza Docker
+	bash deploy/all-in-one/tests/test_backup.sh
+	bash deploy/all-in-one/tests/test_entrypoint_functions.sh
+	bash deploy/all-in-one/tests/test_restore.sh
+	bash deploy/all-in-one/tests/test_smoke.sh
+	bash deploy/all-in-one/tests/test_smoke_wrapper_slug.sh
+	bash deploy/all-in-one/tests/test_upgrade_head.sh
+	pytest -c /dev/null -q -p no:cacheprovider deploy/all-in-one/tests/test_logpipe.py
+
+test-deploy-docker: ## Test di deploy con nginx reale (richiede Docker): SPA e all-in-one
+	bash deploy/nginx/test-headers.sh
+	bash deploy/all-in-one/tests/test_nginx_headers.sh
+
+gates: fmt-check lint types test test-deploy ## Gate completo: fmt-check, lint, types, test e test-deploy
 
 ##@ Frontend|lint, test e build della SPA React
 

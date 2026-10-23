@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { apiPatch, apiPost } from "../api/client";
 import type {
   NotificationListItemOut,
@@ -10,7 +10,7 @@ import type {
 import { useAction } from "../hooks/useAction";
 import { type NotificationFilters, useNotifications } from "../hooks/useNotifications";
 import { useSession } from "../hooks/useSession";
-import { formatDate, formatTime } from "../lib/format";
+import { formatBytes, formatDate, formatTime, severityLabel } from "../lib/format";
 import { MEMBER_ROLES, hasRole } from "../lib/roles";
 import { isSurveillanceSource, phaseLabel, severitySourceLabel } from "../lib/severitySource";
 import DataTable, { type DataTableColumn } from "./DataTable";
@@ -38,6 +38,7 @@ export default function ReceiverNotificationsTable({
   filters: ReceiverTableFilters;
 }) {
   const queryClient = useQueryClient();
+  const location = useLocation();
   const { busy: busyAction, error: actionError, run } = useAction();
   const { role } = useSession();
   // Segnare letta/verificata e aprire la pagina del receiver sono da member in
@@ -54,13 +55,21 @@ export default function ReceiverNotificationsTable({
 
   const rows = data?.pages.flatMap((page: NotificationListOut) => page.notifications) ?? [];
 
+  // Solo le notifiche di questo receiver: le tabelle degli altri restano com'erano.
+  // La chiave parziale `{ receiver_id }` le abbraccia tutte (pagine comprese).
+  function invalidaNotifiche() {
+    return queryClient.invalidateQueries({
+      queryKey: ["notifications", { receiver_id: receiver.id }],
+    });
+  }
+
   async function setStatus(id: string, status: NotificationStatus) {
     await run(
       async () => {
         await apiPatch(`/api/v1/notifications/${id}`, { status });
-        // Invalida le notifiche di tutte le tabelle: i conteggi e i filtri di
-        // stato delle altre dipendono dalla stessa collezione.
-        await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+        await invalidaNotifiche();
+        // Il conteggio "non lette" del gruppo sta nella griglia dei gruppi.
+        await queryClient.invalidateQueries({ queryKey: ["groups"] });
       },
       {
         name: `status:${id}`,
@@ -74,7 +83,7 @@ export default function ReceiverNotificationsTable({
     await run(
       async () => {
         await apiPatch(`/api/v1/notifications/${id}`, { verified });
-        await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+        await invalidaNotifiche();
       },
       {
         name: `verified:${id}`,
@@ -95,10 +104,17 @@ export default function ReceiverNotificationsTable({
           ...filters,
           receiver_id: receiver.id,
         });
-        await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+        await invalidaNotifiche();
+        await queryClient.invalidateQueries({ queryKey: ["groups"] });
       },
       { name: "bulk", success: `Notifiche di ${receiver.name} segnate come lette.` },
     );
+  }
+
+  // Le azioni di riga hanno tutte lo stesso testo: il nome accessibile dice
+  // anche quale notifica tocca (ora e severity), e inizia col testo visibile.
+  function descrizioneRiga(n: NotificationListItemOut): string {
+    return `${formatDate(n.received_at)} ${formatTime(n.received_at)}, ${severityLabel(n.severity)}`;
   }
 
   const columns: DataTableColumn<NotificationListItemOut>[] = [
@@ -110,13 +126,30 @@ export default function ReceiverNotificationsTable({
       // dove si legge un log, e una preview lunga sfonda la riga. Le pill
       // restano perche' sono segnali sul payload (testo alterato in ingestion,
       // corpo su object storage) che altrimenti si vedrebbero solo entrando.
+      // Lo stato porta la pagina d'origine: il ritorno dal dettaglio riapre
+      // questo gruppo con i suoi filtri.
       render: (n) => (
         <div className="content-cell">
-          <Link to={`/notifications/${n.id}`}>Apri</Link>
-          {n.content_normalized && <span className="status-pill">contenuto normalizzato</span>}
+          <Link
+            to={`/notifications/${n.id}`}
+            state={{ from: `${location.pathname}${location.search}` }}
+            aria-label={`Apri la notifica di ${descrizioneRiga(n)}`}
+          >
+            Apri
+          </Link>
+          {n.content_normalized && <span className="status-pill">Contenuto normalizzato</span>}
           {n.storage_backend === "object" && (
-            <span className="status-pill">{n.content_size} byte su object storage</span>
+            <span className="status-pill" title={`${n.content_size} byte`}>
+              {formatBytes(n.content_size)} su object storage
+            </span>
           )}
+          {/* Sotto i 760px le colonne Origine e Ricevuta si nascondono (CSS): le loro
+              informazioni restano qui, altrimenti sul telefono sparirebbero. */}
+          <div className="receiver-narrow-info">
+            {severitySourceLabel(n.severity_source)} · {formatDate(n.received_at)}{" "}
+            {formatTime(n.received_at)}
+            {n.phase === "start" && ` · ${phaseLabel(n.phase)}`}
+          </div>
         </div>
       ),
     },
@@ -176,12 +209,17 @@ export default function ReceiverNotificationsTable({
       render: (n) => (
         <div className="row-actions">
           <button
+            aria-label={`${n.status === "unread" ? "Segna come letta" : "Segna come non letta"}: ${descrizioneRiga(n)}`}
             disabled={busyAction !== null}
             onClick={() => void setStatus(n.id, n.status === "unread" ? "read" : "unread")}
           >
             {n.status === "unread" ? "Segna come letta" : "Segna come non letta"}
           </button>
-          <button disabled={busyAction !== null} onClick={() => void setVerified(n.id, !n.verified)}>
+          <button
+            aria-label={`${n.verified ? "Segna come non verificata" : "Segna come verificata"}: ${descrizioneRiga(n)}`}
+            disabled={busyAction !== null}
+            onClick={() => void setVerified(n.id, !n.verified)}
+          >
             {n.verified ? "Segna come non verificata" : "Segna come verificata"}
           </button>
         </div>
@@ -190,11 +228,11 @@ export default function ReceiverNotificationsTable({
   }
 
   return (
-    <section className="card receiver-table" aria-label={`Notifiche di ${receiver.name}`}>
+    <section className="card receiver-notifications" aria-label={`Notifiche di ${receiver.name}`}>
       <div className="receiver-table-header">
         <h3>
           {canManage ? <Link to={`/receivers/${receiver.id}`}>{receiver.name}</Link> : receiver.name}
-          {receiver.status === "disabled" && <span className="status-pill warn">disabilitato</span>}
+          {receiver.status === "disabled" && <span className="status-pill warn">Disabilitato</span>}
         </h3>
         {/* Il testo resta quello del pulsante di gruppo, ma il nome accessibile
             dice su quale receiver agisce: due pulsanti identici nella stessa
@@ -218,6 +256,7 @@ export default function ReceiverNotificationsTable({
         rows={rows}
         rowKey={(n) => n.id}
         loading={isLoading}
+        error={error}
         hasMore={hasNextPage}
         loadingMore={isFetchingNextPage}
         onLoadMore={() => void fetchNextPage()}

@@ -2,10 +2,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { apiDelete, apiGet, apiPost, apiPut } from "../api/client";
 import type { ApiError, GroupChannelBindingOut, DeliveryChannelOut, Severity } from "../api/types";
+import DataTable, { type DataTableColumn } from "./DataTable";
 import ErrorBanner from "../components/ErrorBanner";
 import SaveIndicator from "./SaveIndicator";
 import { useAction } from "../hooks/useAction";
-import { channelTypeLabel } from "../lib/format";
+import { channelTypeLabel, severityLabel } from "../lib/format";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
 
@@ -31,7 +32,6 @@ export default function ChannelBindings({ groupId, channels }: ChannelBindingsPr
   const {
     data: bindings,
     error: loadError,
-    isLoading,
   } = useQuery<GroupChannelBindingOut[], ApiError>({
     queryKey: ["group-channel-bindings", groupId],
     queryFn: () => apiGet<GroupChannelBindingOut[]>(`/api/v1/groups/${groupId}/channels`),
@@ -57,21 +57,30 @@ export default function ChannelBindings({ groupId, channels }: ChannelBindingsPr
     setLastSaved(channelId);
     await run(
       async () => {
-        const existing = byChannelId.get(channelId);
-        if (existing) {
-          await apiPut(`/api/v1/groups/${groupId}/channels/${channelId}`, {
-            min_severity: minSeverity,
-            enabled: true,
-          });
-        } else {
-          await apiPost(`/api/v1/groups/${groupId}/channels`, {
-            channel_id: channelId,
-            min_severity: minSeverity,
-          });
+        try {
+          const existing = byChannelId.get(channelId);
+          if (existing) {
+            await apiPut(`/api/v1/groups/${groupId}/channels/${channelId}`, {
+              min_severity: minSeverity,
+              enabled: true,
+            });
+          } else {
+            await apiPost(`/api/v1/groups/${groupId}/channels`, {
+              channel_id: channelId,
+              min_severity: minSeverity,
+            });
+          }
+        } finally {
+          // Anche se la scrittura fallisce: un 404 vuol dire che la lettura in
+          // cache è vecchia, e senza il refetch ogni modifica successiva
+          // ripartirebbe dalla stessa decisione sbagliata.
+          await queryClient.invalidateQueries({ queryKey: ["group-channel-bindings", groupId] });
         }
-        await queryClient.invalidateQueries({ queryKey: ["group-channel-bindings", groupId] });
       },
-      { name: channelId, success: `«${channelName}»: inoltro da ${minSeverity} in su.` },
+      {
+        name: channelId,
+        success: `«${channelName}»: inoltro da ${severityLabel(minSeverity)} in su.`,
+      },
     );
   }
 
@@ -79,8 +88,11 @@ export default function ChannelBindings({ groupId, channels }: ChannelBindingsPr
     setLastSaved(channelId);
     await run(
       async () => {
-        await apiDelete(`/api/v1/groups/${groupId}/channels/${channelId}`);
-        await queryClient.invalidateQueries({ queryKey: ["group-channel-bindings", groupId] });
+        try {
+          await apiDelete(`/api/v1/groups/${groupId}/channels/${channelId}`);
+        } finally {
+          await queryClient.invalidateQueries({ queryKey: ["group-channel-bindings", groupId] });
+        }
       },
       { name: channelId, success: `«${channelName}» scollegato dal gruppo.` },
     );
@@ -101,68 +113,73 @@ export default function ChannelBindings({ groupId, channels }: ChannelBindingsPr
     return "idle" as const;
   }
 
+  const columns: DataTableColumn<DeliveryChannelOut>[] = [
+    {
+      key: "channel",
+      header: "Canale",
+      render: (channel) => (
+        <>
+          {channel.name} ({channelTypeLabel(channel.type)})
+        </>
+      ),
+    },
+    {
+      key: "severity",
+      header: "Soglia minima",
+      render: (channel) => {
+        const binding = byChannelId.get(channel.id);
+        const suspended = binding !== undefined && !binding.enabled;
+        const value = binding ? (binding.enabled ? binding.min_severity : DISABLED_BINDING) : "";
+        return (
+          <div className="status-cell">
+            <select
+              aria-label={`Soglia di ${channel.name}`}
+              value={value}
+              disabled={busy !== null || !ready}
+              onChange={(event) => handleChange(channel.id, event.target.value, channel.name)}
+            >
+              <option value="">Non collegato</option>
+              {suspended && (
+                <option value={DISABLED_BINDING} disabled>
+                  Disattivato (soglia {severityLabel(binding.min_severity)})
+                </option>
+              )}
+              {SEVERITIES.map((s) => (
+                <option key={s} value={s}>
+                  {severityLabel(s)}
+                </option>
+              ))}
+            </select>
+            {suspended && (
+              <span
+                className="status-pill warn"
+                title="Il collegamento esiste ma è disattivato: nessun inoltro. Scegli una soglia per riattivarlo."
+              >
+                disattivato: nessun inoltro
+              </span>
+            )}
+            <SaveIndicator state={stateOf(channel.id)} />
+          </div>
+        );
+      },
+    },
+  ];
+
   return (
-    <div className="table-wrap">
+    <>
       {loadError && <ErrorBanner error={loadError} />}
       {error && <ErrorBanner error={error} />}
-      {isLoading && <p className="card-hint">Caricamento dei collegamenti…</p>}
-      {bindings !== undefined && (
-        <table>
-          <thead>
-            <tr>
-              <th>Canale</th>
-              <th>Soglia minima</th>
-            </tr>
-          </thead>
-          <tbody>
-            {channels.map((channel) => {
-              const binding = byChannelId.get(channel.id);
-              const suspended = binding !== undefined && !binding.enabled;
-              const value = binding ? (binding.enabled ? binding.min_severity : DISABLED_BINDING) : "";
-              return (
-                <tr key={channel.id}>
-                  <td>
-                    {channel.name} ({channelTypeLabel(channel.type)})
-                  </td>
-                  <td>
-                    <div className="status-cell">
-                      <select
-                        aria-label={`Soglia di ${channel.name}`}
-                        value={value}
-                        disabled={busy !== null || !ready}
-                        onChange={(event) =>
-                          handleChange(channel.id, event.target.value, channel.name)
-                        }
-                      >
-                        <option value="">Non collegato</option>
-                        {suspended && (
-                          <option value={DISABLED_BINDING} disabled>
-                            Disattivato (soglia {binding.min_severity})
-                          </option>
-                        )}
-                        {SEVERITIES.map((s) => (
-                          <option key={s} value={s}>
-                            {s}
-                          </option>
-                        ))}
-                      </select>
-                      {suspended && (
-                        <span
-                          className="status-pill warn"
-                          title="Il collegamento esiste ma è disattivato: nessun inoltro. Scegli una soglia per riattivarlo."
-                        >
-                          disattivato: nessun inoltro
-                        </span>
-                      )}
-                      <SaveIndicator state={stateOf(channel.id)} />
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
-    </div>
+      {/* Senza collegamenti letti la tabella non mostra righe: ogni canale
+          sembrerebbe «Non collegato» e il primo cambio partirebbe da dati falsi. */}
+      <DataTable
+        caption="Soglie per canale"
+        columns={columns}
+        rows={bindings === undefined ? [] : channels}
+        rowKey={(channel) => channel.id}
+        loading={bindings === undefined && !loadError}
+        error={loadError}
+        emptyMessage="Nessun canale configurato."
+      />
+    </>
   );
 }

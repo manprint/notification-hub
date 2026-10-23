@@ -14,12 +14,14 @@ import type {
 } from "../api/types";
 import ChannelBindings from "../components/ChannelBindings";
 import ConfirmDialog from "../components/ConfirmDialog";
+import DataTable, { type DataTableColumn } from "../components/DataTable";
 import ErrorBanner from "../components/ErrorBanner";
 import Field, { RequiredLegend, fieldAria } from "../components/Field";
 import Modal from "../components/Modal";
+import SeverityBadge from "../components/SeverityBadge";
 import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
-import { channelTypeLabel, formatDateTime } from "../lib/format";
+import { channelTypeLabel, formatDateTime, severityLabel } from "../lib/format";
 import { ADMIN_ROLES, hasRole } from "../lib/roles";
 
 const CHANNEL_TYPES: ChannelType[] = ["slack", "google_chat"];
@@ -34,6 +36,14 @@ function validateWebhook(url: string): string | null {
   return null;
 }
 
+/** Esempio di webhook nel campo: cambia con il tipo scelto, così chi incolla
+ *  vede subito il formato giusto per quel servizio. */
+function webhookPlaceholder(type: ChannelType): string {
+  return type === "google_chat"
+    ? "https://chat.googleapis.com/v1/spaces/…"
+    : "https://hooks.slack.com/services/…";
+}
+
 function CreateChannelForm() {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
@@ -42,7 +52,7 @@ function CreateChannelForm() {
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; webhook?: string }>({});
   const { busy, error, run } = useAction();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const errors: { name?: string; webhook?: string } = {};
     if (name.trim() === "") errors.name = "Il nome del canale è obbligatorio.";
@@ -60,7 +70,7 @@ function CreateChannelForm() {
         });
         await queryClient.invalidateQueries({ queryKey: ["channels"] });
       },
-      { success: `Canale "${name.trim()}" creato.` },
+      { success: `Canale «${name.trim()}» creato.` },
     );
     if (ok) {
       setName("");
@@ -76,20 +86,21 @@ function CreateChannelForm() {
         L'URL viene cifrato e non viene più mostrato per intero.
       </p>
       {error && <ErrorBanner error={error} />}
-      <form className="form-stacked" onSubmit={(event) => void handleSubmit(event)}>
+      <form className="form-stacked" noValidate onSubmit={(event) => void handleSubmit(event)}>
         <RequiredLegend />
         <Field id="channel-name" label="Nome" required error={fieldErrors.name}>
           <input
             {...fieldAria("channel-name", { error: fieldErrors.name })}
             required
-            maxLength={120}
+            maxLength={255}
             value={name}
             onChange={(event) => setName(event.target.value)}
           />
         </Field>
-        <Field id="channel-type" label="Tipo">
+        <Field id="channel-type" label="Tipo" required>
           <select
             id="channel-type"
+            required
             value={type}
             onChange={(event) => setType(event.target.value as ChannelType)}
           >
@@ -111,7 +122,7 @@ function CreateChannelForm() {
             {...fieldAria("channel-webhook", { hint: true, error: fieldErrors.webhook })}
             type="password"
             required
-            placeholder="https://hooks.slack.com/services/…"
+            placeholder={webhookPlaceholder(type)}
             value={webhookUrl}
             onChange={(event) => setWebhookUrl(event.target.value)}
           />
@@ -126,14 +137,16 @@ function CreateChannelForm() {
   );
 }
 
-function EditChannelForm({ channel, onDone }: { channel: DeliveryChannelOut; onDone: () => void }) {
+/** Modifica di un canale. È lei a rendere il Modal, così il dialogo sa quando
+ *  un salvataggio è in corso e non si chiude a metà (come EditGroupForm). */
+function EditChannelForm({ channel, onClose }: { channel: DeliveryChannelOut; onClose: () => void }) {
   const queryClient = useQueryClient();
   const [name, setName] = useState(channel.name);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; webhook?: string }>({});
   const { busy, error, run } = useAction();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const errors: { name?: string; webhook?: string } = {};
     if (name.trim() === "") errors.name = "Il nome del canale è obbligatorio.";
@@ -155,54 +168,63 @@ function EditChannelForm({ channel, onDone }: { channel: DeliveryChannelOut; onD
       },
       { success: "Canale aggiornato." },
     );
-    if (ok) onDone();
+    if (ok) onClose();
   }
 
   const nameId = `channel-edit-name-${channel.id}`;
   const webhookId = `channel-edit-webhook-${channel.id}`;
 
   return (
-    <form onSubmit={(event) => void handleSubmit(event)}>
-      {error && <ErrorBanner error={error} />}
-      <RequiredLegend />
-      <Field id={nameId} label="Nome" required error={fieldErrors.name}>
-        <input
-          {...fieldAria(nameId, { error: fieldErrors.name })}
-          required
-          maxLength={120}
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-        />
-      </Field>
-      <Field
-        id={webhookId}
-        label="Nuovo webhook URL"
-        optional
-        error={fieldErrors.webhook}
-        hint="Lascia vuoto per tenere quello attuale."
-      >
-        <input
-          {...fieldAria(webhookId, { hint: true, error: fieldErrors.webhook })}
-          type="password"
-          placeholder="lascia vuoto per non cambiarlo"
-          value={webhookUrl}
-          onChange={(event) => setWebhookUrl(event.target.value)}
-        />
-      </Field>
-      <div className="form-actions">
-        <button type="submit" className="primary" disabled={busy !== null}>
-          {busy !== null ? "Salvataggio…" : "Salva"}
-        </button>
-        <button type="button" onClick={onDone}>
-          Annulla
-        </button>
-      </div>
-    </form>
+    <Modal title={`Modifica «${channel.name}»`} onClose={onClose} busy={busy !== null}>
+      <form noValidate onSubmit={(event) => void handleSubmit(event)}>
+        {error && <ErrorBanner error={error} />}
+        <RequiredLegend />
+        <Field id={nameId} label="Nome" required error={fieldErrors.name}>
+          <input
+            {...fieldAria(nameId, { error: fieldErrors.name })}
+            required
+            maxLength={255}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </Field>
+        <Field
+          id={webhookId}
+          label="Nuovo webhook URL"
+          optional
+          error={fieldErrors.webhook}
+          hint="Lascia vuoto per tenere quello attuale."
+        >
+          <input
+            {...fieldAria(webhookId, { hint: true, error: fieldErrors.webhook })}
+            type="password"
+            value={webhookUrl}
+            onChange={(event) => setWebhookUrl(event.target.value)}
+          />
+        </Field>
+        <div className="form-actions">
+          <button type="submit" className="primary" disabled={busy !== null}>
+            {busy !== null ? "Salvataggio…" : "Salva"}
+          </button>
+          <button type="button" disabled={busy !== null} onClick={onClose}>
+            Annulla
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
-function ChannelRow({ channel, canManage }: { channel: DeliveryChannelOut; canManage: boolean }) {
-  const [testResult, setTestResult] = useState<DeliveryChannelTestOut | null>(null);
+/** Le azioni di una riga (Prova, Attiva, Modifica, Elimina) con il loro stato:
+ *  occupato, errore, dialoghi. L'esito della prova lo tiene la pagina, perché
+ *  la colonna Diagnostica sta in un'altra cella della stessa riga. */
+function ChannelActions({
+  channel,
+  onTested,
+}: {
+  channel: DeliveryChannelOut;
+  onTested: (result: DeliveryChannelTestOut) => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const queryClient = useQueryClient();
@@ -214,7 +236,7 @@ function ChannelRow({ channel, canManage }: { channel: DeliveryChannelOut; canMa
         const result = await apiPost<DeliveryChannelTestOut>(
           `/api/v1/channels/${channel.id}/test`,
         );
-        setTestResult(result);
+        onTested(result);
         // Il webhook ha risposto male: l'API ha detto 200 ma la prova è
         // fallita, e per chi guarda è comunque un errore da segnalare.
         if (!result.sent) {
@@ -241,15 +263,16 @@ function ChannelRow({ channel, canManage }: { channel: DeliveryChannelOut; canMa
       {
         name: "toggle",
         success: channel.enabled
-          ? `Canale "${channel.name}" disattivato.`
-          : `Canale "${channel.name}" attivato.`,
+          ? `Canale «${channel.name}» disattivato.`
+          : `Canale «${channel.name}» attivato.`,
       },
     );
   }
 
   async function confirmDelete() {
-    setConfirmingDelete(false);
-    await run(
+    // Il dialogo si chiude solo se la cancellazione riesce: altrimenti l'errore
+    // resta sotto gli occhi di chi ha confermato, nel dialogo stesso.
+    const ok = await run(
       async () => {
         await apiDelete(`/api/v1/channels/${channel.id}`);
         await queryClient.invalidateQueries({ queryKey: ["channels"] });
@@ -263,70 +286,65 @@ function ChannelRow({ channel, canManage }: { channel: DeliveryChannelOut; canMa
           queryClient.invalidateQueries({ queryKey: ["deliveries"] }),
         ]);
       },
-      { name: "delete", success: `Canale "${channel.name}" eliminato.` },
+      { name: "delete", success: `Canale «${channel.name}» eliminato.` },
     );
+    if (ok) setConfirmingDelete(false);
   }
 
   return (
-    <tr>
-      <td>{channel.name}</td>
-      <td>{channelTypeLabel(channel.type)}</td>
-      <td>
-        <code>{channel.webhook_hint}</code>
-      </td>
-      <td>
-        <span className={channel.enabled ? "status-pill ok" : "status-pill warn"}>
-          {channel.enabled ? "attivo" : "disattivo"}
-        </span>
-      </td>
-      <td className="cell-diagnostics">
-        {channel.last_success_at && <div>ultimo successo: {formatDateTime(channel.last_success_at)}</div>}
-        {channel.last_error_at && (
-          <div>
-            ultimo errore ({formatDateTime(channel.last_error_at)}): {channel.last_error}
-          </div>
-        )}
-        {!channel.last_success_at && !channel.last_error_at && <span>nessun invio registrato</span>}
-        {testResult && (
-          <div>{testResult.sent ? `Prova inviata (${testResult.detail})` : `Prova fallita: ${testResult.detail}`}</div>
-        )}
-      </td>
-      <td>
-        {canManage && (
-          <div className="row-actions">
-            <button disabled={busy !== null} onClick={() => void runTest()}>
-              {busy === "test" ? "Attendi…" : "Prova"}
-            </button>
-            <button disabled={busy !== null} onClick={() => void toggleEnabled()}>
-              {channel.enabled ? "Disattiva" : "Attiva"}
-            </button>
-            <button disabled={busy !== null} onClick={() => setEditing(true)}>
-              Modifica
-            </button>
-            <button className="danger" disabled={busy !== null} onClick={() => setConfirmingDelete(true)}>
-              Elimina
-            </button>
-          </div>
-        )}
-        {actionError && <ErrorBanner error={actionError} />}
-        {editing && (
-          <Modal title={`Modifica "${channel.name}"`} onClose={() => setEditing(false)}>
-            <EditChannelForm channel={channel} onDone={() => setEditing(false)} />
-          </Modal>
-        )}
-        {confirmingDelete && (
-          <ConfirmDialog
-            title={`Elimina canale "${channel.name}"`}
-            expectedText={channel.name}
-            confirmLabel="Elimina canale"
-            onConfirm={() => void confirmDelete()}
-            onCancel={() => setConfirmingDelete(false)}
-          >
-            <p>Verranno rimossi anche i collegamenti ai gruppi, gli override e lo storico consegne.</p>
-          </ConfirmDialog>
-        )}
-      </td>
-    </tr>
+    <>
+      <div className="row-actions">
+        <button disabled={busy !== null} onClick={() => void runTest()}>
+          {busy === "test" ? "Attendi…" : "Prova"}
+        </button>
+        <button disabled={busy !== null} onClick={() => void toggleEnabled()}>
+          {channel.enabled ? "Disattiva" : "Attiva"}
+        </button>
+        <button disabled={busy !== null} onClick={() => setEditing(true)}>
+          Modifica
+        </button>
+        <button className="danger" disabled={busy !== null} onClick={() => setConfirmingDelete(true)}>
+          Elimina
+        </button>
+      </div>
+      {actionError && !confirmingDelete && <ErrorBanner error={actionError} />}
+      {editing && <EditChannelForm channel={channel} onClose={() => setEditing(false)} />}
+      {confirmingDelete && (
+        <ConfirmDialog
+          title={`Elimina canale «${channel.name}»`}
+          expectedText={channel.name}
+          confirmLabel="Elimina canale"
+          onConfirm={confirmDelete}
+          onCancel={() => setConfirmingDelete(false)}
+        >
+          {actionError && <ErrorBanner error={actionError} />}
+          <p>Verranno rimossi anche i collegamenti ai gruppi, gli override e lo storico consegne.</p>
+        </ConfirmDialog>
+      )}
+    </>
+  );
+}
+
+function ChannelDiagnostics({
+  channel,
+  testResult,
+}: {
+  channel: DeliveryChannelOut;
+  testResult: DeliveryChannelTestOut | undefined;
+}) {
+  return (
+    <div className="cell-diagnostics">
+      {channel.last_success_at && <div>ultimo successo: {formatDateTime(channel.last_success_at)}</div>}
+      {channel.last_error_at && (
+        <div>
+          ultimo errore ({formatDateTime(channel.last_error_at)}): {channel.last_error}
+        </div>
+      )}
+      {!channel.last_success_at && !channel.last_error_at && <span>nessun invio registrato</span>}
+      {testResult && (
+        <div>{testResult.sent ? `Prova inviata (${testResult.detail})` : `Prova fallita: ${testResult.detail}`}</div>
+      )}
+    </div>
   );
 }
 
@@ -357,45 +375,49 @@ function ReceiverOverridesPanel({
   const channelName = (channelId: string) =>
     channels.find((c) => c.id === channelId)?.name ?? channelId;
 
-  if (error) return <ErrorBanner error={error} />;
-  if (!overrides || overrides.length === 0) {
-    return <p className="card-hint">Nessun override per questo receiver: valgono le soglie di gruppo.</p>;
-  }
+  const columns: DataTableColumn<ReceiverChannelOverrideOut>[] = [
+    { key: "channel", header: "Canale", render: (o) => channelName(o.channel_id) },
+    {
+      key: "mode",
+      header: "Modalità",
+      render: (o) => (o.mode === "mute" ? "Silenziato" : "Soglia sostituita"),
+    },
+    {
+      key: "severity",
+      header: "Soglia minima",
+      render: (o) => (o.min_severity ? <SeverityBadge severity={o.min_severity} /> : "—"),
+    },
+    {
+      key: "actions",
+      header: "",
+      render: (o) => (
+        <div className="row-actions">
+          <button
+            className="danger"
+            disabled={busy !== null}
+            onClick={() => void remove(o.channel_id)}
+          >
+            {busy === o.channel_id ? "Rimozione…" : "Rimuovi"}
+          </button>
+        </div>
+      ),
+    },
+  ];
 
   return (
-    <div className="table-wrap">
+    <>
+      {error && <ErrorBanner error={error} />}
       {actionError && <ErrorBanner error={actionError} />}
-      <table>
-        <thead>
-          <tr>
-            <th>Canale</th>
-            <th>Modalità</th>
-            <th>Soglia minima</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {overrides.map((o) => (
-            <tr key={o.id}>
-              <td>{channelName(o.channel_id)}</td>
-              <td>{o.mode === "mute" ? "silenziato" : "soglia sostituita"}</td>
-              <td>{o.min_severity ?? "—"}</td>
-              <td>
-                <div className="row-actions">
-                  <button
-                    className="danger"
-                    disabled={busy !== null}
-                    onClick={() => void remove(o.channel_id)}
-                  >
-                    {busy === o.channel_id ? "Rimozione…" : "Rimuovi"}
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+      <DataTable
+        caption="Override del receiver"
+        columns={columns}
+        rows={overrides ?? []}
+        rowKey={(o) => o.id}
+        loading={!overrides && !error}
+        error={error}
+        emptyMessage="Nessun override per questo receiver: valgono le soglie di gruppo."
+      />
+    </>
   );
 }
 
@@ -418,7 +440,7 @@ function ReceiverOverrideForm({
   const [mode, setMode] = useState<OverrideMode>("override");
   const [minSeverity, setMinSeverity] = useState<Severity>("error");
   const queryClient = useQueryClient();
-  const { busy, error, run } = useAction();
+  const { busy, error, run, clearError } = useAction();
 
   // Il receiver si sceglie da un elenco: prima era un campo di testo libero in
   // cui incollare un UUID a mano, e qualunque valore non-UUID faceva rispondere
@@ -433,7 +455,7 @@ function ReceiverOverrideForm({
     .map((r) => ({ id: r.id, label: receiverLabel(r, groupNames) }))
     .sort((a, b) => a.label.localeCompare(b.label, "it"));
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     await run(
       async () => {
@@ -467,7 +489,11 @@ function ReceiverOverrideForm({
               id="override-receiver"
               required
               value={receiverId}
-              onChange={(event) => setReceiverId(event.target.value)}
+              onChange={(event) => {
+                setReceiverId(event.target.value);
+                // L'errore di un salvataggio appartiene al receiver di prima.
+                clearError();
+              }}
             >
               <option value="" disabled>
                 Scegli un receiver
@@ -502,8 +528,8 @@ function ReceiverOverrideForm({
               value={mode}
               onChange={(event) => setMode(event.target.value as OverrideMode)}
             >
-              <option value="override">sostituisci la soglia</option>
-              <option value="mute">silenzia</option>
+              <option value="override">Soglia sostituita</option>
+              <option value="mute">Silenziato</option>
             </select>
           </Field>
           {mode === "override" && (
@@ -515,7 +541,7 @@ function ReceiverOverrideForm({
               >
                 {SEVERITIES.map((s) => (
                   <option key={s} value={s}>
-                    {s}
+                    {severityLabel(s)}
                   </option>
                 ))}
               </select>
@@ -536,7 +562,9 @@ function ReceiverOverrideForm({
       {receiverId && (
         <>
           <h4>Override attivi per questo receiver</h4>
-          <ReceiverOverridesPanel receiverId={receiverId} channels={channels} />
+          {/* key: cambiando receiver il pannello riparte da zero, senza l'errore
+              di un'azione sul receiver di prima. */}
+          <ReceiverOverridesPanel key={receiverId} receiverId={receiverId} channels={channels} />
         </>
       )}
     </div>
@@ -555,6 +583,38 @@ export default function ChannelsPage() {
     queryFn: () => apiGet<GroupOut[]>("/api/v1/groups"),
   });
   const [selectedGroupId, setSelectedGroupId] = useState<string>("");
+  const [testResults, setTestResults] = useState<Record<string, DeliveryChannelTestOut>>({});
+
+  const channelColumns: DataTableColumn<DeliveryChannelOut>[] = [
+    { key: "name", header: "Nome", render: (c) => c.name },
+    { key: "type", header: "Tipo", render: (c) => channelTypeLabel(c.type) },
+    { key: "webhook", header: "Webhook", render: (c) => <code>{c.webhook_hint}</code> },
+    {
+      key: "status",
+      header: "Stato",
+      render: (c) => (
+        <span className={c.enabled ? "status-pill ok" : "status-pill warn"}>
+          {c.enabled ? "Attivo" : "Disattivo"}
+        </span>
+      ),
+    },
+    {
+      key: "diagnostics",
+      header: "Diagnostica",
+      render: (c) => <ChannelDiagnostics channel={c} testResult={testResults[c.id]} />,
+    },
+    {
+      key: "actions",
+      header: "",
+      render: (c) =>
+        canManage ? (
+          <ChannelActions
+            channel={c}
+            onTested={(result) => setTestResults((prev) => ({ ...prev, [c.id]: result }))}
+          />
+        ) : null,
+    },
+  ];
 
   return (
     <div>
@@ -573,26 +633,15 @@ export default function ChannelsPage() {
         <div className="card-header">
           <h3>Canali configurati</h3>
         </div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Nome</th>
-                <th>Tipo</th>
-                <th>Webhook</th>
-                <th>Stato</th>
-                <th>Diagnostica</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {channels?.map((c) => <ChannelRow key={c.id} channel={c} canManage={canManage} />)}
-            </tbody>
-          </table>
-        </div>
-        {channels && channels.length === 0 && (
-          <p className="card-hint">Nessun canale configurato.</p>
-        )}
+        <DataTable
+          caption="Canali configurati"
+          columns={channelColumns}
+          rows={channels ?? []}
+          rowKey={(c) => c.id}
+          loading={!channels && !error}
+          error={error}
+          emptyMessage="Nessun canale configurato."
+        />
       </div>
 
       {canManage && channels && (

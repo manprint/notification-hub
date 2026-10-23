@@ -7,6 +7,31 @@ import { setRefreshToken } from "../../api/client";
 import { server } from "../../api/mocks/server";
 import { renderWithProviders } from "../../pages/__tests__/testUtils";
 
+const PRESET_BASH = {
+  preset_id: "p1",
+  name: "Bash generico",
+  description: "",
+  builtin_key: "bash-generic",
+  position: 0,
+  rules_count: 2,
+};
+const PRESET_BACKUP = {
+  preset_id: "p2",
+  name: "Backup interni",
+  description: "",
+  builtin_key: null,
+  position: 1,
+  rules_count: 1,
+};
+const PRESET_RCLONE = {
+  preset_id: "p3",
+  name: "Rclone",
+  description: "",
+  builtin_key: null,
+  position: 1,
+  rules_count: 1,
+};
+
 function renderPanel() {
   return renderWithProviders(<ReceiverPresetsPanel receiverId="r1" />);
 }
@@ -197,5 +222,122 @@ describe("ReceiverPresetsPanel", () => {
     await waitFor(() => expect(screen.getByText("Bash generico")).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: "Togli" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Applica Backup interni")).not.toBeInTheDocument();
+  });
+  it("T-RPP1 i preset disponibili sono pulsanti «Applica», non caselle", async () => {
+    renderPanel();
+
+    const elenco = await screen.findByRole("list", { name: "Preset disponibili" });
+    expect(within(elenco).getByRole("button", { name: "Applica Backup interni" })).toBeEnabled();
+    expect(within(elenco).queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("T-RPP2 dopo un'applicazione rifiutata la lista dei preset si rilegge", async () => {
+    const user = userEvent.setup();
+    let letture = 0;
+    server.use(
+      http.get("/api/v1/receivers/r1/presets", () => {
+        letture += 1;
+        return HttpResponse.json([]);
+      }),
+      http.put("/api/v1/receivers/r1/presets", () =>
+        HttpResponse.json(
+          { type: "/problems/not-found", title: "Not Found", status: 404, detail: "Gone." },
+          { status: 404 },
+        ),
+      ),
+    );
+    renderPanel();
+
+    await user.click(await screen.findByLabelText("Applica Backup interni"));
+    await waitFor(() => expect(letture).toBeGreaterThanOrEqual(2));
+  });
+
+  it("T-RPP3 un preset con una sola regola dice «1 regola»", async () => {
+    server.use(
+      http.get("/api/v1/receivers/r1/presets", () =>
+        HttpResponse.json([
+          { preset_id: "p1", name: "Bash generico", description: null, rules_count: 1, position: 0 },
+        ]),
+      ),
+    );
+    renderPanel();
+
+    const elenco = await screen.findByRole("list", { name: "Preset applicati" });
+    expect(elenco.textContent).toContain("1 regola");
+    expect(elenco.textContent).not.toContain("1 regole");
+  });
+
+  it("le frecce riordinano dall'elenco letto adesso, non da quello in cache", async () => {
+    const user = userEvent.setup();
+    let letture = 0;
+    let inviato: unknown = null;
+    server.use(
+      http.get("/api/v1/receivers/r1/presets", () => {
+        letture += 1;
+        // Dalla prima lettura in poi qualcun altro ha aggiunto Rclone in mezzo.
+        return HttpResponse.json(letture === 1 ? [PRESET_BASH, PRESET_BACKUP] : [PRESET_BASH, PRESET_RCLONE, PRESET_BACKUP]);
+      }),
+      http.put("/api/v1/receivers/r1/presets", async ({ request }) => {
+        inviato = await request.json();
+        return HttpResponse.json([]);
+      }),
+    );
+    renderPanel();
+
+    await user.click(await screen.findByLabelText("Sposta giù Bash generico"));
+
+    // Dalla cache Bash generico sarebbe scambiato con Backup interni; dalla lettura
+    // di adesso scambia con Rclone, che sta in mezzo.
+    await waitFor(() => expect(inviato).toEqual({ preset_ids: ["p3", "p1", "p2"] }));
+  });
+
+  it("se la lettura fresca fallisce non parte nessun elenco, e il motivo si vede", async () => {
+    const user = userEvent.setup();
+    let letture = 0;
+    let inviati = 0;
+    server.use(
+      http.get("/api/v1/receivers/r1/presets", () => {
+        letture += 1;
+        return letture === 1
+          ? HttpResponse.json([PRESET_BASH, PRESET_BACKUP])
+          : HttpResponse.json(
+              { type: "/problems/internal-error", title: "Internal Server Error", status: 500, detail: "Lettura fallita." },
+              { status: 500 },
+            );
+      }),
+      http.put("/api/v1/receivers/r1/presets", () => {
+        inviati += 1;
+        return HttpResponse.json([]);
+      }),
+    );
+    renderPanel();
+
+    await user.click(await screen.findByLabelText("Sposta giù Bash generico"));
+
+    expect((await screen.findAllByText(/Lettura fallita/)).length).toBeGreaterThan(0);
+    expect(inviati).toBe(0);
+  });
+
+  it("una rilettura fallita su un elenco vuoto non dice 'nessun preset applicato'", async () => {
+    const user = userEvent.setup();
+    let letture = 0;
+    server.use(
+      http.get("/api/v1/receivers/r1/presets", () => {
+        letture += 1;
+        return letture === 1
+          ? HttpResponse.json([])
+          : HttpResponse.json(
+              { type: "/problems/internal-error", title: "Internal Server Error", status: 500, detail: "Rilettura fallita." },
+              { status: 500 },
+            );
+      }),
+    );
+    renderPanel();
+
+    expect(await screen.findByText(/Nessun preset applicato/)).toBeInTheDocument();
+    await user.click(await screen.findByLabelText("Applica Backup interni"));
+
+    expect((await screen.findAllByText(/Rilettura fallita/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Nessun preset applicato/)).not.toBeInTheDocument();
   });
 });

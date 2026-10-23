@@ -1,4 +1,4 @@
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import type { AuditEventOut } from "../api/types";
 import AuditExportButton from "../components/AuditExportButton";
 import DataTable, { type DataTableColumn } from "../components/DataTable";
@@ -14,13 +14,14 @@ import {
   shortLabel,
   startOfDay,
 } from "../lib/audit";
-import { formatDateTime } from "../lib/format";
+import { formatDate, formatTime, roleLabel } from "../lib/format";
 
 /** Vista dedicata a "segna come letta" e "segna come verificata": la stessa
  * tabella dell'audit, filtrata sulle azioni che rispondono alla domanda
  * ricorrente — chi ha gestito questa notifica. */
 export default function AuditNotificationStatusPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   // Nell'URL il giorno scelto, all'API l'intervallo di quel giorno nel fuso di
   // chi guarda: vedi startOfDay/endOfDay.
   const fromDay = searchParams.get("from") ?? "";
@@ -51,16 +52,21 @@ export default function AuditNotificationStatusPage() {
     {
       key: "occurred_at",
       header: "Quando",
-      render: (event) => formatDateTime(event.occurred_at),
+      render: (event) => (
+        <span className="received-at">
+          <span>{formatDate(event.occurred_at)}</span>
+          <span>{formatTime(event.occurred_at)}</span>
+        </span>
+      ),
     },
     {
       key: "actor",
       header: "Chi",
       render: (event) => (
-        <div className="cell-preview">
+        <div className="cell-preview audit-chi">
           {event.actor_email}
           <div className="cell-diagnostics">
-            {event.actor_role}
+            {roleLabel(event.actor_role)}
             {event.ip ? ` · ${event.ip}` : ""}
           </div>
         </div>
@@ -95,7 +101,13 @@ export default function AuditNotificationStatusPage() {
             </span>
             <div className="cell-diagnostics">
               {event.receiver_id !== null ? (
-                <Link to={`/notifications/${event.resource_id}`}>Apri</Link>
+                <Link
+                  to={`/notifications/${event.resource_id}`}
+                  state={{ from: `${location.pathname}${location.search}` }}
+                  aria-label={`Apri la notifica del ${formatDate(event.occurred_at)} ${formatTime(event.occurred_at)}`}
+                >
+                  Apri
+                </Link>
               ) : (
                 "notifica non più presente"
               )}
@@ -184,16 +196,19 @@ export default function AuditNotificationStatusPage() {
         </div>
       </div>
 
-      <DataTable
-        columns={columns}
-        rows={rows}
-        rowKey={(event) => event.id}
-        loading={isLoading}
-        emptyMessage="Nessuna lettura o verifica con questi filtri."
-        hasMore={hasNextPage}
-        onLoadMore={() => void fetchNextPage()}
-        loadingMore={isFetchingNextPage}
-      />
+      <div className="card audit-table">
+        <DataTable
+          columns={columns}
+          rows={rows}
+          rowKey={(event) => event.id}
+          loading={isLoading}
+          error={error}
+          emptyMessage="Nessuna lettura o verifica con questi filtri."
+          hasMore={hasNextPage}
+          onLoadMore={() => void fetchNextPage()}
+          loadingMore={isFetchingNextPage}
+        />
+      </div>
     </div>
   );
 }

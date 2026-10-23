@@ -2,7 +2,7 @@
  *  risultato che la stessa data si leggeva in tre modi diversi in tre
  *  schermate. */
 
-import type { UserRole, UserStatus } from "../api/types";
+import type { Severity, UserRole, UserStatus } from "../api/types";
 
 const LOCALE = "it-IT";
 
@@ -41,13 +41,20 @@ const BYTE_UNITS = ["byte", "kB", "MB", "GB"];
 /** Dimensioni leggibili: 1048576 non dice niente, 1 MB sì. Il valore esatto
  *  resta disponibile nel title di chi lo mostra. */
 export function formatBytes(value: number): string {
+  const last = BYTE_UNITS.length - 1;
   let amount = value;
   let unit = 0;
-  while (amount >= 1024 && unit < BYTE_UNITS.length - 1) {
+  while (amount >= 1024 && unit < last) {
     amount /= 1024;
     unit += 1;
   }
-  const rounded = unit === 0 ? amount : Math.round(amount * 10) / 10;
+  let rounded = unit === 0 ? amount : Math.round(amount * 10) / 10;
+  // 1048575 byte sono 1023,999 kB: arrotondati fanno 1024 kB. Quel valore va
+  // letto nell'unità successiva (1 MB), non come 1024 kB.
+  if (rounded >= 1024 && unit < last) {
+    unit += 1;
+    rounded = Math.round((amount / 1024) * 10) / 10;
+  }
   return `${rounded.toLocaleString(LOCALE)} ${BYTE_UNITS[unit]}`;
 }
 
@@ -60,6 +67,21 @@ export const ROLE_LABELS: Record<UserRole, string> = {
 
 export function roleLabel(role: UserRole): string {
   return ROLE_LABELS[role] ?? role;
+}
+
+const SEVERITY_LABELS: Record<Severity, string> = {
+  critical: "Critica",
+  error: "Errore",
+  warning: "Attenzione",
+  info: "Info",
+  debug: "Debug",
+};
+
+/** Il nome italiano di una severity, lo stesso del badge: le tendine dei filtri
+ *  e delle soglie devono dire la stessa parola della tabella accanto. Il valore
+ *  che non si conosce passa com'è, come per i ruoli. */
+export function severityLabel(severity: Severity | string): string {
+  return (SEVERITY_LABELS as Record<string, string>)[severity] ?? severity;
 }
 
 const USER_STATUS_LABELS: Record<string, string> = {

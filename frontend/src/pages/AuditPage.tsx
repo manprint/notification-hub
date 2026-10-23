@@ -12,9 +12,10 @@ import {
   describeChanges,
   endOfDay,
   resourceLabel,
+  shortLabel,
   startOfDay,
 } from "../lib/audit";
-import { formatDateTime } from "../lib/format";
+import { formatDate, formatTime, roleLabel } from "../lib/format";
 
 export default function AuditPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -48,7 +49,12 @@ export default function AuditPage() {
     {
       key: "occurred_at",
       header: "Quando",
-      render: (event) => formatDateTime(event.occurred_at),
+      render: (event) => (
+        <span className="received-at">
+          <span>{formatDate(event.occurred_at)}</span>
+          <span>{formatTime(event.occurred_at)}</span>
+        </span>
+      ),
     },
     {
       key: "actor",
@@ -57,7 +63,7 @@ export default function AuditPage() {
         <div className="cell-preview">
           {event.actor_email}
           <div className="cell-diagnostics">
-            {event.actor_role}
+            {roleLabel(event.actor_role)}
             {event.ip ? ` · ${event.ip}` : ""}
           </div>
         </div>
@@ -79,7 +85,15 @@ export default function AuditPage() {
       render: (event) => (
         <div className="cell-preview">
           {resourceLabel(event.resource_type)}
-          <div className="cell-diagnostics">{event.resource_label ?? event.resource_id ?? "—"}</div>
+          {/* Accorciata come nel registro delle letture: una notifica porta
+              una sua anteprima di 255 caratteri, intera allargherebbe la riga. */}
+          <div className="cell-diagnostics">
+            <span title={event.resource_label ?? undefined}>
+              {event.resource_label
+                ? shortLabel(event.resource_label)
+                : (event.resource_id ?? "—")}
+            </span>
+          </div>
         </div>
       ),
     },
@@ -180,16 +194,19 @@ export default function AuditPage() {
         </div>
       </div>
 
-      <DataTable
-        columns={columns}
-        rows={rows}
-        rowKey={(event) => event.id}
-        loading={isLoading}
-        emptyMessage="Nessun evento con questi filtri."
-        hasMore={hasNextPage}
-        onLoadMore={() => void fetchNextPage()}
-        loadingMore={isFetchingNextPage}
-      />
+      <div className="card">
+        <DataTable
+          columns={columns}
+          rows={rows}
+          rowKey={(event) => event.id}
+          loading={isLoading}
+          error={error}
+          emptyMessage="Nessun evento con questi filtri."
+          hasMore={hasNextPage}
+          onLoadMore={() => void fetchNextPage()}
+          loadingMore={isFetchingNextPage}
+        />
+      </div>
     </div>
   );
 }

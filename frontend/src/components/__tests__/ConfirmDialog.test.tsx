@@ -106,4 +106,18 @@ describe("ConfirmDialog", () => {
 
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
+
+  it("l'azione di conferma sta prima di Annulla, come nei form", () => {
+    render(
+      <ConfirmDialog
+        title="Ripristina"
+        onConfirm={() => undefined}
+        onCancel={() => undefined}
+        confirmLabel="Ripristina"
+      />,
+    );
+
+    const nomi = screen.getAllByRole("button").map((b) => b.textContent);
+    expect(nomi.indexOf("Ripristina")).toBeLessThan(nomi.indexOf("Annulla"));
+  });
 });

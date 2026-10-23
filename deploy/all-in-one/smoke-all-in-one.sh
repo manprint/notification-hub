@@ -86,6 +86,7 @@ docker run -d --name "$MOCK" --network "$NETWORK" \
 docker run -d --name "$CONTAINER" --network "$NETWORK" \
     -p "127.0.0.1:${PORT}:80" \
     -e NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST="hooks.slack.com,chat.googleapis.com,${MOCK}" \
+    -e NOTIFYHUB_WEBHOOK_INSECURE_HTTP_HOSTS="${MOCK}" \
     -v "${CONTAINER}-data:/data" \
     -v "${CONTAINER}-logs:/logs" \
     "$IMAGE" >/dev/null
@@ -114,7 +115,7 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} Container healthy: tutti i servizi sono su
 echo ""
 echo "Step 2: bootstrap del tenant..."
 USER_EMAIL="owner@acme-notifyhub-smoke.io"
-USER_PASSWORD="password123"
+USER_PASSWORD="smoke-password-123"
 
 bootstrap_output=$(docker exec "$CONTAINER" notifyhub-cli bootstrap \
     --tenant-name "Test Tenant" \
@@ -175,7 +176,10 @@ script_response=$(curl -s -w "\n%{http_code}" $BASE/api/v1/receivers/$receiver_i
     -H "Authorization: Bearer $access_token")
 assert_http_code 200 "$(echo "$script_response" | tail -1)" \
     "Il download dello script wrapper deve restituire 200"
-if ! echo "$script_response" | head -n -1 | grep -qF "NOTIFYHUB_SLUG:-$receiver_slug"; then
+# Con pipefail, `echo | grep -q` che esce al primo match fa morire echo di SIGPIPE
+# e il controllo fallisce a caso su un corpo di 20 KB: si passa dalla variabile.
+script_body="$(echo "$script_response" | head -n -1)"
+if ! grep -qF "NOTIFYHUB_SLUG:-$receiver_slug" <<<"$script_body"; then
     echo "Lo script wrapper scaricato deve contenere lo slug del receiver"
     exit 1
 fi

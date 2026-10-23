@@ -6,11 +6,11 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import event, select, update
 
 from app.core.crypto import encrypt_secret
 from app.db.session import async_session_factory_app, tenant_session
-from app.db.sync_session import sync_session_factory
+from app.db.sync_session import sync_engine, sync_session_factory, tenant_session_sync
 from app.db.types import DeliveryStatus, Severity
 from app.models.channel import DeliveryChannel
 from app.models.delivery import Delivery
@@ -289,7 +289,8 @@ async def test_cleanup_tokens_elimina_scaduti_e_revocati(two_tenants):
 
     async with tenant_session(tenant_id) as session:
         assert (await session.get(RefreshToken, expired_id)) is None
-        assert (await session.get(RefreshToken, revoked_id)) is None
+        # Revocato ma ancora valido: resta, per rilevare il riuso del token ruotato.
+        assert (await session.get(RefreshToken, revoked_id)) is not None
         assert (await session.get(RefreshToken, valid_id)) is not None
         assert (await session.get(Invitation, expired_inv_id)) is None
         assert (await session.get(Invitation, valid_inv_id)) is not None
@@ -483,3 +484,253 @@ async def test_recompute_tenant_usage_aggiorna_la_gauge(two_tenants):
 
     value = tenant_storage_bytes.labels(tenant_id=str(tenant_id))._value.get()
     assert value == expected
+
+
+class _Interruzione(BaseException):
+    """Come un crash o un SIGTERM a meta' batch: non e' un errore da contare."""
+
+
+class _S3Finto:
+    """Client S3 di prova: le chiavi in `falliti` danno errore, quelle in
+    `interrotti` interrompono il job; le altre riescono."""
+
+    def __init__(self, falliti: tuple[str, ...] = (), interrotti: tuple[str, ...] = ()) -> None:
+        self.falliti = falliti
+        self.interrotti = interrotti
+        self.chiamate: list[str] = []
+
+    def delete_object(self, *, Bucket: str, Key: str) -> None:  # noqa: N803
+        self.chiamate.append(Key)
+        if Key in self.interrotti:
+            raise _Interruzione()
+        if Key in self.falliti:
+            raise RuntimeError("MinIO non raggiungibile")
+
+
+@pytest.mark.integration
+def test_drain_object_deletions_configura_timeout_e_tentativi_del_client_s3(monkeypatch):
+    import boto3
+
+    from app.core.config import get_settings
+
+    creati: list[dict] = []
+
+    def client_finto(service: str, **kwargs: object) -> _S3Finto:
+        creati.append(kwargs)
+        return _S3Finto()
+
+    monkeypatch.setattr(boto3, "client", client_finto)
+    drain_object_deletions()
+
+    # Il drain legge le impostazioni NOTIFYHUB_S3_*, come il PUT in ingestion: nessun
+    # valore fisso nel job.
+    settings = get_settings()
+    config = creati[0]["config"]
+    assert config.connect_timeout == settings.notifyhub_s3_connect_timeout_seconds
+    assert config.read_timeout == settings.notifyhub_s3_read_timeout_seconds
+    assert config.retries["max_attempts"] == settings.notifyhub_s3_max_attempts
+
+
+@pytest.mark.integration
+def test_il_timeout_s3_segue_la_variabile_d_ambiente_nel_drain_e_nella_purge(monkeypatch):
+    """Un operatore che tara NOTIFYHUB_S3_READ_TIMEOUT_SECONDS deve vederlo applicato
+    sia al drain sia alla purge degli orfani (c-be-infra-06)."""
+    import boto3
+
+    from app.core.config import get_settings
+
+    creati: list[dict] = []
+
+    class _Interrotto(Exception):
+        pass
+
+    def client_finto(service: str, **kwargs: object):  # noqa: ANN202
+        creati.append(kwargs)
+        # La purge non serve oltre la creazione del client: basta fermarla qui.
+        raise _Interrotto()
+
+    monkeypatch.setattr(boto3, "client", client_finto)
+    monkeypatch.setenv("NOTIFYHUB_S3_READ_TIMEOUT_SECONDS", "42")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(_Interrotto):
+            purge_orphan_objects()
+        with pytest.raises(_Interrotto):
+            drain_object_deletions()
+    finally:
+        get_settings.cache_clear()
+
+    assert len(creati) == 2
+    for kwargs in creati:
+        assert kwargs["config"].read_timeout == 42
+
+
+@pytest.mark.integration
+def test_drain_object_deletions_non_perde_l_avanzamento_se_il_job_si_interrompe(monkeypatch):
+    """Ogni riga e' committata da sola: una cancellazione riuscita e un tentativo
+    contato restano anche se il job viene interrotto piu' avanti nel batch."""
+    import boto3
+
+    base = datetime.now(UTC) - timedelta(days=1)
+    chiavi = {
+        "ok": f"maint-test/ok-{uuid.uuid4()}.txt",
+        "errore": f"maint-test/errore-{uuid.uuid4()}.txt",
+        "interrotto": f"maint-test/interrotto-{uuid.uuid4()}.txt",
+    }
+    ids = {nome: uuid.uuid4() for nome in chiavi}
+    with sync_session_factory() as session:
+        for offset, nome in enumerate(("ok", "errore", "interrotto")):
+            session.add(
+                PendingObjectDeletion(
+                    id=ids[nome],
+                    storage_key=chiavi[nome],
+                    enqueued_at=base + timedelta(seconds=offset),
+                    attempts=0,
+                )
+            )
+        session.commit()
+
+    s3 = _S3Finto(falliti=(chiavi["errore"],), interrotti=(chiavi["interrotto"],))
+    monkeypatch.setattr(boto3, "client", lambda service, **kwargs: s3)
+    try:
+        with pytest.raises(_Interruzione):
+            drain_object_deletions()
+
+        with sync_session_factory() as session:
+            assert session.get(PendingObjectDeletion, ids["ok"]) is None
+            riga_errore = session.get(PendingObjectDeletion, ids["errore"])
+            assert riga_errore is not None
+            assert riga_errore.attempts == 1
+            assert session.get(PendingObjectDeletion, ids["interrotto"]) is not None
+    finally:
+        with sync_session_factory() as session:
+            for nome in ("errore", "interrotto"):
+                row = session.get(PendingObjectDeletion, ids[nome])
+                if row is not None:
+                    session.delete(row)
+            session.commit()
+
+
+@pytest.mark.integration
+async def test_reconcile_con_il_broker_che_rifiuta_un_accodamento_continua_il_giro(two_tenants):
+    """Il primo accodamento del giro fallisce: l'errore non esce dal job e la
+    delivery dell'altro tenant viene comunque riaccodata."""
+    attese: set[str] = set()
+    for tenant_id in two_tenants:
+        receiver_id = await create_receiver(tenant_id, uuid.uuid4().hex[:22])
+        notification_id = await _insert_notification(tenant_id, receiver_id, datetime.now(UTC))
+        channel_id, delivery_id = uuid.uuid4(), uuid.uuid4()
+        async with tenant_session(tenant_id) as session:
+            session.add(
+                DeliveryChannel(
+                    id=channel_id,
+                    tenant_id=tenant_id,
+                    name="Slack #ops",
+                    type="slack",
+                    webhook_url=encrypt_secret("https://hooks.slack.com/services/T/B/X"),
+                    enabled=True,
+                )
+            )
+            await session.flush()
+            session.add(
+                Delivery(
+                    id=delivery_id,
+                    tenant_id=tenant_id,
+                    notification_id=notification_id,
+                    channel_id=channel_id,
+                    status=DeliveryStatus.PENDING,
+                    attempts=0,
+                    next_attempt_at=datetime.now(UTC) - timedelta(minutes=1),
+                )
+            )
+            await session.flush()
+        attese.add(str(delivery_id))
+
+    tentati: list[str] = []
+    riaccodati: list[str] = []
+
+    # Il database di test puo' contenere delivery di altri test: fallisce il primo
+    # accodamento di una delle due delivery di questo test.
+    def accoda(delivery_id: str, tid: str) -> None:
+        tentati.append(delivery_id)
+        if delivery_id in attese and not attese & set(tentati[:-1]):
+            raise ConnectionError("broker irraggiungibile")
+        riaccodati.append(delivery_id)
+
+    set_enqueue_function(accoda)
+    try:
+        reconcile_deliveries()
+    finally:
+        reset_enqueue_function()
+
+    assert attese <= set(tentati)
+    assert len(attese & set(riaccodati)) == 1
+
+
+@pytest.mark.integration
+async def test_reconcile_non_riapre_una_delivery_completata_durante_il_riclaim(two_tenants):
+    """Il worker proprietario committa `sent` fra la SELECT delle righe bloccate e
+    il riclaim: reconcile non la riporta a `failed` e non la riaccoda."""
+    tenant_id, _ = two_tenants
+    slug = uuid.uuid4().hex[:22]
+    receiver_id = await create_receiver(tenant_id, slug)
+    notification_id = await _insert_notification(tenant_id, receiver_id, datetime.now(UTC))
+
+    channel_id = uuid.uuid4()
+    async with tenant_session(tenant_id) as session:
+        session.add(
+            DeliveryChannel(
+                id=channel_id,
+                tenant_id=tenant_id,
+                name="Slack #ops",
+                type="slack",
+                webhook_url=encrypt_secret("https://hooks.slack.com/services/T/B/X"),
+                enabled=True,
+            )
+        )
+        await session.flush()
+
+    delivery_id = uuid.uuid4()
+    now = datetime.now(UTC)
+    async with tenant_session(tenant_id) as session:
+        session.add(
+            Delivery(
+                id=delivery_id,
+                tenant_id=tenant_id,
+                notification_id=notification_id,
+                channel_id=channel_id,
+                status=DeliveryStatus.SENDING,
+                attempts=0,
+                next_attempt_at=now,
+                locked_at=now - timedelta(minutes=15),
+            )
+        )
+        await session.flush()
+
+    completato: list[bool] = []
+
+    def worker_completa(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        # Subito dopo la SELECT delle righe bloccate di questo tenant, il worker
+        # proprietario committa `sent` su un'altra connessione.
+        if completato or "locked_at <" not in statement or str(tenant_id) not in repr(parameters):
+            return
+        completato.append(True)
+        with tenant_session_sync(tenant_id) as other:
+            riga = other.get(Delivery, delivery_id)
+            riga.status = DeliveryStatus.SENT
+            riga.sent_at = datetime.now(UTC)
+
+    requeued: list[str] = []
+    set_enqueue_function(lambda delivery_id, tid: requeued.append(delivery_id))
+    event.listen(sync_engine, "after_cursor_execute", worker_completa)
+    try:
+        reconcile_deliveries()
+    finally:
+        event.remove(sync_engine, "after_cursor_execute", worker_completa)
+        reset_enqueue_function()
+
+    assert completato
+    assert str(delivery_id) not in requeued
+    async with tenant_session(tenant_id) as session:
+        riga = await session.get(Delivery, delivery_id)
+        assert riga.status == DeliveryStatus.SENT

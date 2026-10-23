@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_claims, db, require_admin, require_member
@@ -21,7 +22,6 @@ from app.models.severity_preset import (
     SeverityPresetRule,
 )
 from app.models.severity_rule import SeverityRule
-from app.models.tenant import Tenant
 from app.schemas.preset import (
     ReceiverPresetOut,
     ReceiverPresetsIn,
@@ -53,6 +53,7 @@ from app.services.surveillance import (
     reference_instant,
     schedule_from_receiver,
 )
+from app.services.tenant_lock import lock_tenant_settings
 from app.services.wrapper_script import (
     WrapperTemplateError,
     load_template,
@@ -200,8 +201,9 @@ async def _get_group_or_404(
 async def _validate_max_body_bytes(
     session: AsyncSession, tenant_id: uuid.UUID, requested: int | None
 ) -> int:
-    tenant_result = await session.execute(select(Tenant).where(Tenant.id == tenant_id))
-    tenant = tenant_result.scalar_one()
+    # Lock sulla riga del tenant: serializza con un PATCH /tenant che abbassa il cap
+    # (write skew). NO KEY UPDATE, per non fermare le ingestion del tenant.
+    tenant = await lock_tenant_settings(session, tenant_id)
     if requested is None:
         return tenant.max_body_bytes
     if requested > tenant.max_body_bytes:
@@ -220,7 +222,7 @@ async def create_receiver(
     body: ReceiverCreate,
     request: Request,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> ReceiverOut:
     tenant_id = uuid.UUID(claims.tid)
     group = await _get_group_or_404(session, tenant_id, group_id)
@@ -261,7 +263,7 @@ async def list_receivers(
     group_id: uuid.UUID,
     request: Request,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[ReceiverOut]:
     await assert_group_access(session, claims, group_id, write=False)
     result = await session.execute(
@@ -279,7 +281,7 @@ async def list_receivers(
 async def list_all_receivers(
     request: Request,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[ReceiverOut]:
     """Tutti i receiver visibili al chiamante, per i selettori della UI che
     non partono da un gruppo (override per receiver nella pagina Canali)."""
@@ -301,7 +303,7 @@ async def get_receiver(
     receiver_id: uuid.UUID,
     request: Request,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> ReceiverOut:
     receiver = await _get_receiver_or_404(session, uuid.UUID(claims.tid), receiver_id)
     await assert_group_access(session, claims, receiver.group_id, write=False)
@@ -321,11 +323,16 @@ async def update_receiver(
     body: ReceiverUpdate,
     request: Request,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> ReceiverOut:
     tenant_id = uuid.UUID(claims.tid)
     receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
     await assert_group_access(session, claims, receiver.group_id, write=True)
+    if body.max_body_bytes is not None:
+        # Lock del tenant prima di modificare il receiver: la validazione del cap
+        # fa autoflush, quindi senza questo lock la riga receiver verrebbe scritta
+        # prima del tenant, nell'ordine inverso a quello dell'ingestion.
+        await lock_tenant_settings(session, tenant_id)
 
     if body.name is not None:
         receiver.name = body.name
@@ -392,11 +399,13 @@ async def update_receiver(
 async def delete_receiver(
     receiver_id: uuid.UUID,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     receiver = await _get_receiver_or_404(session, uuid.UUID(claims.tid), receiver_id)
     await assert_group_access(session, claims, receiver.group_id, write=True)
     await session.delete(receiver)
+    # Stesso motivo di delete_group: il flush porta gli errori di FK dentro la richiesta.
+    await session.flush()
 
 
 @router.post("/receivers/{receiver_id}/rotate-slug", response_model=ReceiverOut)
@@ -404,7 +413,7 @@ async def rotate_slug(
     receiver_id: uuid.UUID,
     request: Request,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> ReceiverOut:
     """Rigenera lo slug. Ad admin+ anche se il member puo creare receiver:
     rigenerare uno slug rompe gli script gia in produzione (spec 4.1).
@@ -425,7 +434,7 @@ async def download_wrapper_script(
     receiver_id: uuid.UUID,
     request: Request,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> Response:
     """`scripts/notifyhub-run.sh` con URL e slug di questo receiver gia' dentro.
 
@@ -473,7 +482,7 @@ async def download_wrapper_script(
 async def list_severity_rules(
     receiver_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[SeverityRuleOut]:
     tenant_id = uuid.UUID(claims.tid)
     receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
@@ -544,7 +553,7 @@ async def create_severity_rule(
     receiver_id: uuid.UUID,
     body: SeverityRuleCreate,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> SeverityRuleOut:
     tenant_id = uuid.UUID(claims.tid)
     receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
@@ -561,12 +570,37 @@ async def create_severity_rule(
         ) from exc
 
     if body.priority is None:
-        priority = await _next_priority(session, tenant_id, receiver_id)
+        # Priorita automatica: una richiesta concorrente puo aver preso lo stesso numero.
+        # Se il vincolo scatta si ricalcola e si riprova una volta, senza un 409 per una
+        # scelta che l'utente non ha fatto.
+        rule = _nuova_regola(
+            tenant_id, receiver_id, body, await _next_priority(session, tenant_id, receiver_id)
+        )
+        try:
+            async with session.begin_nested():
+                session.add(rule)
+                await session.flush()
+        except IntegrityError:
+            rule = _nuova_regola(
+                tenant_id, receiver_id, body, await _next_priority(session, tenant_id, receiver_id)
+            )
+            session.add(rule)
+            await session.flush()
     else:
-        priority = body.priority
-        await _assert_priority_free(session, tenant_id, receiver_id, priority)
+        await _assert_priority_free(session, tenant_id, receiver_id, body.priority)
+        rule = _nuova_regola(tenant_id, receiver_id, body, body.priority)
+        session.add(rule)
+        await session.flush()
+    return SeverityRuleOut.model_validate(rule)
 
-    rule = SeverityRule(
+
+def _nuova_regola(
+    tenant_id: uuid.UUID,
+    receiver_id: uuid.UUID,
+    body: SeverityRuleCreate,
+    priority: int,
+) -> SeverityRule:
+    return SeverityRule(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
         receiver_id=receiver_id,
@@ -576,9 +610,6 @@ async def create_severity_rule(
         severity=body.severity,
         enabled=body.enabled,
     )
-    session.add(rule)
-    await session.flush()
-    return SeverityRuleOut.model_validate(rule)
 
 
 async def _get_rule_or_404(
@@ -606,7 +637,7 @@ async def reorder_severity_rules(
     receiver_id: uuid.UUID,
     body: SeverityRuleReorderIn,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[SeverityRuleOut]:
     """Rinumera le regole 10, 20, 30... nell'ordine dato. Sposta una regola in
     su o in giu senza far calcolare al chiamante un numero di priorita libero.
@@ -652,7 +683,7 @@ async def update_severity_rule(
     rule_id: uuid.UUID,
     body: SeverityRuleUpdate,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> SeverityRuleOut:
     tenant_id = uuid.UUID(claims.tid)
     rule = await _get_rule_or_404(session, tenant_id, rule_id)
@@ -696,13 +727,14 @@ async def update_severity_rule(
 async def delete_severity_rule(
     rule_id: uuid.UUID,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     tenant_id = uuid.UUID(claims.tid)
     rule = await _get_rule_or_404(session, tenant_id, rule_id)
     receiver = await _get_receiver_or_404(session, tenant_id, rule.receiver_id)
     await assert_group_access(session, claims, receiver.group_id, write=True)
     await session.delete(rule)
+    await session.flush()
 
 
 @router.post("/receivers/{receiver_id}/test-severity", response_model=TestSeverityOut)
@@ -710,7 +742,7 @@ async def test_severity(
     receiver_id: uuid.UUID,
     body: TestSeverityIn,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> TestSeverityOut:
     tenant_id = uuid.UUID(claims.tid)
     receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
@@ -751,7 +783,7 @@ async def replay_severity_rules(
     receiver_id: uuid.UUID,
     limit: int = Query(default=10, ge=1, le=REPLAY_MAX_NOTIFICATIONS),  # noqa: B008
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> SeverityReplayOut:
     """Rivaluta le ultime notifiche del receiver con le regole ATTUALI e
     confronta il risultato con la severity registrata all'epoca.
@@ -811,8 +843,15 @@ async def replay_severity_rules(
         # replay li rimette in gioco con le politiche di adesso. Senza, una
         # notifica decisa dall'exit code risulterebbe sempre "cambiata" solo
         # perche il replay non sapeva che il comando era fallito.
+        # Una severity dichiarata dal mittente (X-Severity o ?severity=) vince su ogni
+        # regola, come al momento dell'ingestione: il replay la riprende cosi com'e,
+        # senza far comparire un "cambia" che nessuna regola ha prodotto.
         resolution = await resolve_severity_async(
-            header_severity=None,
+            header_severity=(
+                notification.severity
+                if notification.severity_source == SeveritySource.EXPLICIT
+                else None
+            ),
             query_severity=None,
             rules=rules,
             content=content,
@@ -883,7 +922,7 @@ async def _receiver_presets(
 async def list_receiver_presets(
     receiver_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[ReceiverPresetOut]:
     tenant_id = uuid.UUID(claims.tid)
     receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
@@ -896,7 +935,7 @@ async def set_receiver_presets(
     receiver_id: uuid.UUID,
     body: ReceiverPresetsIn,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[ReceiverPresetOut]:
     """Sostituisce l'elenco dei preset applicati al receiver.
 
@@ -963,7 +1002,7 @@ async def set_receiver_presets(
 async def get_severity_chain(
     receiver_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[SeverityChainItemOut]:
     """La catena effettiva: tutte le regole attive del receiver, proprie e dei
     preset, nell'ordine esatto in cui vengono provate. Risponde alla domanda
@@ -992,7 +1031,7 @@ async def get_severity_chain(
 async def group_delete_impact(
     group_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> DeleteImpactOut:
     """Preflight per la cancellazione di un gruppo (spec 9.3): conteggi reali
     di receiver, notifiche e delivery che verrebbero eliminati in cascata."""
@@ -1002,32 +1041,40 @@ async def group_delete_impact(
     tenant_id = uuid.UUID(claims.tid)
     await assert_group_access(session, claims, group_id, write=False)
 
-    receivers_result = await session.execute(
-        select(Receiver.id).where(Receiver.group_id == group_id, Receiver.tenant_id == tenant_id)
+    # Solo conteggi, in SQL: elencare gli id di ogni notifica del gruppo in Python
+    # e rimandarli come parametri legati supererebbe il limite di 32767 parametri
+    # del protocollo Postgres su un gruppo grande, con un 500 sulla preflight.
+    # I receiver si passano come sottoquery per la stessa ragione.
+    receivers_of_group = select(Receiver.id).where(
+        Receiver.group_id == group_id, Receiver.tenant_id == tenant_id
     )
-    receiver_ids = [row[0] for row in receivers_result.all()]
-
-    if not receiver_ids:
+    receivers_count = await session.scalar(
+        select(func.count()).select_from(receivers_of_group.subquery())
+    )
+    if not receivers_count:
         return DeleteImpactOut(receivers=0, notifications=0, deliveries=0)
 
-    notifications_result = await session.execute(
-        select(Notification.id).where(
-            Notification.receiver_id.in_(receiver_ids), Notification.tenant_id == tenant_id
+    notifications_count = await session.scalar(
+        select(func.count())
+        .select_from(Notification)
+        .where(
+            Notification.receiver_id.in_(receivers_of_group),
+            Notification.tenant_id == tenant_id,
         )
     )
-    notification_ids = [row[0] for row in notifications_result.all()]
-
-    deliveries_count = 0
-    if notification_ids:
-        deliveries_result = await session.execute(
-            select(Delivery.id).where(
-                Delivery.notification_id.in_(notification_ids), Delivery.tenant_id == tenant_id
-            )
+    deliveries_count = await session.scalar(
+        select(func.count())
+        .select_from(Delivery)
+        .join(Notification, Notification.id == Delivery.notification_id)
+        .where(
+            Notification.receiver_id.in_(receivers_of_group),
+            Notification.tenant_id == tenant_id,
+            Delivery.tenant_id == tenant_id,
         )
-        deliveries_count = len(deliveries_result.all())
+    )
 
     return DeleteImpactOut(
-        receivers=len(receiver_ids),
-        notifications=len(notification_ids),
-        deliveries=deliveries_count,
+        receivers=receivers_count,
+        notifications=notifications_count or 0,
+        deliveries=deliveries_count or 0,
     )

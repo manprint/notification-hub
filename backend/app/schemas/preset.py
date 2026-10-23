@@ -1,6 +1,6 @@
 import uuid
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.db.types import INT4_MAX, Severity
 
@@ -36,6 +36,14 @@ class SeverityPresetRuleUpdate(BaseModel):
 
 class SeverityPresetRuleReorderIn(BaseModel):
     rule_ids: list[uuid.UUID] = Field(min_length=1)
+
+    @field_validator("rule_ids")
+    @classmethod
+    def _senza_duplicati(cls, valore: list[uuid.UUID]) -> list[uuid.UUID]:
+        # Un id ripetuto supererebbe il controllo sull'insieme e comparirebbe due volte.
+        if len(set(valore)) != len(valore):
+            raise ValueError("ogni regola compare una sola volta")
+        return valore
 
 
 class SeverityPresetOut(BaseModel):
@@ -78,6 +86,8 @@ class BuiltinPresetOut(BaseModel):
 class SyncBuiltinPresetsOut(BaseModel):
     installed: list[str]
     already_present: list[str]
+    # Predefiniti saltati perche il loro nome e gia usato da un preset del tenant.
+    skipped: list[str] = Field(default_factory=list)
 
 
 class ReceiverPresetOut(BaseModel):

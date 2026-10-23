@@ -1,13 +1,17 @@
 """E2E dell'audit (spec 9.6): chi ha fatto cosa, con attenzione a "segna come
 letta" e "segna come verificata"."""
 
+import csv
+import io
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 
 from app.core.security import hash_password
 from app.db.session import tenant_session
-from app.db.types import UserRole, UserStatus
+from app.db.types import AuditOutcome, UserRole, UserStatus
+from app.models.audit_event import AuditEvent
 from app.models.user import User
 from app.models.user_group_membership import UserGroupMembership
 from tests.conftest_factories import create_group, create_receiver
@@ -389,6 +393,29 @@ async def test_export_csv_restituisce_un_allegato(api_client, two_tenants, owner
 
 
 @pytest.mark.e2e
+async def test_export_csv_neutralizza_le_formule(api_client, two_tenants, owner_token):
+    """Il corpo finisce in resource_label: una cella che inizia con = non deve
+    arrivare al foglio di calcolo come formula."""
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    _, notification_id = await _ingest(
+        api_client, tenant_id, body='=HYPERLINK("http://attacco.test","Apri")'
+    )
+    await api_client.patch(
+        f"/api/v1/notifications/{notification_id}", json={"status": "read"}, headers=owner
+    )
+
+    resp = await api_client.get(
+        "/api/v1/audit/export",
+        params={"notification_status_only": True, "format": "csv"},
+        headers=owner,
+    )
+    righe = list(csv.DictReader(io.StringIO(resp.text)))
+    assert [riga["action"] for riga in righe] == ["notification.marked_read"]
+    assert righe[0]["resource_label"] == '\'=HYPERLINK("http://attacco.test","Apri")'
+
+
+@pytest.mark.e2e
 async def test_export_json_rispetta_i_filtri(api_client, two_tenants, owner_token):
     tenant_id, _ = two_tenants
     owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
@@ -668,3 +695,228 @@ async def test_il_legame_gruppo_canale_dice_di_quale_gruppo_parla(
     evento = audit.json()["events"][0]
     assert evento["group_name"] == "Server Produzione"
     assert evento["receiver_name"] is None
+
+
+@pytest.mark.e2e
+async def test_delete_di_un_member_finisce_nell_audit_senza_corpo(
+    api_client, two_tenants, owner_token
+):
+    """Il DELETE ha un attore: l'owner lo vede in audit, senza copiare il corpo.
+    Un viewer riceve 403 e non lascia traccia."""
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    member_id, member_email, member_token = await _user_with_token(
+        api_client, tenant_id, UserRole.MEMBER
+    )
+    member = {"Authorization": f"Bearer {member_token}"}
+    _, _, viewer_token = await _user_with_token(api_client, tenant_id, UserRole.VIEWER)
+    viewer = {"Authorization": f"Bearer {viewer_token}"}
+    group_id = await create_group(tenant_id, f"Gruppo {uuid.uuid4().hex[:6]}")
+    await _join_group(tenant_id, member_id, group_id)
+    slug = uuid.uuid4().hex[:22]
+    await create_receiver(tenant_id, slug, group_id)
+    cancellata = (await api_client.post(f"/ingest/{slug}", content="corpo da non copiare")).json()
+    rifiutata = (await api_client.post(f"/ingest/{slug}", content="resta")).json()
+
+    deleted = await api_client.delete(f"/api/v1/notifications/{cancellata['id']}", headers=member)
+    assert deleted.status_code == 204
+    denied = await api_client.delete(f"/api/v1/notifications/{rifiutata['id']}", headers=viewer)
+    assert denied.status_code == 403
+
+    audit = await api_client.get(
+        "/api/v1/audit/events", params={"resource_id": cancellata["id"]}, headers=owner
+    )
+    eventi = audit.json()["events"]
+    assert [evento["action"] for evento in eventi] == ["notification.deleted"]
+    assert eventi[0]["actor_email"] == member_email
+    assert eventi[0]["resource_label"] is None
+    assert "corpo da non copiare" not in audit.text
+    audit_rifiutata = await api_client.get(
+        "/api/v1/audit/events", params={"resource_id": rifiutata["id"]}, headers=owner
+    )
+    assert audit_rifiutata.json()["events"] == []
+
+
+@pytest.mark.e2e
+async def test_notification_status_trova_ogni_notifica_del_bulk_read(
+    api_client, two_tenants, owner_token
+):
+    """Il bulk-read porta gli id in `context`: la ricerca per notifica deve
+    ritrovare ciascuno dei tre, e solo quello."""
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    slug = uuid.uuid4().hex[:22]
+    receiver_id = await create_receiver(tenant_id, slug)
+    ids = [
+        (await api_client.post(f"/ingest/{slug}", content=f"bulk {i}")).json()["id"]
+        for i in range(3)
+    ]
+
+    bulk = await api_client.post(
+        "/api/v1/notifications/bulk-read", json={"receiver_id": str(receiver_id)}, headers=owner
+    )
+    assert bulk.json() == {"marked_read": 3}
+
+    for notification_id in ids:
+        eventi = await api_client.get(
+            "/api/v1/audit/notification-status",
+            params={"notification_id": notification_id},
+            headers=owner,
+        )
+        assert [evento["action"] for evento in eventi.json()["events"]] == [
+            "notification.bulk_marked_read"
+        ]
+        assert eventi.json()["events"][0]["context"]["count"] == 3
+
+
+@pytest.mark.e2e
+async def test_paginazione_audit_con_occurred_at_uguale(api_client, two_tenants, owner_token):
+    """Sette eventi con lo stesso occurred_at: il cursore su (occurred_at, id)
+    deve consegnarli tutti, una volta sola, pagina dopo pagina."""
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    stesso_istante = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+    async with tenant_session(tenant_id) as session:
+        session.add_all(
+            [
+                AuditEvent(
+                    tenant_id=tenant_id,
+                    occurred_at=stesso_istante,
+                    actor_email="owner@test.com",
+                    actor_role=UserRole.OWNER,
+                    action="notification.marked_read",
+                    resource_type="notification",
+                    outcome=AuditOutcome.SUCCESS,
+                )
+                for _ in range(7)
+            ]
+        )
+
+    ids: list[str] = []
+    params: dict = {"action": "notification.marked_read", "limit": 3}
+    while True:
+        pagina = (await api_client.get("/api/v1/audit/events", params=params, headers=owner)).json()
+        ids += [evento["id"] for evento in pagina["events"]]
+        if pagina["next_cursor"] is None:
+            break
+        params = {**params, "cursor": pagina["next_cursor"]}
+
+    assert len(ids) == 7
+    assert len(set(ids)) == 7
+
+
+@pytest.mark.e2e
+async def test_periodo_fuori_dall_intervallo_supportato_e_422(api_client, two_tenants, owner_token):
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+
+    resp = await api_client.get(
+        "/api/v1/audit/events",
+        params={"from": "0001-01-01T00:00:00+01:00"},
+        headers=owner,
+    )
+
+    assert resp.status_code == 422
+
+
+async def _eventi_marked_read(tenant_id: uuid.UUID, quanti: int) -> None:
+    """Eventi con lo stesso occurred_at: l'ordine di export dipende solo da id."""
+    istante = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+    async with tenant_session(tenant_id) as session:
+        session.add_all(
+            [
+                AuditEvent(
+                    tenant_id=tenant_id,
+                    occurred_at=istante,
+                    actor_email="owner@test.com",
+                    actor_role=UserRole.OWNER,
+                    action="notification.marked_read",
+                    resource_type="notification",
+                    outcome=AuditOutcome.SUCCESS,
+                )
+                for _ in range(quanti)
+            ]
+        )
+
+
+@pytest.mark.e2e
+async def test_export_a_blocchi_non_perde_ne_duplica_righe(
+    api_client, two_tenants, owner_token, monkeypatch
+):
+    """Con blocchi da due righe e cinque eventi, lo stesso istante fra blocchi
+    diversi: l'export li da' tutti, una volta, nell'ordine di /audit/events."""
+    from app.api.v1 import audit as audit_api
+
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    await _eventi_marked_read(tenant_id, 5)
+    monkeypatch.setattr(audit_api, "EXPORT_BATCH_ROWS", 2)
+    filtri = {"action": "notification.marked_read"}
+
+    json_resp = await api_client.get(
+        "/api/v1/audit/export", params={**filtri, "format": "json"}, headers=owner
+    )
+    csv_resp = await api_client.get(
+        "/api/v1/audit/export", params={**filtri, "format": "csv"}, headers=owner
+    )
+
+    ids = [evento["id"] for evento in json_resp.json()]
+    assert len(ids) == 5
+    assert len(set(ids)) == 5
+    assert ids == sorted(ids, reverse=True)
+    righe_csv = list(csv.DictReader(io.StringIO(csv_resp.text)))
+    assert [riga["resource_id"] for riga in righe_csv] == [
+        evento["resource_id"] or "" for evento in json_resp.json()
+    ]
+
+
+@pytest.mark.e2e
+async def test_export_oltre_il_tetto_di_righe_e_422(
+    api_client, two_tenants, owner_token, monkeypatch
+):
+    from app.api.v1 import audit as audit_api
+
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    await _eventi_marked_read(tenant_id, 4)
+    monkeypatch.setattr(audit_api, "EXPORT_MAX_ROWS", 3)
+
+    resp = await api_client.get(
+        "/api/v1/audit/export",
+        params={"action": "notification.marked_read", "format": "json"},
+        headers=owner,
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["max_rows"] == 3
+
+
+@pytest.mark.e2e
+async def test_bulk_read_oltre_il_tetto_di_id_registra_solo_il_conteggio(
+    api_client, two_tenants, owner_token, monkeypatch
+):
+    from app.api.v1 import notifications as notifications_api
+
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    slug = uuid.uuid4().hex[:22]
+    receiver_id = await create_receiver(tenant_id, slug)
+    for indice in range(3):
+        await api_client.post(f"/ingest/{slug}", content=f"coda {indice}")
+    monkeypatch.setattr(notifications_api, "BULK_IDS_CAP", 2)
+
+    bulk = await api_client.post(
+        "/api/v1/notifications/bulk-read", json={"receiver_id": str(receiver_id)}, headers=owner
+    )
+
+    assert bulk.json() == {"marked_read": 3}
+    evento = (
+        await api_client.get(
+            "/api/v1/audit/events",
+            params={"action": "notification.bulk_marked_read"},
+            headers=owner,
+        )
+    ).json()["events"][0]
+    assert evento["context"]["count"] == 3
+    assert evento["context"]["notification_ids_truncated"] is True
+    assert "notification_ids" not in evento["context"]

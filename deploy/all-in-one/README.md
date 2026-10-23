@@ -95,6 +95,9 @@ segreti persistiti e ricompone l'ambiente prima di eseguire il comando (`bootstr
 | 5432 / 6379 | PostgreSQL e Redis | mai raggiungibili da fuori dal container |
 
 nginx non instrada `/metrics`: come nello stack Compose, le metriche restano su una porta separata.
+La porta 9100 somma i valori di API e worker (`PROMETHEUS_MULTIPROC_DIR=/run/notifyhub/metrics`).
+Quella directory si svuota a ogni avvio del container: i contatori ripartono da zero dopo un riavvio,
+come per ogni esportatore Prometheus.
 
 ## Persistenza: un solo volume `/data`
 
@@ -215,7 +218,9 @@ Cosa fa il container quando trova in `/data/state/version` una versione diversa 
 1. **backup automatico** — `pg_dumpall` compresso in `/data/backups/notifyhub-pre-<nuova>-<data>.sql.gz`,
    con a fianco l'archivio della configurazione e un manifest. Se il backup fallisce, l'avvio si
    ferma: meglio non partire che migrare senza rete. Disattivabile con
-   `NOTIFYHUB_BACKUP_ON_UPGRADE=false`, si tengono gli ultimi `NOTIFYHUB_BACKUP_KEEP` (5).
+   `NOTIFYHUB_BACKUP_ON_UPGRADE=false`. La rotazione tiene gli ultimi `NOTIFYHUB_BACKUP_KEEP` (5)
+   backup manuali e, a parte, altrettanti pre-aggiornamento: un backup manuale non spinge mai via il
+   punto di ritorno di un upgrade.
 2. **migrazioni** — `alembic upgrade head` con il cluster avviato ma **prima** che supervisord
    faccia partire API, worker e beat. Nessun processo applicativo puo' quindi vedere uno schema a
    meta'. Se le migrazioni falliscono, il container esce e i servizi non partono.
@@ -257,6 +262,19 @@ resta compatibile per tutta la vita di questa base. Se una futura immagine cambi
 container si ferma prima di toccare i dati e stampa la procedura (backup con la vecchia immagine,
 cluster nuovo, `notifyhub-restore`).
 
+**Coda Celery dei job di manutenzione**: fino alla v0.0.10 compresa i job di manutenzione di beat
+(per esempio `check_expected_schedules`) finivano sulla coda Celery di default, `celery`, che il
+worker non consumava. Dopo l'aggiornamento quei messaggi restano in Redis senza che nessuno li legga.
+Una volta sola, dopo l'aggiornamento:
+
+```bash
+docker compose exec notifyhub redis-cli -n 1 LLEN celery   # messaggi residui
+docker compose exec notifyhub redis-cli -n 1 DEL celery
+```
+
+Il database 1 e' quello del broker Celery (`CELERY_BROKER_URL`). Il comando non tocca le code
+`delivery` e `maintenance`.
+
 ## Backup e ripristino
 
 ```bash
@@ -271,8 +289,27 @@ docker compose exec notifyhub ls -lh /data/backups
 docker compose exec notifyhub notifyhub-restore /data/backups/notifyhub-manual-20260803T180000Z.sql.gz
 ```
 
+Ogni backup produce tre file: il dump (`.sql.gz`), l'archivio della configurazione
+(`.config.tar.gz`, con `secrets.env`) e il manifest. La chiave `NOTIFYHUB_SECRET_KEY` sta nell'archivio
+e non nel dump, e cifra i webhook dei canali: senza di lei i canali restano nel database ma non si
+decifrano. Per questo:
+
+- `notifyhub-backup` fallisce, e non lascia un dump incompleto, se l'archivio non si crea;
+- `notifyhub-restore` riporta la chiave del backup in `secrets.env`, e rifiuta se l'archivio manca
+  (`--senza-configurazione` accetta il rischio) o se `NOTIFYHUB_SECRET_KEY` e' impostata
+  nell'ambiente del container con un valore diverso;
+- dopo un ripristino che cambia la chiave i servizi applicativi (nginx, API, worker, beat, metrics)
+  restano fermi e occorre riavviare il container: finche' non ripartono la dashboard non risponde, e
+  un programma ripartito ora avrebbe ancora la chiave vecchia, quindi il worker marcherebbe `dead` le
+  delivery ripristinate. Se una delivery finisce comunque `dead`, la si ri-accoda dalla dashboard
+  (`POST /api/v1/deliveries/{id}/retry`).
+
+Dopo un ripristino con chiave cambiata riavviare il container, non usare `notifyhub-ctl restart`: il
+worker ripartirebbe con la chiave vecchia.
+
 Il dump non contiene gli oggetti MinIO: stanno nello stesso volume `/data` e per una copia completa
-conviene fare lo snapshot del volume a container fermo.
+conviene fare lo snapshot del volume a container fermo. Attenzione: anche `/data/backups` sta nel
+volume, quindi per un ripristino su un volume nuovo copiare fuori i tre file del backup.
 
 ## Comandi utili
 
@@ -286,7 +323,7 @@ docker compose exec -it notifyhub notifyhub-cli bootstrap   # CLI applicativa
 docker compose exec notifyhub notifyhub-ctl status          # stato dei singoli servizi
 docker compose exec notifyhub notifyhub-ctl restart worker  # riavvio di un solo servizio
 docker compose exec notifyhub notifyhub-ctl tail -f api
-docker compose exec notifyhub psql -U postgres notifyhub    # via socket locale
+docker compose exec -u postgres notifyhub psql -U postgres notifyhub    # via socket locale, come utente postgres
 docker compose exec notifyhub mc ls local/notifyhub-payloads
 ```
 
@@ -298,7 +335,7 @@ Tutte le variabili sono documentate in [`.env.example`](.env.example). Le piu' r
 |---|---|---|
 | `HTTP_PORT` | `80` | porta pubblicata sull'host |
 | `NOTIFYHUB_PUBLIC_BASE_URL` | `http://localhost` | URL pubblica: inviti, link delle notifiche, URL di ingestion in dashboard e script wrapper scaricabile. Se resta loopback, le risposte HTTP la deducono da `Host` e `X-Forwarded-Proto`; il worker Celery usa comunque questo valore |
-| `NOTIFYHUB_SECRET_KEY` | generata | firma dei token; cambiarla invalida le sessioni |
+| `NOTIFYHUB_SECRET_KEY` | generata | firma dei token e cifra i webhook dei canali; cambiarla invalida le sessioni e rende illeggibili i webhook gia' salvati |
 | `NOTIFYHUB_BOOTSTRAP_EMAIL` | vuota | crea il primo tenant al primo avvio |
 | `UVICORN_WORKERS` / `WORKER_CONCURRENCY` | `2` / `4` | dimensionamento API e worker |
 | `PG_SHARED_BUFFERS`, `PG_MAX_CONNECTIONS`, ... | vedi esempio | tuning PostgreSQL |
@@ -317,6 +354,8 @@ manuali sul database.
 - Nessun servizio applicativo gira da root: API, worker, beat, Redis, MinIO e i worker nginx
   girano come `notifyhub` (uid 1000), PostgreSQL come `postgres`. Restano root solo l'entrypoint,
   supervisord e il master nginx (per la porta 80).
+- nginx aggiunge a ogni risposta della SPA `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`
+  e `Referrer-Policy`, come nello stack Compose (`deploy/all-in-one/tests/test_nginx_headers.sh`).
 - I segreti generati stanno in `/data/config/secrets.env` con permessi `0600`, mai nell'immagine.
 - HTTPS non e' incluso: davanti al container va messo un reverse proxy con i certificati, e in quel
   caso vanno valorizzate `TRUSTED_PROXIES` e `NOTIFYHUB_PUBLIC_BASE_URL`.

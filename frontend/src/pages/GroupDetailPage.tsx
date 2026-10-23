@@ -11,6 +11,10 @@ import SeverityBadge from "../components/SeverityBadge";
 import { useSession } from "../hooks/useSession";
 import { MEMBER_ROLES, hasRole } from "../lib/roles";
 
+// Il backend risponde così a un gruppo che il membro non vede: la frase è la stessa
+// per gruppi, receiver e canali, quindi qui si dice "gruppo" e basta.
+const NOT_A_MEMBER = "Not a member of this receiver group.";
+
 export default function GroupDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { role } = useSession();
@@ -36,7 +40,6 @@ export default function GroupDetailPage() {
   });
 
   if (groupLoading) return <EmptyState message="Caricamento…" />;
-  if (groupError) return <ErrorBanner error={groupError} />;
 
   const columns: DataTableColumn<ReceiverOut>[] = [
     {
@@ -54,7 +57,7 @@ export default function GroupDetailPage() {
           </span>
           {/* Il ritardo della sorveglianza si vede qui e non solo aprendo il
               receiver: è il motivo per cui si apre questa pagina. */}
-          {r.expected_late && <span className="status-pill danger">in ritardo</span>}
+          {r.expected_late && <span className="status-pill danger">In ritardo</span>}
         </div>
       ),
     },
@@ -64,7 +67,7 @@ export default function GroupDetailPage() {
       render: (r) => (
         <div className="slug-cell">
           <code title={r.slug}>{r.slug}</code>
-          <CopyButton value={r.ingest_url} />
+          <CopyButton value={r.slug} label="Copia slug" />
         </div>
       ),
     },
@@ -87,25 +90,41 @@ export default function GroupDetailPage() {
         </h1>
       </div>
       {group?.description && <p className="page-subtitle">{group.description}</p>}
-      {receiversError && <ErrorBanner error={receiversError} />}
-
-      <div className="card group-receivers-table">
-        <div className="card-header">
-          <h3>Receiver del gruppo</h3>
-          <span className="card-header-actions text-muted text-sm">
-            {(receivers ?? []).length} configurati
-          </span>
-        </div>
-        <DataTable
-          columns={columns}
-          rows={receivers ?? []}
-          rowKey={(r) => r.id}
-          loading={receiversLoading}
-          emptyMessage="Nessun receiver in questo gruppo."
+      {/* Il gruppo non si legge: la pagina resta con il suo ritorno e il titolo, e
+          non mostra una tabella di receiver che non si possono vedere. */}
+      {groupError ? (
+        <ErrorBanner
+          error={groupError}
+          message={
+            groupError.detail === NOT_A_MEMBER ? "Non fai parte di questo gruppo." : undefined
+          }
         />
-      </div>
+      ) : (
+        <>
+          {receiversError && <ErrorBanner error={receiversError} />}
 
-      {hasRole(role, MEMBER_ROLES) && <NewReceiverForm groupId={id ?? ""} />}
+          <div className="card group-receivers-table">
+            <div className="card-header">
+              <h3>Receiver del gruppo</h3>
+              {receivers !== undefined && (
+                <span className="card-header-actions text-muted text-sm">
+                  {receivers.length} {receivers.length === 1 ? "configurato" : "configurati"}
+                </span>
+              )}
+            </div>
+            <DataTable
+              columns={columns}
+              rows={receivers ?? []}
+              rowKey={(r) => r.id}
+              loading={receiversLoading}
+              error={receiversError}
+              emptyMessage="Nessun receiver in questo gruppo."
+            />
+          </div>
+
+          {hasRole(role, MEMBER_ROLES) && <NewReceiverForm groupId={id ?? ""} />}
+        </>
+      )}
     </div>
   );
 }

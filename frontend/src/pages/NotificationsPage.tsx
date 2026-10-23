@@ -1,5 +1,4 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { apiGet, apiPost } from "../api/client";
 import type {
@@ -19,6 +18,7 @@ import ReceiverNotificationsTable, {
 import { useAction } from "../hooks/useAction";
 import { useDebounced } from "../hooks/useDebounced";
 import { useSession } from "../hooks/useSession";
+import { severityLabel } from "../lib/format";
 import { MEMBER_ROLES, hasRole } from "../lib/roles";
 import { SEVERITY_SOURCE_LABELS } from "../lib/severitySource";
 
@@ -39,7 +39,9 @@ const SOURCES: SeveritySource[] = [
 
 export default function NotificationsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [q, setQ] = useState(searchParams.get("q") ?? "");
+  // La ricerca sta nell'URL come gli altri filtri: il campo ne è lo specchio,
+  // quindi indietro e avanti del browser riportano anche il testo cercato.
+  const q = searchParams.get("q") ?? "";
   // La ricerca parte quando chi scrive si ferma: una richiesta per tasto
   // premuto riempiva la rete e faceva lampeggiare le tabelle.
   const debouncedQ = useDebounced(q);
@@ -58,13 +60,18 @@ export default function NotificationsPage() {
   const verifiedParam = searchParams.get("verified");
   const verified = verifiedParam === null ? undefined : verifiedParam === "true";
 
-  function setFilter(key: string, value: string) {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      if (value) next.set(key, value);
-      else next.delete(key);
-      return next;
-    });
+  // Il testo cercato si riscrive a ogni tasto con replace: niente voce di
+  // cronologia per ogni lettera, e la vista resta condivisibile.
+  function setFilter(key: string, value: string, replace = false) {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (value) next.set(key, value);
+        else next.delete(key);
+        return next;
+      },
+      { replace },
+    );
   }
 
   const {
@@ -99,7 +106,6 @@ export default function NotificationsPage() {
   function clearFilters() {
     const next = new URLSearchParams();
     if (groupId) next.set("group_id", groupId);
-    setQ("");
     setSearchParams(next);
   }
 
@@ -113,6 +119,7 @@ export default function NotificationsPage() {
     verified,
     q: debouncedQ || undefined,
   };
+  const receiverName = receivers?.find((r) => r.id === receiverId)?.name;
 
   const visibleReceivers = (receivers ?? []).filter((r) => !receiverId || r.id === receiverId);
 
@@ -122,6 +129,14 @@ export default function NotificationsPage() {
   // Con "Solo lette" la vista non contiene niente da segnare: il pulsante
   // resta visibile ma spento, e dice perche'.
   const nothingToMark = status === "read";
+
+  // Il messaggio dice che cosa è stato toccato davvero: il receiver scelto, o
+  // il gruppo con i filtri che restringono l'insieme, non sempre "tutto".
+  const successoBulkRead = receiverName
+    ? `Notifiche di ${receiverName} segnate come lette.`
+    : filtriAttivi > 0
+      ? "Notifiche del gruppo che corrispondono ai filtri segnate come lette."
+      : "Notifiche del gruppo segnate come lette.";
 
   async function bulkRead() {
     await run(
@@ -133,9 +148,14 @@ export default function NotificationsPage() {
           ...filters,
           receiver_id: receiverId,
         });
-        await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+        // Con un receiver scelto si rilegge solo la sua tabella; la griglia dei
+        // gruppi, con i conteggi "non lette", si rilegge sempre.
+        await queryClient.invalidateQueries({
+          queryKey: receiverId ? ["notifications", { receiver_id: receiverId }] : ["notifications"],
+        });
+        await queryClient.invalidateQueries({ queryKey: ["groups"] });
       },
-      { name: "bulk", success: "Notifiche del gruppo segnate come lette." },
+      { name: "bulk", success: successoBulkRead },
     );
   }
 
@@ -157,8 +177,13 @@ export default function NotificationsPage() {
         <p className="page-subtitle">
           Seleziona un gruppo per vedere le notifiche ricevute dal gruppo.
         </p>
-        {groupsError && <ErrorBanner error={groupsError} />}
-        <GroupList groups={groups ?? []} loading={groupsLoading} onSelect={selectGroup} />
+        {/* Con l'errore la griglia non si disegna: "Nessun gruppo configurato"
+            sotto al banner direbbe una cosa falsa. */}
+        {groupsError ? (
+          <ErrorBanner error={groupsError} />
+        ) : (
+          <GroupList groups={groups ?? []} loading={groupsLoading} onSelect={selectGroup} />
+        )}
       </div>
     );
   }
@@ -223,7 +248,7 @@ export default function NotificationsPage() {
               <option value="">Qualsiasi severity</option>
               {SEVERITIES.map((s) => (
                 <option key={s} value={s}>
-                  {s}
+                  {severityLabel(s)}
                 </option>
               ))}
             </select>
@@ -276,9 +301,9 @@ export default function NotificationsPage() {
             <input
               id="filter-q"
               type="search"
-              placeholder="Cerca nel contenuto…"
+              placeholder="Testo del messaggio…"
               value={q}
-              onChange={(event) => setQ(event.target.value)}
+              onChange={(event) => setFilter("q", event.target.value, true)}
               aria-describedby="filter-q-hint"
             />
             <span className="field-hint" id="filter-q-hint">
@@ -296,7 +321,7 @@ export default function NotificationsPage() {
       </div>
 
       {receiversLoading && <EmptyState message="Caricamento…" />}
-      {!receiversLoading && visibleReceivers.length === 0 && (
+      {!receiversLoading && !receiversError && visibleReceivers.length === 0 && (
         <EmptyState message="Nessun receiver in questo gruppo." />
       )}
       {visibleReceivers.map((receiver) => (

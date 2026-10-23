@@ -119,7 +119,9 @@ Tutte le tabelle (tranne `tenants` e `pending_object_deletions`) hanno `tenant_i
 |---|:-:|:-:|:-:|:-:|
 | Gestire tenant (retention, cap body, quote) | ✅ | ❌ | ❌ | ❌ |
 | Invitare / rimuovere utenti, cambiare ruoli (su un owner: solo owner) | ✅ | ✅ | ❌ | ❌ |
-| CRUD Group / Receiver / Channel / SeverityRule | ✅ | ✅ | ✅ | ❌ |
+| CRUD Group, Channel, binding gruppo-canale e override receiver-canale | ✅ | ✅ | ❌ | ❌ |
+| CRUD Receiver e SeverityRule (il member solo sui gruppi a cui è associato) | ✅ | ✅ | ✅ | ❌ |
+| CRUD SeverityPreset e relative regole | ✅ | ✅ | ❌ | ❌ |
 | Rigenerare lo slug di un Receiver | ✅ | ✅ | ❌ | ❌ |
 | Vedere l'elenco dei DeliveryChannel (URL mascherato) | ✅ | ✅ | ✅ | ❌ |
 | Consultare `/deliveries` (diagnostica inoltri) | ✅ | ✅ | ✅ | ✅ |
@@ -500,6 +502,7 @@ Un cron che va in timeout di rete ritenta, e senza deduplica genera notifiche do
 - **prima occorrenza** → ingestion normale, risposta `201`, nel valore della chiave si memorizza l'id della notifica creata;
 - **occorrenza ripetuta entro la finestra** → nessuna scrittura, risposta **`200`** con lo stesso corpo della `201` originale (`{"id": …, "severity": …, "forwarded_to": …}`) e header `Idempotent-Replay: true`;
 - header assente → nessuna deduplica, comportamento identico a oggi.
+- se il salvataggio del replay fallisce dopo un commit riuscito (degrado, log `idempotency_store_failed`), la chiave resta `in elaborazione` fino alla scadenza della finestra: un retry con lo stesso `X-Request-Id` in quel tempo riceve `409`, non il replay. Nessun doppione; la risposta della prima occorrenza resta `201`.
 
 La finestra di 5 minuti copre il retry di rete senza impedire l'invio legittimo dello stesso messaggio più tardi (un check di backup che gira ogni ora manda la stessa riga, e va salvata ogni volta).
 
@@ -749,6 +752,8 @@ Le sotto-risorse sono identificate da `channel_id`: `PUT`/`DELETE` su una collez
 
 La lista **non** restituisce il `content` completo ma i primi 500 caratteri di `content_preview` + `content_size`.
 
+Le date `from` e `to` (liste delle notifiche ed eventi di audit, export compreso) senza indicazione di fuso si interpretano come UTC, non come ora locale del server: lo stesso filtro seleziona le stesse righe qualunque sia il fuso del container.
+
 Dentro un gruppo la dashboard consuma questa lista **un receiver alla volta** (`receiver_id`), una tabella per receiver del gruppo, ciascuna col proprio cursore: con un cursore unico di gruppo un receiver molto attivo riempirebbe la pagina e gli altri resterebbero vuoti pur avendo notifiche piu' vecchie. Nella tabella il contenuto non viene stampato: la cella porta un link *Apri* al dettaglio. `content_preview` resta comunque nella risposta, perche' e' parte del contratto dell'API e non un dettaglio della dashboard.
 
 Il filtro `q` è una **ricerca per sottostringa case-insensitive su `COALESCE(content, content_preview)`**, servita da un indice GIN `pg_trgm` sulla stessa espressione:
@@ -846,7 +851,7 @@ Job Celery Beat. Tutti girano con il ruolo `notifyhub_app`, senza alcun privileg
 | `purge_notifications` | ogni notte 03:00 | Per ogni tenant con `retention_days` non NULL, elimina le notifiche più vecchie. A batch di 10.000 righe per non bloccare la tabella |
 | `purge_audit_events` | ogni notte 05:00 | Per ogni tenant con `audit_retention_days` non NULL (default 365), elimina gli eventi di audit più vecchi, a batch di 10.000 righe. Ritenzione separata da quella delle notifiche, che di default è 90 giorni: l'audit deve sopravvivere a ciò che descrive. Non usa `SELECT … FOR UPDATE SKIP LOCKED` come le altre purge, perché bloccare una riga richiederebbe il privilegio di UPDATE, revocato apposta su questa tabella |
 | `purge_deliveries` | ogni notte 03:30 | Elimina le delivery `sent` più vecchie di 30 giorni; le `dead` restano finché non archiviate manualmente |
-| `cleanup_tokens` | ogni ora | Elimina refresh token scaduti/revocati e inviti scaduti |
+| `cleanup_tokens` | ogni ora | Elimina refresh token scaduti e inviti scaduti (un token revocato resta fino alla scadenza, per il rilevamento del riuso di §4.1) |
 | `reconcile_deliveries` | ogni 5 min | Ripesca le delivery `pending`/`failed` con `next_attempt_at` scaduto e le `sending` con `locked_at` più vecchio di 10 minuti |
 | `drain_object_deletions` | ogni 10 min | Svuota `pending_object_deletions` cancellando gli oggetti da MinIO. Dopo 10 tentativi falliti la riga resta e alimenta una metrica di allarme |
 | `purge_orphan_objects` | ogni notte 04:00 | Elimina gli oggetti del bucket più vecchi di 24h senza riga corrispondente in `notifications.storage_key`. Recupera i PUT riusciti con commit fallito. ⚠️ Le `storage_key` note vanno raccolte **iterando i tenant** con `SET LOCAL app.tenant_id`: `notifications` ha `FORCE ROW LEVEL SECURITY` e una lettura senza contesto di tenant torna zero righe *senza errore*, facendo risultare orfano ogni oggetto |
@@ -886,7 +891,7 @@ Job Celery Beat. Tutti girano con il ruolo `notifyhub_app`, senza alcun privileg
 |---|---|
 | `nginx` | Reverse proxy, TLS, `client_max_body_size`, `proxy_request_buffering off` su `/ingest/`, serve la SPA buildata |
 | `api` | FastAPI su uvicorn/gunicorn. Porta 8000 pubblica, 9100 interna per `/metrics` |
-| `worker` | Celery worker (coda `delivery`), engine SQLAlchemy sincrono |
+| `worker` | Celery worker (code `delivery` e `maintenance`), engine SQLAlchemy sincrono |
 | `beat` | Celery Beat (purge, riconciliazione, manutenzione oggetti) |
 | `postgres` | PostgreSQL 16 con volume persistente |
 | `redis` | Broker Celery + rate limiting + idempotenza + (v2) pub/sub SSE |

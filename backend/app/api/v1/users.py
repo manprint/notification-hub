@@ -16,7 +16,7 @@ from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.user_group_membership import UserGroupMembership
 from app.schemas.auth import UserCreateIn, UserOut, UserPatchIn
-from app.services.identity import find_user_by_email
+from app.services.identity import find_user_by_email, lock_user_token_scope
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -77,6 +77,8 @@ def _assert_can_manage(claims: AccessClaims, target: User) -> None:
 async def _revoke_refresh_tokens(
     session: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID
 ) -> None:
+    """Va chiamata dopo lock_user_token_scope: senza, una rotazione in corso
+    sfuggirebbe alla revoca."""
     result = await session.execute(
         select(RefreshToken).where(
             RefreshToken.tenant_id == tenant_id,
@@ -153,7 +155,7 @@ async def _replace_user_groups(
 async def create_user(
     body: UserCreateIn,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> UserOut:
     """Creazione diretta (email + password specificate dall'admin), in
     alternativa al flusso di invito via email: l'utente risultante e gia
@@ -201,10 +203,13 @@ async def list_users(
     # Elenco membri con le email: admin+ (spec 9.2). La pagina Utenti era gia'
     # riservata, ma l'API rispondeva a chiunque fosse autenticato.
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[UserOut]:
     tenant_id = uuid.UUID(claims.tid)
-    result = await session.execute(select(User).where(User.tenant_id == tenant_id))
+    # Ordine esplicito: senza ORDER BY la tabella cambia riga di posto a ogni UPDATE.
+    result = await session.execute(
+        select(User).where(User.tenant_id == tenant_id).order_by(User.email.asc(), User.id.asc())
+    )
     users = result.scalars().all()
 
     memberships_result = await session.execute(
@@ -228,7 +233,7 @@ async def list_users(
 async def get_user(
     user_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> UserOut:
     tenant_id = uuid.UUID(claims.tid)
     result = await session.execute(
@@ -255,7 +260,7 @@ async def update_user(
     user_id: uuid.UUID,
     body: UserPatchIn,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> UserOut:
     tenant_id = uuid.UUID(claims.tid)
     result = await session.execute(
@@ -280,12 +285,20 @@ async def update_user(
     if user.role == UserRole.OWNER and user.status == UserStatus.ACTIVE and (demoting or disabling):
         await _assert_not_last_owner(session, tenant_id)
 
+    # Disabilitare con PATCH deve chiudere le sessioni come DELETE: altrimenti il
+    # refresh token resta valido e torna a funzionare alla riattivazione.
+    disabling_now = body.status == UserStatus.DISABLED and user.status != UserStatus.DISABLED
+    if disabling_now:
+        await lock_user_token_scope(session, tenant_id, user.id)
+
     if body.role is not None:
         user.role = body.role
     if body.status is not None:
         user.status = body.status
     if body.group_ids is not None:
         await _replace_user_groups(session, tenant_id, user.id, body.group_ids)
+    if disabling_now:
+        await _revoke_refresh_tokens(session, tenant_id, user.id)
 
     await session.flush()
     out = UserOut.model_validate(user)
@@ -297,7 +310,7 @@ async def update_user(
 async def remove_user(
     user_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     """Rimozione (spec 9.2). Disabilita l'utente invece di eliminare la riga:
     refresh_tokens e invitations referenziano users.id senza ON DELETE, e la
@@ -319,6 +332,8 @@ async def remove_user(
     if user.role == UserRole.OWNER and user.status == UserStatus.ACTIVE:
         await _assert_not_last_owner(session, tenant_id)
 
+    # Lock prima di modificare l'utente (vedi lock_user_token_scope).
+    await lock_user_token_scope(session, tenant_id, user.id)
     user.status = UserStatus.DISABLED
     # I refresh token restano validi fino alla scadenza e rigenererebbero un
     # access token per un utente ormai disabilitato: vanno revocati subito.

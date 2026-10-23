@@ -7,6 +7,7 @@ import httpx
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import delete as sql_delete
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_claims, db, require_admin, require_member
@@ -50,9 +51,19 @@ def _validate_webhook_url(webhook_url: str) -> None:
             status=422,
             type=PROBLEM_TYPES["validation_error"],
             title="Validation Error",
-            detail="Webhook URL must be an absolute http(s) URL.",
+            detail="Webhook URL must be an absolute https URL.",
         )
-    allowlist = get_settings().webhook_host_allowlist_list
+    settings = get_settings()
+    # Il webhook porta il segreto nel percorso: in chiaro andrebbe sulla rete. Il
+    # passaggio http resta solo per gli host dichiarati di dev e smoke test.
+    if parsed.scheme == "http" and parsed.hostname not in settings.webhook_insecure_http_hosts_list:
+        raise Problem(
+            status=422,
+            type=PROBLEM_TYPES["validation_error"],
+            title="Validation Error",
+            detail="Webhook URL must use https.",
+        )
+    allowlist = settings.webhook_host_allowlist_list
     if allowlist and parsed.hostname not in allowlist:
         raise Problem(
             status=422,
@@ -115,8 +126,8 @@ async def _get_receiver_or_404(
 
 @router.get("/channels", response_model=list[DeliveryChannelOut])
 async def list_channels(
-    claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    claims: AccessClaims = Depends(require_member),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[DeliveryChannelOut]:
     result = await session.execute(
         select(DeliveryChannel)
@@ -130,7 +141,7 @@ async def list_channels(
 async def create_channel(
     body: DeliveryChannelCreate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> DeliveryChannelOut:
     _validate_webhook_url(body.webhook_url)
     channel = DeliveryChannel(
@@ -149,8 +160,8 @@ async def create_channel(
 @router.get("/channels/{channel_id}", response_model=DeliveryChannelOut)
 async def get_channel(
     channel_id: uuid.UUID,
-    claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    claims: AccessClaims = Depends(require_member),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> DeliveryChannelOut:
     channel = await _get_channel_or_404(session, uuid.UUID(claims.tid), channel_id)
     return _channel_out(channel)
@@ -161,7 +172,7 @@ async def update_channel(
     channel_id: uuid.UUID,
     body: DeliveryChannelUpdate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> DeliveryChannelOut:
     channel = await _get_channel_or_404(session, uuid.UUID(claims.tid), channel_id)
     if body.name is not None:
@@ -179,7 +190,7 @@ async def update_channel(
 async def delete_channel(
     channel_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     """Rimuove prima binding, override e storico delivery del canale: le FK
     verso delivery_channels non hanno ON DELETE, quindi senza questa pulizia
@@ -196,13 +207,14 @@ async def delete_channel(
         )
     await session.flush()
     await session.delete(channel)
+    await session.flush()
 
 
 @router.post("/channels/{channel_id}/test", response_model=DeliveryChannelTestOut)
 async def test_channel(
     channel_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> DeliveryChannelTestOut:
     channel = await _get_channel_or_404(session, uuid.UUID(claims.tid), channel_id)
     webhook_url = decrypt_secret(channel.webhook_url)
@@ -227,7 +239,7 @@ async def update_group_channel_binding(
     channel_id: uuid.UUID,
     body: GroupChannelBindingUpdate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> GroupChannelBindingOut:
     result = await session.execute(
         select(GroupChannelBinding).where(
@@ -256,7 +268,7 @@ async def update_group_channel_binding(
 async def list_receiver_overrides(
     receiver_id: uuid.UUID,
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> list[ReceiverChannelOverrideOut]:
     tenant_id = uuid.UUID(claims.tid)
     receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
@@ -292,7 +304,7 @@ async def create_receiver_override(
     body: ReceiverChannelOverrideCreate,
     response: Response,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> ReceiverChannelOverrideOut:
     """Idempotente sulla coppia (receiver, canale): un secondo salvataggio
     aggiorna l'override esistente e risponde 200. Prima violava il vincolo di
@@ -313,11 +325,7 @@ async def create_receiver_override(
         )
     )
     override = existing_result.scalar_one_or_none()
-    if override is not None:
-        override.mode = body.mode
-        override.min_severity = min_severity
-        response.status_code = 200
-    else:
+    if override is None:
         override = ReceiverChannelOverride(
             id=uuid.uuid4(),
             tenant_id=tenant_id,
@@ -326,7 +334,33 @@ async def create_receiver_override(
             mode=body.mode,
             min_severity=min_severity,
         )
-        session.add(override)
+        try:
+            async with session.begin_nested():
+                session.add(override)
+                await session.flush()
+        except IntegrityError:
+            # Una richiesta concorrente ha inserito la stessa coppia dopo la nostra
+            # lettura: si aggiorna quella riga, come in un salvataggio ripetuto.
+            override = (
+                await session.execute(
+                    select(ReceiverChannelOverride).where(
+                        ReceiverChannelOverride.receiver_id == receiver_id,
+                        ReceiverChannelOverride.channel_id == body.channel_id,
+                        ReceiverChannelOverride.tenant_id == tenant_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if override is None:
+                # Non e' una coppia gia' inserita: il canale o il receiver sono
+                # spariti nel frattempo (violazione di FK). Si rilancia, e diventa un 409.
+                raise
+            override.mode = body.mode
+            override.min_severity = min_severity
+            response.status_code = 200
+    else:
+        override.mode = body.mode
+        override.min_severity = min_severity
+        response.status_code = 200
     await session.flush()
     return ReceiverChannelOverrideOut.model_validate(override)
 
@@ -339,7 +373,7 @@ async def update_receiver_override(
     channel_id: uuid.UUID,
     body: ReceiverChannelOverrideUpdate,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> ReceiverChannelOverrideOut:
     tenant_id = uuid.UUID(claims.tid)
     result = await session.execute(
@@ -375,7 +409,7 @@ async def delete_receiver_override(
     receiver_id: uuid.UUID,
     channel_id: uuid.UUID,
     claims: AccessClaims = Depends(require_admin),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> None:
     tenant_id = uuid.UUID(claims.tid)
     result = await session.execute(
@@ -396,6 +430,7 @@ async def delete_receiver_override(
     receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
     await assert_group_access(session, claims, receiver.group_id, write=True)
     await session.delete(override)
+    await session.flush()
 
 
 def _delivery_out(
@@ -433,7 +468,7 @@ async def list_deliveries(
     limit: int = Query(default=100, ge=1, le=500),  # noqa: B008
     cursor: str | None = Query(default=None),  # noqa: B008
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> DeliveryListOut:
     """Storico degli inoltri verso i canali, per diagnosticare i fallimenti
     (spec 9.4). Ogni riga porta con se il canale di destinazione, il receiver
@@ -493,7 +528,7 @@ async def list_deliveries(
 async def retry_delivery(
     delivery_id: uuid.UUID,
     claims: AccessClaims = Depends(require_member),  # noqa: B008
-    session: AsyncSession = Depends(db),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
 ) -> DeliveryOut:
     """Ri-accoda una delivery `dead`: azzera attempts, last_error e locked_at
     (spec 4.3, macchina a stati: dead -> pending solo per questa via)."""
@@ -506,6 +541,10 @@ async def retry_delivery(
         .join(Receiver, Receiver.id == Notification.receiver_id)
         .outerjoin(DeliveryChannel, DeliveryChannel.id == Delivery.channel_id)
         .where(Delivery.id == delivery_id, Delivery.tenant_id == tenant_id)
+        # Lock sulla riga della delivery: due retry concorrenti non possono leggere
+        # entrambi "dead" e accodare due volte. `of` perche' il lock sulle tabelle
+        # del lato nullable del LEFT JOIN non e' ammesso da Postgres.
+        .with_for_update(of=Delivery)
     )
     row = result.first()
     if row is None:

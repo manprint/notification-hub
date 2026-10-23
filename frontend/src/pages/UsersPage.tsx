@@ -42,6 +42,7 @@ function GroupPicker({
   value,
   onChange,
   disabled = false,
+  label,
 }: {
   groups: GroupOut[];
   value: string[];
@@ -50,8 +51,13 @@ function GroupPicker({
    *  aggiorna solo a salvataggio finito. Un secondo click nel frattempo
    *  partirebbe dalla lista vecchia e cancellerebbe il primo. */
   disabled?: boolean;
+  /** Nome del gruppo di caselle, dove non c'è una legenda intorno. */
+  label?: string;
 }) {
   function toggle(groupId: string, checked: boolean) {
+    // Un controllo disabilitato non salva, neanche se un click sintetico arriva
+    // comunque al gestore: nel test il secondo click finiva per salvare due volte.
+    if (disabled) return;
     onChange(checked ? [...value, groupId] : value.filter((id) => id !== groupId));
   }
 
@@ -60,7 +66,7 @@ function GroupPicker({
   }
 
   return (
-    <div className="group-picker">
+    <div className="group-picker" role={label ? "group" : undefined} aria-label={label}>
       {groups.map((g) => (
         <label key={g.id}>
           <input
@@ -99,7 +105,13 @@ function GroupsCell({
         {selectedNames.length > 0 ? selectedNames.join(", ") : "Nessuno"}
       </summary>
       <div className="group-summary-editor">
-        <GroupPicker groups={groups} value={value} onChange={onChange} disabled={disabled} />
+        <GroupPicker
+          groups={groups}
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+          label="Gruppi gestiti da questa utenza"
+        />
         <SaveIndicator state={saveState} />
       </div>
     </details>
@@ -128,7 +140,10 @@ function PendingInvitations() {
     setRevoking(null);
   }
 
-  if (!invitations || invitations.length === 0) return null;
+  // Con l'errore la card resta: "nessun invito" sarebbe falso, e l'admin
+  // crederebbe che non ce ne siano. Senza errore e senza righe, non si mostra.
+  const vuota = !invitations || invitations.length === 0;
+  if (vuota && !error) return null;
 
   return (
     <div className="card">
@@ -137,34 +152,38 @@ function PendingInvitations() {
       </div>
       {error && <ErrorBanner error={error} />}
       {actionError && <ErrorBanner error={actionError} />}
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Email</th>
-              <th>Ruolo</th>
-              <th>Scade il</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {invitations.map((invitation) => (
-              <tr key={invitation.id}>
-                <td>{invitation.email}</td>
-                <td>{roleLabel(invitation.role)}</td>
-                <td>{formatDateTime(invitation.expires_at)}</td>
-                <td>
-                  <div className="row-actions">
-                    <button className="danger" onClick={() => setRevoking(invitation)}>
-                      Revoca
-                    </button>
-                  </div>
-                </td>
+      {invitations && invitations.length > 0 && (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Ruolo</th>
+                <th>Scade il</th>
+                <th>
+                  <span className="sr-only">Azioni</span>
+                </th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {invitations.map((invitation) => (
+                <tr key={invitation.id}>
+                  <td>{invitation.email}</td>
+                  <td>{roleLabel(invitation.role)}</td>
+                  <td>{formatDateTime(invitation.expires_at)}</td>
+                  <td>
+                    <div className="row-actions">
+                      <button className="danger" onClick={() => setRevoking(invitation)}>
+                        Revoca
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       {revoking && (
         <ConfirmDialog
           title={`Revoca l'invito a ${revoking.email}`}
@@ -187,7 +206,7 @@ function InviteForm({ roles }: { roles: UserRole[] }) {
   const [emailError, setEmailError] = useState<string | null>(null);
   const { busy, error, run } = useAction();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!email.includes("@")) {
       setEmailError("Indica un indirizzo email valido.");
@@ -195,6 +214,7 @@ function InviteForm({ roles }: { roles: UserRole[] }) {
     }
     setEmailError(null);
     setInvitation(null);
+    const inviata = email;
     const ok = await run(
       async () => {
         const result = await apiPost<InvitationOut>("/api/v1/invitations", { email, role });
@@ -203,7 +223,9 @@ function InviteForm({ roles }: { roles: UserRole[] }) {
       },
       { success: `Invito creato per ${email}.` },
     );
-    if (ok) setEmail("");
+    // Si svuota solo se è ancora l'indirizzo inviato: una digitazione fatta
+    // durante la richiesta non va persa.
+    if (ok) setEmail((current) => (current === inviata ? "" : current));
   }
 
   return (
@@ -214,7 +236,9 @@ function InviteForm({ roles }: { roles: UserRole[] }) {
         l'utenza nasce già con il ruolo indicato qui.
       </p>
       {error && <ErrorBanner error={error} />}
-      <form className="form-stacked" onSubmit={(event) => void handleSubmit(event)}>
+      {/* noValidate: il controllo dell'indirizzo lo fa il modulo e lo dice in
+          italiano sotto il campo; il fumetto del browser arriverebbe prima. */}
+      <form className="form-stacked" onSubmit={(event) => void handleSubmit(event)} noValidate>
         <RequiredLegend />
         <Field id="invite-email" label="Email" required error={emailError}>
           <input
@@ -272,7 +296,7 @@ function CreateUserForm({ groups, roles }: { groups: GroupOut[]; roles: UserRole
   const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
   const { busy, error, run } = useAction();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     // Le stesse due regole del backend, dette prima di spendere un giro di
     // rete e con il campo indicato invece di un 422 generico.
@@ -284,6 +308,7 @@ function CreateUserForm({ groups, roles }: { groups: GroupOut[]; roles: UserRole
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) return;
 
+    const inviato = { email, password, groupIds };
     const ok = await run(
       async () => {
         await apiPost<UserOut>("/api/v1/users", { email, password, role, group_ids: groupIds });
@@ -291,10 +316,14 @@ function CreateUserForm({ groups, roles }: { groups: GroupOut[]; roles: UserRole
       },
       { success: `Utenza ${email} creata.` },
     );
+    // Ogni campo si svuota solo se è ancora come era al momento dell'invio: ciò
+    // che si è digitato durante la richiesta resta nel modulo.
     if (ok) {
-      setEmail("");
-      setPassword("");
-      setGroupIds([]);
+      setEmail((current) => (current === inviato.email ? "" : current));
+      setPassword((current) => (current === inviato.password ? "" : current));
+      setGroupIds((current) =>
+        current.join() === inviato.groupIds.join() ? [] : current,
+      );
     }
   }
 
@@ -305,7 +334,11 @@ function CreateUserForm({ groups, roles }: { groups: GroupOut[]; roles: UserRole
         Utenza con password scelta da chi la crea: si usa quando non si vuole passare dall'invito.
       </p>
       {error && <ErrorBanner error={error} />}
-      <form className="form-stacked" onSubmit={(event) => void handleSubmit(event)}>
+      <form
+        className="form-stacked"
+        onSubmit={(event) => void handleSubmit(event)}
+        noValidate
+      >
         <RequiredLegend />
         <Field id="create-user-email" label="Email" required error={fieldErrors.email}>
           <input
@@ -329,7 +362,6 @@ function CreateUserForm({ groups, roles }: { groups: GroupOut[]; roles: UserRole
             {...fieldAria("create-user-password", { hint: true, error: fieldErrors.password })}
             type="password"
             autoComplete="new-password"
-            placeholder="Password"
             required
             minLength={MIN_PASSWORD_LENGTH}
             value={password}
@@ -349,16 +381,17 @@ function CreateUserForm({ groups, roles }: { groups: GroupOut[]; roles: UserRole
             ))}
           </select>
         </Field>
-        <Field
-          id="create-user-groups"
-          label="Gruppi di receiver da gestire"
-          optional
-          hint="Serve solo al ruolo Operatore: gli altri ruoli vedono comunque tutti i gruppi."
-        >
-          <div id="create-user-groups">
-            <GroupPicker groups={groups} value={groupIds} onChange={setGroupIds} />
-          </div>
-        </Field>
+        {/* Un gruppo di caselle è una fieldset con la sua domanda come legenda:
+            la <label> di Field punterebbe a un elemento che non si etichetta. */}
+        <fieldset className="form-row" aria-describedby="create-user-groups-hint">
+          <legend>
+            Gruppi di receiver da gestire <span className="text-muted text-sm">(facoltativo)</span>
+          </legend>
+          <GroupPicker groups={groups} value={groupIds} onChange={setGroupIds} />
+          <span className="field-hint" id="create-user-groups-hint">
+            Serve solo al ruolo Operatore: gli altri ruoli vedono comunque tutti i gruppi.
+          </span>
+        </fieldset>
         <div className="form-actions">
           <button type="submit" className="primary" disabled={busy !== null}>
             {busy !== null ? "Creazione…" : "Crea"}
@@ -392,6 +425,8 @@ export default function UsersPage() {
   // Quale campo ha salvato per ultimo: senza, l'esito "Salvato" comparirebbe
   // su tutte le righe insieme, perché lo stato dell'operazione è uno solo.
   const [lastSaved, setLastSaved] = useState<string | null>(null);
+  // Gruppi richiesti e non ancora confermati dalla cache, per utenza.
+  const [requestedGroups, setRequestedGroups] = useState<Record<string, string[]>>({});
   const roles = assignableRoles(sessionRole);
 
   /** Stato da mostrare accanto a un campo modificabile in linea. */
@@ -432,6 +467,10 @@ export default function UsersPage() {
 
   async function changeGroups(user: UserOut, groupIds: string[]) {
     setLastSaved(`groups:${user.id}`);
+    // La lista richiesta sta in stato finché il salvataggio non è finito e la
+    // cache è riletta: il click successivo parte da lei, non da una lista in
+    // cache che può non essere ancora ridisegnata.
+    setRequestedGroups((current) => ({ ...current, [user.id]: groupIds }));
     const ok = await run(
       async () => {
         await apiPatch(`/api/v1/users/${user.id}`, { group_ids: groupIds });
@@ -439,6 +478,11 @@ export default function UsersPage() {
       },
       { name: `groups:${user.id}`, success: `Gruppi di ${user.email} aggiornati.` },
     );
+    setRequestedGroups((current) => {
+      const next = { ...current };
+      delete next[user.id];
+      return next;
+    });
     if (ok && isSelf(user)) await reloadProfile();
   }
 
@@ -498,7 +542,9 @@ export default function UsersPage() {
                   <th>Ruolo</th>
                   <th>Gruppi gestiti</th>
                   <th>Stato</th>
-                  <th></th>
+                  <th>
+                    <span className="sr-only">Azioni</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -506,17 +552,27 @@ export default function UsersPage() {
                   const manageable = canManage(user);
                   const readOnlyHint = manageable
                     ? undefined
-                    : "Solo un owner può modificare o rimuovere un altro owner.";
+                    : "Solo un proprietario può modificare o rimuovere un altro proprietario.";
+                  // Il motivo sta anche a schermo: il title non si raggiunge da
+                  // tastiera né al tocco, e un controllo disabilitato non prende il focus.
+                  const notaId = `owner-readonly-${user.id}`;
                   return (
                     <tr key={user.id}>
                       <td>
                         {user.email}
                         {isSelf(user) && <span className="text-muted text-sm"> (tu)</span>}
+                        {readOnlyHint && (
+                          // Un blocco e non uno span: l'email e la nota non si leggono attaccate.
+                          <div className="field-hint" id={notaId}>
+                            {readOnlyHint}
+                          </div>
+                        )}
                       </td>
                       <td>
                         <div className="status-cell">
                           <select
                             aria-label={`Ruolo di ${user.email}`}
+                            aria-describedby={readOnlyHint ? notaId : undefined}
                             value={user.role}
                             disabled={busy !== null || !manageable}
                             title={readOnlyHint}
@@ -538,7 +594,7 @@ export default function UsersPage() {
                       <td>
                         <GroupsCell
                           groups={groups ?? []}
-                          value={user.group_ids}
+                          value={requestedGroups[user.id] ?? user.group_ids}
                           onChange={(groupIds) => void changeGroups(user, groupIds)}
                           saveState={stateOf(`groups:${user.id}`)}
                           disabled={busy !== null || !manageable}
@@ -557,6 +613,7 @@ export default function UsersPage() {
                         <div className="row-actions">
                           <button
                             className="danger"
+                            aria-describedby={readOnlyHint ? notaId : undefined}
                             disabled={busy !== null || !manageable}
                             title={readOnlyHint}
                             onClick={() => setRemoving(user)}

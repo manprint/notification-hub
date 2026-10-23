@@ -37,7 +37,8 @@ async def enforce_tenant_quotas(
     # Con almeno una quota configurata il lock serve: il controllo e l'INSERT
     # della notifica avvengono nella stessa transazione e senza serializzare
     # due richieste concorrenti potevano entrambe osservare quota disponibile
-    # e superarla.
+    # e superarla. Ordine dei lock: tenant, poi receiver. check_expected_schedules
+    # prende lo stesso lock per primo, cosi' i due non si attendono a vicenda.
     tenant_result = await session.execute(
         select(Tenant).where(Tenant.id == tenant_id).with_for_update()
     )

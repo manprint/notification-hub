@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../api/client";
 import type {
   ApiError,
@@ -18,6 +18,7 @@ import SeverityBadge from "../components/SeverityBadge";
 import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
 import { useToast } from "../hooks/useToast";
+import { severityLabel } from "../lib/format";
 import { ADMIN_ROLES, hasRole } from "../lib/roles";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
@@ -36,9 +37,10 @@ function PresetRuleForm({
   const [severity, setSeverity] = useState<Severity>(rule?.severity ?? "error");
   const [caseInsensitive, setCaseInsensitive] = useState(rule?.case_insensitive ?? true);
   const [patternError, setPatternError] = useState<string | null>(null);
+  const patternErrorId = useId();
   const { busy, error, run } = useAction();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pattern.trim() === "") {
       setPatternError("Il pattern è obbligatorio.");
@@ -66,35 +68,33 @@ function PresetRuleForm({
   }
 
   return (
-    <form onSubmit={(event) => void handleSubmit(event)}>
+    // noValidate: il campo vuoto lo rifiuta handleSubmit, con il messaggio sotto.
+    <form noValidate onSubmit={(event) => void handleSubmit(event)}>
       {error && <ErrorBanner error={error} />}
-      {patternError && (
-        <p className="field-error" role="alert">
-          {patternError}
-        </p>
-      )}
       <div className="toolbar">
-        <input
-          aria-label="Pattern RE2 del preset"
-          aria-invalid={patternError ? true : undefined}
-          placeholder="Pattern RE2, es. No space left on device"
-          value={pattern}
-          onChange={(event) => setPattern(event.target.value)}
-          required
-          maxLength={200}
-          className="grow-input"
-        />
-        <select
-          aria-label="Severity della regola del preset"
-          value={severity}
-          onChange={(event) => setSeverity(event.target.value as Severity)}
-        >
-          {SEVERITIES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
+        <label className="inline-check pattern-field">
+          <span>Pattern</span>
+          <input
+            aria-describedby={patternError ? patternErrorId : undefined}
+            aria-invalid={patternError ? true : undefined}
+            placeholder="RE2, es. No space left on device"
+            value={pattern}
+            onChange={(event) => setPattern(event.target.value)}
+            required
+            maxLength={200}
+            className="grow-input"
+          />
+        </label>
+        <label className="inline-check">
+          <span>Severity</span>
+          <select value={severity} onChange={(event) => setSeverity(event.target.value as Severity)}>
+            {SEVERITIES.map((s) => (
+              <option key={s} value={s}>
+                {severityLabel(s)}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="inline-check">
           <input
             type="checkbox"
@@ -112,8 +112,26 @@ function PresetRuleForm({
           </button>
         )}
       </div>
+      {patternError && (
+        <p className="field-error" id={patternErrorId} role="alert">
+          {patternError}
+        </p>
+      )}
     </form>
   );
+}
+
+/** Errore mostrato quando la lettura fresca smentisce l'ordine a schermo: il
+ *  riordino non si invia. Ha la forma di un ApiError, cosi' il banner lo tratta
+ *  come gli altri errori. */
+function staleOrderError(detail: string): ApiError {
+  return {
+    status: 0,
+    type: "/problems/generic",
+    title: "Ordine non modificato",
+    detail,
+    extra: {},
+  };
 }
 
 function PresetRules({ presetId, canManage }: { presetId: string; canManage: boolean }) {
@@ -122,43 +140,64 @@ function PresetRules({ presetId, canManage }: { presetId: string; canManage: boo
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingRule, setDeletingRule] = useState<SeverityPresetRuleOut | null>(null);
 
-  const { data, error: loadError } = useQuery<SeverityPresetDetailOut, ApiError>({
+  const {
+    data,
+    error: loadError,
+    isLoading,
+  } = useQuery<SeverityPresetDetailOut, ApiError>({
     queryKey: ["preset", presetId],
     queryFn: () => apiGet<SeverityPresetDetailOut>(`/api/v1/severity-presets/${presetId}`),
   });
 
   const rules = data?.rules ?? [];
+  // Il "non ha ancora regole" vale solo con la lista letta e vuota.
+  const loaded = data !== undefined;
 
-  async function mutate(action: () => Promise<unknown>, success: string) {
-    await run(async () => {
-      await action();
-      await queryClient.invalidateQueries({ queryKey: ["preset", presetId] });
-      await queryClient.invalidateQueries({ queryKey: ["presets"] });
+  async function mutate(action: () => Promise<unknown>, success: string): Promise<boolean> {
+    return run(async () => {
+      try {
+        await action();
+      } finally {
+        await queryClient.invalidateQueries({ queryKey: ["preset", presetId] });
+        await queryClient.invalidateQueries({ queryKey: ["presets"] });
+      }
     }, { success });
   }
 
-  function move(index: number, delta: number) {
-    const next = [...rules];
-    const target = index + delta;
-    if (target < 0 || target >= next.length) return;
-    [next[index], next[target]] = [next[target], next[index]];
-    void mutate(
-      () =>
-        apiPut(`/api/v1/severity-presets/${presetId}/rules/order`, {
-          rule_ids: next.map((r) => r.id),
-        }),
-      "Ordine delle regole aggiornato.",
-    );
+  function move(ruleId: string, delta: number) {
+    void mutate(async () => {
+      // Lettura fresca dal server, non la cache: da un ordine vecchio il PUT
+      // riporterebbe indietro il riordino fatto nel frattempo da un altro.
+      const fresh = await queryClient.fetchQuery({
+        queryKey: ["preset", presetId],
+        queryFn: () => apiGet<SeverityPresetDetailOut>(`/api/v1/severity-presets/${presetId}`),
+        staleTime: 0,
+      });
+      const next = [...fresh.rules];
+      const index = next.findIndex((r) => r.id === ruleId);
+      const target = index + delta;
+      if (index === -1 || target < 0 || target >= next.length) {
+        throw staleOrderError(
+          "L'elenco delle regole è cambiato nel frattempo: ricontrolla l'ordine e riprova.",
+        );
+      }
+      [next[index], next[target]] = [next[target], next[index]];
+      await apiPut(`/api/v1/severity-presets/${presetId}/rules/order`, {
+        rule_ids: next.map((r) => r.id),
+      });
+    }, "Ordine delle regole aggiornato.");
   }
 
   return (
     <div>
       {loadError && <ErrorBanner error={loadError} />}
-      {error && <ErrorBanner error={error} />}
+      {error && !deletingRule && <ErrorBanner error={error} />}
 
-      {rules.length === 0 ? (
+      {!loaded && isLoading && <p className="card-hint">Caricamento delle regole…</p>}
+      {loaded && rules.length === 0 && (
         <p className="card-hint">Questo preset non ha ancora regole.</p>
-      ) : (
+      )}
+      {loaded && rules.length > 0 && (
         <div className="table-wrap">
           <table>
             <thead>
@@ -196,14 +235,14 @@ function PresetRules({ presetId, canManage }: { presetId: string; canManage: boo
                             <button
                               aria-label={`Sposta su ${rule.pattern}`}
                               disabled={index === 0 || busy !== null}
-                              onClick={() => move(index, -1)}
+                              onClick={() => move(rule.id, -1)}
                             >
                               ↑
                             </button>
                             <button
                               aria-label={`Sposta giù ${rule.pattern}`}
                               disabled={index === rules.length - 1 || busy !== null}
-                              onClick={() => move(index, 1)}
+                              onClick={() => move(rule.id, 1)}
                             >
                               ↓
                             </button>
@@ -212,7 +251,7 @@ function PresetRules({ presetId, canManage }: { presetId: string; canManage: boo
                       </div>
                     </td>
                     <td>
-                      <code>{rule.pattern}</code>
+                      <code className="rule-pattern">{rule.pattern}</code>
                     </td>
                     <td>
                       <SeverityBadge severity={rule.severity} />
@@ -277,16 +316,19 @@ function PresetRules({ presetId, canManage }: { presetId: string; canManage: boo
         <ConfirmDialog
           title="Elimina questa regola del preset"
           confirmLabel="Elimina regola"
-          onConfirm={() => {
+          onConfirm={async () => {
             const rule = deletingRule;
-            setDeletingRule(null);
-            void mutate(
+            const ok = await mutate(
               () => apiDelete(`/api/v1/severity-preset-rules/${rule.id}`),
               "Regola eliminata dal preset.",
             );
+            if (ok) setDeletingRule(null);
           }}
           onCancel={() => setDeletingRule(null)}
         >
+          {/* Il motivo del rifiuto resta nel dialogo: il toast scompare dopo pochi secondi
+              e il banner di pagina sta sotto il velo del dialogo. */}
+          {error && <ErrorBanner error={error} />}
           <p>
             La regola sparisce da <strong>tutti</strong> i receiver che usano questo preset.
           </p>
@@ -310,14 +352,18 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
   const [description, setDescription] = useState(preset.description);
   const [nameError, setNameError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
   const { busy, error, run } = useAction();
 
   async function mutate(action: () => Promise<unknown>, success: string): Promise<boolean> {
     return run(async () => {
-      await action();
-      await queryClient.invalidateQueries({ queryKey: ["presets"] });
-      await queryClient.invalidateQueries({ queryKey: ["preset", preset.id] });
-      await queryClient.invalidateQueries({ queryKey: ["presets-catalog"] });
+      try {
+        await action();
+      } finally {
+        await queryClient.invalidateQueries({ queryKey: ["presets"] });
+        await queryClient.invalidateQueries({ queryKey: ["preset", preset.id] });
+        await queryClient.invalidateQueries({ queryKey: ["presets-catalog"] });
+      }
     }, { success });
   }
 
@@ -334,7 +380,7 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
     setNameError(null);
   }
 
-  async function saveRename(event: React.FormEvent) {
+  async function saveRename(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     // Nome ripulito dagli spazi: "   " non e' un nome, e "Foo " passava il
     // controllo dei duplicati del backend accanto a un "Foo" esistente.
@@ -359,10 +405,11 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
 
   return (
     <div className="card">
-      {error && <ErrorBanner error={error} />}
+      {error && !confirmReset && !confirmDelete && <ErrorBanner error={error} />}
 
       {renaming ? (
-        <form onSubmit={(event) => void saveRename(event)}>
+        // noValidate: il nome vuoto lo rifiuta saveRename, con il messaggio sul campo.
+        <form noValidate onSubmit={(event) => void saveRename(event)}>
           <RequiredLegend />
           <Field id={`preset-name-${preset.id}`} label="Nome" required error={nameError}>
             <input
@@ -400,7 +447,8 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
           </h3>
           {preset.description && <p>{preset.description}</p>}
           <p className="card-hint">
-            {preset.rules_count} regole · applicato a {preset.receivers_count} receiver
+            {preset.rules_count} {preset.rules_count === 1 ? "regola" : "regole"} · applicato a{" "}
+            {preset.receivers_count} receiver
           </p>
         </>
       )}
@@ -411,45 +459,101 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
         </button>
         {canManage && !renaming && (
           <>
-            <button onClick={openRename}>Rinomina</button>
+            <button disabled={busy !== null} onClick={openRename}>
+              Rinomina
+            </button>
             {preset.builtin_key && (
-              <button
-                disabled={busy !== null}
-                onClick={() =>
-                  void mutate(
-                    () => apiPost(`/api/v1/severity-presets/${preset.id}/reset`),
-                    `Preset «${preset.name}» riportato ai valori predefiniti.`,
-                  )
-                }
-              >
+              <button disabled={busy !== null} onClick={() => setConfirmReset(true)}>
                 Ripristina i valori predefiniti
               </button>
             )}
-            <button className="danger" onClick={() => setConfirmDelete(true)}>
+            <button
+              className="danger"
+              disabled={busy !== null}
+              onClick={() => setConfirmDelete(true)}
+            >
               Elimina preset
             </button>
           </>
         )}
       </div>
 
+      {confirmReset && (
+        <ConfirmDialog
+          title={`Ripristina «${preset.name}»`}
+          confirmLabel="Ripristina"
+          // Il dialogo resta aperto e occupato finché la richiesta non risponde.
+          onConfirm={async () => {
+            const ok = await mutate(
+              () => apiPost(`/api/v1/severity-presets/${preset.id}/reset`),
+              `Preset «${preset.name}» riportato ai valori predefiniti.`,
+            );
+            if (ok) setConfirmReset(false);
+          }}
+          onCancel={() => setConfirmReset(false)}
+        >
+          {/* Il motivo del rifiuto resta nel dialogo: il toast scompare dopo pochi secondi
+              e il banner di pagina sta sotto il velo del dialogo. */}
+          {error && <ErrorBanner error={error} />}
+          <p>
+            {preset.rules_count === 1 ? (
+              <>La regola attuale di questo preset va persa</>
+            ) : (
+              <>
+                Vanno perse le <strong>{preset.rules_count}</strong> regole attuali di questo
+                preset
+              </>
+            )}
+            , comprese quelle che hai scritto tu: vengono sostituite dalle regole predefinite. Anche
+            nome e descrizione tornano quelli del catalogo.
+          </p>
+          {preset.receivers_count > 0 && (
+            <p>
+              {preset.receivers_count === 1 ? (
+                <>Il receiver che lo usa applicherà subito le regole nuove.</>
+              ) : (
+                <>
+                  I {preset.receivers_count} receiver che lo usano applicheranno subito le regole
+                  nuove.
+                </>
+              )}
+            </p>
+          )}
+        </ConfirmDialog>
+      )}
+
       {confirmDelete && (
         <ConfirmDialog
-          title={`Elimina preset "${preset.name}"`}
+          title={`Elimina preset «${preset.name}»`}
           expectedText={preset.name}
           confirmLabel="Elimina preset"
-          onConfirm={() => {
-            setConfirmDelete(false);
-            void mutate(
+          // Come per le regole: il dialogo resta aperto e occupato finché la
+          // richiesta non risponde, e il secondo click non manda una seconda DELETE.
+          onConfirm={async () => {
+            const ok = await mutate(
               () => apiDelete(`/api/v1/severity-presets/${preset.id}`),
               `Preset «${preset.name}» eliminato.`,
             );
+            if (ok) setConfirmDelete(false);
           }}
           onCancel={() => setConfirmDelete(false)}
         >
-          <p>
-            Il preset viene tolto dai {preset.receivers_count} receiver che lo usano: quei receiver
-            continueranno a valutare solo le proprie regole.
-          </p>
+          {/* Il motivo del rifiuto resta nel dialogo: il toast scompare dopo pochi secondi
+              e il banner di pagina sta sotto il velo del dialogo. */}
+          {error && <ErrorBanner error={error} />}
+          {preset.receivers_count === 0 ? (
+            <p>Nessun receiver usa questo preset.</p>
+          ) : preset.receivers_count === 1 ? (
+            <p>
+              Il preset viene tolto dal receiver che lo usa: quel receiver continuerà a valutare
+              solo le proprie regole.
+            </p>
+          ) : (
+            <p>
+              Il preset viene tolto dai {preset.receivers_count} receiver che lo usano: quei
+              receiver continueranno a valutare solo le proprie regole.
+            </p>
+          )}
         </ConfirmDialog>
       )}
 
@@ -465,7 +569,7 @@ function NewPresetForm() {
   const [nameError, setNameError] = useState<string | null>(null);
   const { busy, error, run } = useAction();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (name.trim() === "") {
       setNameError("Il nome del preset è obbligatorio.");
@@ -489,7 +593,8 @@ function NewPresetForm() {
     <details className="card collapsible">
       <summary>Nuovo preset</summary>
       {error && <ErrorBanner error={error} />}
-      <form className="form-stacked" onSubmit={(event) => void handleSubmit(event)}>
+        {/* noValidate: il nome vuoto lo rifiuta handleSubmit, con il messaggio sul campo. */}
+      <form noValidate className="form-stacked" onSubmit={(event) => void handleSubmit(event)}>
         <RequiredLegend />
         <Field id="new-preset-name" label="Nome" required error={nameError}>
           <input
@@ -561,7 +666,8 @@ function MissingBuiltins({ missing }: { missing: BuiltinPresetOut[] }) {
       <ul>
         {missing.map((builtin) => (
           <li key={builtin.key}>
-            <strong>{builtin.name}</strong> — {builtin.description} ({builtin.rules_count} regole)
+            <strong>{builtin.name}</strong> — {builtin.description} ({builtin.rules_count}{" "}
+            {builtin.rules_count === 1 ? "regola" : "regole"})
           </li>
         ))}
       </ul>
@@ -593,25 +699,23 @@ export default function PresetsPage() {
       <div className="page-header">
         <h1>Preset di regole</h1>
       </div>
-      <div className="card">
-        <p>
-          Un preset è un insieme di regole di severity riusabile: si scrive una volta e si applica a
-          quanti receiver si vuole, dalla pagina del receiver. Modificare un preset cambia il
-          comportamento di <strong>tutti</strong> i receiver che lo usano.
-        </p>
-        <p className="card-hint">
-          Sul singolo receiver, le regole scritte lì valgono prima di quelle dei preset: servono a
-          fare l'eccezione senza duplicare il preset.
-        </p>
-      </div>
+      <p className="page-subtitle">
+        Un preset è un insieme di regole di severity riusabile: si scrive una volta e si applica a
+        quanti receiver si vuole, dalla pagina del receiver. Modificare un preset cambia il
+        comportamento di <strong>tutti</strong> i receiver che lo usano.
+      </p>
+      <p className="card-hint">
+        Sul singolo receiver, le regole scritte lì valgono prima di quelle dei preset: servono a
+        fare l'eccezione senza duplicare il preset.
+      </p>
 
       {error && <ErrorBanner error={error} />}
       {canManage && missing.length > 0 && <MissingBuiltins missing={missing} />}
       {canManage && <NewPresetForm />}
 
       {isLoading && <EmptyState message="Caricamento…" />}
-      {presets?.length === 0 && !isLoading && (
-        <p className="card-hint">Nessun preset in questo tenant.</p>
+      {presets?.length === 0 && !isLoading && !error && (
+        <EmptyState message="Nessun preset in questo tenant." />
       )}
       {presets?.map((preset) => (
         <PresetCard key={preset.id} preset={preset} canManage={canManage} />

@@ -6,7 +6,9 @@ import type { ApiError, Severity, StatsSummaryOut } from "../api/types";
 import EmptyState from "../components/EmptyState";
 import ErrorBanner from "../components/ErrorBanner";
 import SeverityBadge from "../components/SeverityBadge";
+import { useSession } from "../hooks/useSession";
 import { formatTime } from "../lib/format";
+import { MEMBER_ROLES, hasRole } from "../lib/roles";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
 const POLL_INTERVAL_MS = 30_000;
@@ -17,6 +19,7 @@ export default function HomePage() {
     queryFn: () => apiGet<StatsSummaryOut>("/api/v1/stats/summary"),
     refetchInterval: POLL_INTERVAL_MS,
   });
+  const { role } = useSession();
   // Gruppi aperti: lo stato sta qui e non nell'URL perche' e' una preferenza di
   // lettura momentanea, non una vista da condividere. Il polling ogni 30s
   // riscrive i numeri ma non richiude quel che l'operatore ha aperto.
@@ -31,18 +34,38 @@ export default function HomePage() {
     });
   }
 
-  if (isLoading) return <EmptyState message="Caricamento…" />;
+  // Il titolo c'e' anche mentre si carica e se manca il dato: la pagina non
+  // cambia forma quando arriva la risposta.
+  const title = (
+    <div className="page-header">
+      <h1>Riepilogo</h1>
+    </div>
+  );
+
+  if (isLoading) {
+    return (
+      <div>
+        {title}
+        <EmptyState message="Caricamento…" />
+      </div>
+    );
+  }
   // Senza dati l'errore e' tutta la pagina. Con i dati di un giro precedente,
   // un polling fallito (una rete che singhiozza, un deploy) non li cancella:
   // restano a video, col banner sopra che dice che potrebbero non essere
   // aggiornati.
-  if (!data) return error ? <ErrorBanner error={error} /> : null;
+  if (!data) {
+    return (
+      <div>
+        {title}
+        {error && <ErrorBanner error={error} />}
+      </div>
+    );
+  }
 
   return (
     <div>
-      <div className="page-header">
-        <h1>Riepilogo</h1>
-      </div>
+      {title}
       {error && (
         <>
           <ErrorBanner error={error} />
@@ -74,7 +97,11 @@ export default function HomePage() {
             {data.deliveries_dead}
           </span>
           <span className="kpi-note">
-            <Link to="/deliveries?status=dead">Tentativi esauriti, da ri-accodare</Link>
+            {/* Ri-accodare è un'azione dei member in su: al viewer si dice solo
+                cosa è successo, senza un invito a fare ciò che non può fare. */}
+            <Link to="/deliveries?status=dead">
+              {hasRole(role, MEMBER_ROLES) ? "Tentativi esauriti, da ri-accodare" : "Tentativi esauriti"}
+            </Link>
           </span>
         </div>
       </div>
@@ -97,14 +124,17 @@ export default function HomePage() {
           Apri un gruppo per vedere i totali dei singoli receiver. Un receiver a zero non ha mai
           ricevuto notifiche.
         </p>
+        {/* Senza gruppi niente intestazioni vuote: il messaggio sta al posto della
+            tabella, come negli altri elenchi vuoti. */}
+        {data.by_group.length > 0 && (
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
                 <th className="stats-toggle-col"></th>
-                <th>Gruppo / receiver</th>
-                <th>Totale</th>
-                <th>Non lette</th>
+                <th>Gruppo / Receiver</th>
+                <th className="num">Totale</th>
+                <th className="num">Non lette</th>
               </tr>
             </thead>
             <tbody>
@@ -135,27 +165,27 @@ export default function HomePage() {
                           {group.group_name}
                         </Link>
                       </td>
-                      <td>{group.total}</td>
-                      <td>{group.unread_count}</td>
+                      <td className="num">{group.total}</td>
+                      <td className="num">{group.unread_count}</td>
                     </tr>
                     {open &&
                       receivers.map((receiver) => (
                         <tr key={receiver.receiver_id} className="stats-receiver-row">
                           <td className="stats-toggle-col"></td>
                           <td>
-                            <span className="status-cell">
+                            <span className="status-cell status-cell-wrap">
                               <Link
                                 to={`/notifications?group_id=${group.group_id}&receiver_id=${receiver.receiver_id}`}
                               >
                                 {receiver.receiver_name}
                               </Link>
                               {receiver.status === "disabled" && (
-                                <span className="status-pill warn">disabilitato</span>
+                                <span className="status-pill warn">Disabilitato</span>
                               )}
                             </span>
                           </td>
-                          <td>{receiver.total}</td>
-                          <td>{receiver.unread_count}</td>
+                          <td className="num">{receiver.total}</td>
+                          <td className="num">{receiver.unread_count}</td>
                         </tr>
                       ))}
                   </Fragment>
@@ -164,6 +194,7 @@ export default function HomePage() {
             </tbody>
           </table>
         </div>
+        )}
         {data.by_group.length === 0 && <EmptyState message="Nessun gruppo." />}
       </div>
     </div>

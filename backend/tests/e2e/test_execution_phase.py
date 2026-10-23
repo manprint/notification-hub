@@ -214,7 +214,7 @@ async def test_avvio_senza_conclusione_finisce_nella_notifica_di_assenza(
     assert len(assenze) == 1
     dettaglio = await api_client.get(f"/api/v1/notifications/{assenze[0]['id']}", headers=headers)
     contenuto = dettaglio.json()["content"]
-    assert "E' partito e si e' interrotto" in contenuto
+    assert "È partito e si è interrotto" in contenuto
     # La notifica di assenza non dichiara una fase: non l'ha inviata nessuno.
     assert dettaglio.json()["phase"] is None
 

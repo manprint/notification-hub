@@ -66,6 +66,18 @@ describe("useAction", () => {
     expect(screen.getByText(/Non salvato/)).toBeInTheDocument();
   });
 
+  it("un errore che non è di NotifyHub resta leggibile: niente banner vuoto", async () => {
+    const user = userEvent.setup();
+    // Un TypeError (connessione caduta a metà corpo) non ha titolo: il banner
+    // non deve restare una scatola rossa senza parole.
+    renderProvetta(() => Promise.reject(new TypeError("network error")));
+
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+
+    await waitFor(() => expect(screen.getByText(/Non salvato/)).toBeInTheDocument());
+    expect(screen.getByText("Operazione non riuscita.", { exact: false })).toBeInTheDocument();
+  });
+
   it("l'avviso si può chiudere a mano", async () => {
     const user = userEvent.setup();
     renderProvetta(() => Promise.resolve());

@@ -4,8 +4,12 @@ from celery import Celery
 from celery.schedules import crontab
 
 from app.core.config import get_settings
+from app.core.logging import configure_logging
 
 settings = get_settings()
+# Il worker non passa da create_app: senza questa chiamata logga senza livello, senza JSON e
+# senza la redazione dei segreti.
+configure_logging()
 
 celery_app = Celery(
     "notifyhub",
@@ -14,8 +18,13 @@ celery_app = Celery(
 )
 
 celery_app.conf.update(
+    # Coda di default esplicita: ogni task senza route vi finisce, e il worker la
+    # consuma (`-Q` in docker-compose.yml e deploy/all-in-one/config/supervisord.conf).
+    # I job di manutenzione di beat hanno la loro coda, consumata dallo stesso worker.
+    task_default_queue="delivery",
     task_routes={
         "app.tasks.delivery.dispatch_delivery": {"queue": "delivery"},
+        "app.tasks.maintenance.*": {"queue": "maintenance"},
     },
     task_serializer="json",
     accept_content=["json"],

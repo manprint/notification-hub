@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -124,6 +124,43 @@ describe("UsersPage", () => {
       password: "password-lunghissima",
       role: "admin",
     });
+  });
+
+  it("dopo una modifica le righe restano nell'ordine per email che manda l'API", async () => {
+    // L'API ordina per email: la tabella mostra quell'ordine, anche dopo che una
+    // riga è cambiata e l'elenco è stato riletto.
+    const [owner, member] = fixtureUsers;
+    let ruoloMember = member.role;
+    server.use(
+      http.get("/api/v1/users", () =>
+        HttpResponse.json([
+          { ...member, id: "44444444-4444-4444-4444-444444444444", email: "admin@acme.test", role: "admin" },
+          { ...member, role: ruoloMember },
+          owner,
+          { ...member, id: "55555555-5555-5555-5555-555555555555", email: "viewer@acme.test", role: "viewer" },
+        ]),
+      ),
+      http.patch("/api/v1/users/:id", async ({ request }) => {
+        ruoloMember = ((await request.json()) as { role: string }).role;
+        return HttpResponse.json({});
+      }),
+    );
+    const emailNelleRighe = () =>
+      screen
+        .getAllByRole("row")
+        .map((riga) => riga.textContent?.match(/[\w.]+@acme\.test/)?.[0])
+        .filter(Boolean);
+    const ordine = ["admin@acme.test", "member@acme.test", "owner@acme.test", "viewer@acme.test"];
+    const user = userEvent.setup();
+    await renderComeOwner();
+    expect(emailNelleRighe()).toEqual(ordine);
+
+    await user.selectOptions(screen.getByLabelText("Ruolo di member@acme.test"), "viewer");
+    await waitFor(() => expect(ruoloMember).toBe("viewer"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Ruolo di member@acme.test")).toHaveValue("viewer"),
+    );
+    expect(emailNelleRighe()).toEqual(ordine);
   });
 
   it("il proprio ruolo si cambia solo dopo una conferma, e poi la sessione si ricarica", async () => {
@@ -268,9 +305,12 @@ describe("UsersPage", () => {
     const backup = within(riga).getByRole("checkbox", { name: "Backup" });
     await user.click(produzione);
     // Il secondo click partiva dalla lista in cache (ancora vuota) e il suo
-    // salvataggio cancellava il primo.
+    // salvataggio cancellava il primo. Il click su un controllo disabilitato è
+    // sincrono: user.click lo rimanderebbe a salvataggio finito, quando il
+    // controllo è di nuovo attivo, e il test salverebbe due volte.
     expect(backup).toBeDisabled();
-    await user.click(backup);
+    fireEvent.click(backup);
+    expect(patches).toHaveLength(1);
 
     await waitFor(() => expect(backup).toBeEnabled());
     await user.click(backup);
@@ -358,5 +398,149 @@ describe("UsersPage", () => {
 
     expect(await screen.findByText(/almeno 12 caratteri\./)).toBeInTheDocument();
     expect(posts).toBe(0);
+  });
+
+  it("gli inviti che non si caricano mostrano l'errore nella loro card, non la fanno sparire", async () => {
+    server.use(
+      http.get("/api/v1/invitations", () =>
+        HttpResponse.json(
+          {
+            type: "/problems/internal",
+            title: "Internal Server Error",
+            status: 500,
+            detail: "Inviti non disponibili",
+          },
+          { status: 500, headers: { "Content-Type": "application/problem+json" } },
+        ),
+      ),
+    );
+    renderWithProviders(<UsersPage />);
+
+    const titolo = await screen.findByRole("heading", { name: "Inviti in sospeso" });
+    const card = titolo.closest(".card") as HTMLElement;
+    expect(await within(card).findByRole("alert")).toHaveTextContent("Inviti non disponibili");
+    // Nessuna tabella vuota sotto l'errore: il messaggio è l'unico contenuto.
+    expect(within(card).queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("senza inviti e senza errore la card degli inviti non compare", async () => {
+    renderWithProviders(<UsersPage />);
+
+    await screen.findByRole("heading", { name: "Utenze" });
+    expect(screen.queryByRole("heading", { name: "Inviti in sospeso" })).not.toBeInTheDocument();
+  });
+
+  it("le caselle dei gruppi nel modulo di creazione hanno la domanda come nome del gruppo", async () => {
+    setRefreshToken("refresh-token-fixture");
+    server.use(
+      http.get("/api/v1/groups", () =>
+        HttpResponse.json([
+          { id: "g1", name: "Server Produzione", description: null, receiver_count: 0, notification_count: 0, unread_count: 0 },
+        ]),
+      ),
+    );
+    renderWithProviders(<UsersPage />);
+
+    const gruppo = await screen.findByRole("group", { name: /Gruppi di receiver da gestire/ });
+    expect(within(gruppo).getByRole("checkbox", { name: "Server Produzione" })).toBeInTheDocument();
+  });
+
+  it("il campo password del modulo di creazione non ripete l'etichetta come segnaposto", async () => {
+    renderWithProviders(<UsersPage />);
+
+    const campo = await screen.findByLabelText("Password", { selector: "#create-user-password" });
+    expect(campo).not.toHaveAttribute("placeholder");
+  });
+
+  it("la password di 8 caratteri nel modulo di creazione mostra il messaggio italiano", async () => {
+    setRefreshToken("refresh-token-fixture");
+    let creazioni = 0;
+    server.use(
+      http.post("/api/v1/users", () => {
+        creazioni += 1;
+        return HttpResponse.json({}, { status: 201 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<UsersPage />);
+
+    await user.type(
+      await screen.findByLabelText("Email", { selector: "#create-user-email" }),
+      "nuova@acme.test",
+    );
+    await user.type(screen.getByLabelText("Password", { selector: "#create-user-password" }), "12345678");
+    await user.click(screen.getByRole("button", { name: "Crea" }));
+
+    // Il vincolo minLength nativo fermava l'invio col fumetto del browser.
+    expect(await screen.findByText("La password deve avere almeno 12 caratteri.")).toBeInTheDocument();
+    expect(creazioni).toBe(0);
+  });
+
+  it("l'invito inviato svuota l'email solo se non è stata riscritta nel frattempo", async () => {
+    let rilascia: () => void = () => {};
+    const attesa = new Promise<void>((resolve) => {
+      rilascia = resolve;
+    });
+    server.use(
+      http.post("/api/v1/invitations", async () => {
+        await attesa;
+        return HttpResponse.json(
+          {
+            id: "inv1",
+            email: "primo@acme.test",
+            role: "member",
+            expires_at: "2026-08-08T00:00:00Z",
+            invite_url: "https://notifyhub.example.com/invite#token=abc123",
+            email_sent: true,
+          },
+          { status: 201 },
+        );
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<UsersPage />);
+
+    const email = await screen.findByPlaceholderText("email@esempio.it");
+    await user.type(email, "primo@acme.test");
+    await user.click(screen.getByRole("button", { name: "Invita" }));
+    await user.type(email, "x");
+    rilascia();
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Invita" })).toBeEnabled());
+    // Il campo non si svuota: la digitazione durante l'invio è ancora lì.
+    expect(email).toHaveValue("primo@acme.testx");
+  });
+
+  it("le righe degli owner in sola lettura dicono il motivo anche a schermo", async () => {
+    server.use(
+      http.get("/api/v1/auth/me", () =>
+        HttpResponse.json({
+          ...fixtureMe,
+          id: "44444444-4444-4444-4444-444444444444",
+          email: "admin@acme.test",
+          role: "admin",
+        }),
+      ),
+    );
+    setRefreshToken("refresh-token-fixture");
+    renderWithProviders(<UsersPage />);
+
+    const rigaOwner = await screen.findByRole("row", { name: /owner@acme\.test/ });
+    const motivo = "Solo un proprietario può modificare o rimuovere un altro proprietario.";
+    expect(within(rigaOwner).getByText(motivo)).toBeInTheDocument();
+    // Un blocco sotto l'email, non un testo attaccato a lei.
+    expect(within(rigaOwner).getByText(motivo).tagName).toBe("DIV");
+    expect(within(rigaOwner).getByLabelText("Ruolo di owner@acme.test")).toHaveAccessibleDescription(
+      motivo,
+    );
+  });
+
+  it("le colonne delle azioni hanno un nome, anche se visivamente non c'è scritto", async () => {
+    renderWithProviders(<UsersPage />);
+
+    const utenze = (await screen.findByRole("heading", { name: "Utenze" })).closest(".card") as HTMLElement;
+    const tabella = await within(utenze).findByRole("table");
+    const intestazioni = within(tabella).getAllByRole("columnheader");
+    expect(intestazioni[intestazioni.length - 1]).toHaveAccessibleName("Azioni");
   });
 });

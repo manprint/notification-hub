@@ -20,3 +20,5 @@ coverage/
 # Local tool caches/configuration
 .serena/cache/
 .serena/project.local.yml
+# env di test isolati per esecuzioni parallele (ENV_FILE=.env.test.<nome>)
+backend/.env.test.*

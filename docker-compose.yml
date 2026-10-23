@@ -46,15 +46,16 @@ services:
     restart: unless-stopped
 
   minio:
-    # Docker Hub non distribuisce piu' minio/minio: quay.io, stessa release dell'all-in-one.
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    # Docker Hub e quay.io non distribuiscono piu' le immagini MinIO (quay risponde 401):
+    # build comunitaria di Coolify, contiene sia il server sia il client mc.
+    image: ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${NOTIFYHUB_S3_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${NOTIFYHUB_S3_SECRET_KEY:-minioadmin}
     ports:
-      # sola console di amministrazione, solo da loopback
-      - "127.0.0.1:9001:9001"
+      # sola console di amministrazione, solo da loopback (lo smoke test usa un'altra porta)
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - miniodata:/data
     healthcheck:
@@ -66,7 +67,7 @@ services:
     restart: unless-stopped
 
   minio-init:
-    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z
     depends_on:
       minio:
         condition: service_healthy
@@ -115,10 +116,21 @@ services:
     env_file: .env
     environment:
       <<: *db_env
+      # Solo le migrazioni usano il ruolo owner: qui la variabile resta vuota (env_ignore_empty la
+      # tratta come assente) e la password di .env, caricata da env_file, non arriva al container.
+      DATABASE_URL_OWNER: ""
       NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST: ${NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST:-hooks.slack.com,chat.googleapis.com}
+      NOTIFYHUB_WEBHOOK_INSECURE_HTTP_HOSTS: ${NOTIFYHUB_WEBHOOK_INSECURE_HTTP_HOSTS:-}
+      # Metriche multiprocess condivise con il worker: il server 9100 le somma (vedi core/metrics.py).
+      PROMETHEUS_MULTIPROC_DIR: /var/lib/notifyhub/metrics
+      # Senza questo uvicorn ignora X-Forwarded-For di nginx, che e' sempre il peer: tutti i client
+      # collassano su un solo IP (rate limit di ingestion e lockout del login condivisi).
+      FORWARDED_ALLOW_IPS: ${NOTIFYHUB_NGINX_IP:-172.30.250.10}
     expose:
       - "8000"
       - "9100"  # /metrics, mai instradata da nginx (spec 10.4)
+    volumes:
+      - metricsdata:/var/lib/notifyhub/metrics
     healthcheck:
       # curl non e presente in python:3.12-slim, si usa l'interprete.
       test:
@@ -137,7 +149,7 @@ services:
     build:
       context: .
       dockerfile: deploy/api/Dockerfile
-    command: ["celery", "-A", "app.tasks.celery_app", "worker", "-Q", "delivery", "--concurrency", "4", "--loglevel", "INFO"]
+    command: ["celery", "-A", "app.tasks.celery_app", "worker", "-Q", "delivery,maintenance", "--concurrency", "4", "--loglevel", "INFO"]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -146,7 +158,12 @@ services:
       minio:
         condition: service_healthy
     env_file: .env
-    environment: *db_env
+    environment:
+      <<: *db_env
+      DATABASE_URL_OWNER: ""
+      PROMETHEUS_MULTIPROC_DIR: /var/lib/notifyhub/metrics
+    volumes:
+      - metricsdata:/var/lib/notifyhub/metrics
     networks: [notifyhub]
     restart: unless-stopped
 
@@ -161,7 +178,9 @@ services:
       redis:
         condition: service_healthy
     env_file: .env
-    environment: *db_env
+    environment:
+      <<: *db_env
+      DATABASE_URL_OWNER: ""
     networks: [notifyhub]
     restart: unless-stopped
 
@@ -174,7 +193,12 @@ services:
     depends_on:
       api:
         condition: service_healthy
-    networks: [notifyhub]
+    networks:
+      notifyhub:
+        # IP fisso: l'API si fida di X-Forwarded-For solo da questo hop (FORWARDED_ALLOW_IPS).
+        # Subnet e IP sono sovrascrivibili: due progetti compose sullo stesso host (sviluppo e
+        # smoke test) o una rete gia' esistente sullo stesso intervallo andrebbero in conflitto.
+        ipv4_address: ${NOTIFYHUB_NGINX_IP:-172.30.250.10}
     restart: unless-stopped
 
   mock-webhook:
@@ -183,7 +207,7 @@ services:
     command: ["python", "/scripts/mock_webhook.py"]
     ports:
       # lo smoke test interroga /_received da host, l'API lo raggiunge come mock-webhook:8899
-      - "127.0.0.1:8899:8899"
+      - "127.0.0.1:${SMOKE_WEBHOOK_PORT:-8899}:8899"
     volumes:
       - ./scripts:/scripts:ro
     networks: [notifyhub]
@@ -193,7 +217,11 @@ volumes:
   pgdata:
   redisdata:
   miniodata:
+  metricsdata:
 
 networks:
   notifyhub:
     driver: bridge
+    ipam:
+      config:
+        - subnet: ${NOTIFYHUB_SUBNET:-172.30.250.0/24}

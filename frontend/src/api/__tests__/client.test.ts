@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   apiGet,
   apiPost,
+  asApiError,
   getAccessToken,
   getRefreshToken,
   onLogout,
@@ -450,5 +451,54 @@ describe("client", () => {
       detail: "",
     } satisfies Partial<ApiError>);
     fetchSpy.mockRestore();
+  });
+
+  it("una richiesta partita con il token A che riceve 401 dopo un rinnovo riparte col token B, senza un nuovo refresh", async () => {
+    setAccessToken("token-A");
+    setRefreshToken("refresh-token-fixture");
+
+    const authHeaders: Array<string | null> = [];
+    let refreshCalls = 0;
+    server.use(
+      http.post("/api/v1/auth/refresh", () => {
+        refreshCalls += 1;
+        return HttpResponse.json(tokenPair("u1", "refresh-nuovo"));
+      }),
+      http.get("/api/v1/probe-tardiva", ({ request }) => {
+        const auth = request.headers.get("authorization");
+        authHeaders.push(auth);
+        if (auth === "Bearer token-A") {
+          // Mentre la risposta 401 è in volo, la sessione viene rinnovata altrove.
+          setAccessToken("token-B");
+          return new HttpResponse(null, { status: 401 });
+        }
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+
+    await expect(apiGet("/api/v1/probe-tardiva")).resolves.toEqual({ ok: true });
+    expect(authHeaders).toEqual(["Bearer token-A", "Bearer token-B"]);
+    expect(refreshCalls).toBe(0);
+  });
+
+  it("se la lettura del corpo cade a metà l'errore ha titolo e stato, non un TypeError", async () => {
+    setAccessToken("token");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("{", { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+
+    const errore = await apiGet("/api/v1/probe-corpo").catch((e: unknown) => e);
+    expect(errore).toMatchObject({ status: 0, type: "/problems/network-unreachable" });
+    expect((errore as ApiError).title).not.toBe("");
+    fetchSpy.mockRestore();
+  });
+
+  it("asApiError rende leggibile anche un errore che non è di NotifyHub", () => {
+    expect(asApiError(new TypeError("network error"))).toMatchObject({
+      status: 0,
+      title: "Errore imprevisto",
+    });
+    const gia: ApiError = { status: 409, type: "/problems/conflict", title: "Conflict", detail: "", extra: {} };
+    expect(asApiError(gia)).toBe(gia);
   });
 });

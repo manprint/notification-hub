@@ -1,12 +1,15 @@
 """Object storage MinIO/S3 per i payload oltre INLINE_MAX_BYTES (spec 6.5)."""
 
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
 from datetime import UTC, datetime
 
 import aioboto3
+from aiobotocore.config import AioConfig
 from botocore.exceptions import ClientError
 
-from app.core.config import get_settings
+from app.core.config import get_settings, s3_timeouts
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -32,11 +35,14 @@ def object_key(tenant_id: uuid.UUID, notification_id: uuid.UUID) -> str:
 
 def _client_kwargs() -> dict:
     settings = get_settings()
+    # Timeout espliciti: senza, botocore aspetta 60 s per tentativo e un MinIO
+    # bloccato tiene occupata la richiesta ben oltre il timeout del pool.
     return {
         "endpoint_url": settings.notifyhub_s3_endpoint,
         "aws_access_key_id": settings.notifyhub_s3_access_key,
         "aws_secret_access_key": settings.notifyhub_s3_secret_key,
         "region_name": settings.notifyhub_s3_region,
+        "config": AioConfig(**s3_timeouts(settings)),
     }
 
 
@@ -64,6 +70,34 @@ async def fetch_object(key: str) -> bytes:
         response = await s3.get_object(Bucket=settings.notifyhub_s3_bucket, Key=key)
         async with response["Body"] as stream:
             return await stream.read()
+
+
+async def stream_object(key: str) -> tuple[int, AsyncIterator[bytes]]:
+    """Lunghezza e blocchi dell'oggetto, senza caricarlo in memoria (spec 9.5).
+
+    La richiesta a MinIO parte qui, prima che la risposta inizi: una chiave
+    mancante e' un errore e non un 200 con corpo troncato. Il client e il corpo
+    si chiudono quando i blocchi finiscono o il chiamante smette di leggerli.
+    """
+    settings = get_settings()
+    stack = AsyncExitStack()
+    try:
+        s3 = await stack.enter_async_context(_session.client("s3", **_client_kwargs()))
+        response = await s3.get_object(Bucket=settings.notifyhub_s3_bucket, Key=key)
+        corpo = response["Body"]
+        await stack.enter_async_context(corpo)
+    except BaseException:
+        await stack.aclose()
+        raise
+
+    async def _blocchi() -> AsyncIterator[bytes]:
+        try:
+            async for blocco in corpo.iter_chunks():
+                yield blocco
+        finally:
+            await stack.aclose()
+
+    return int(response["ContentLength"]), _blocchi()
 
 
 async def delete_object(key: str) -> None:

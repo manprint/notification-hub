@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, Index, String
 from sqlalchemy.dialects.postgresql import CITEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,6 +11,7 @@ from app.db.types import UserRole, user_role_type
 
 class Invitation(Base, UUIDPrimaryKeyMixin):
     __tablename__ = "invitations"
+    __table_args__ = (Index("ix_invitations_invited_by", "invited_by"),)
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)
     email: Mapped[str] = mapped_column(CITEXT, nullable=False)

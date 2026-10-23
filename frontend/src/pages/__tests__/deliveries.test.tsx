@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import DeliveriesPage from "../DeliveriesPage";
 import { setRefreshToken } from "../../api/client";
 import { fixtureDeliveries } from "../../api/mocks/handlers";
@@ -32,6 +32,30 @@ describe("DeliveriesPage", () => {
   });
 });
 
+describe("DeliveriesPage errori", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setRefreshToken("refresh-token-fixture");
+  });
+
+  it("se la lettura fallisce non dice «nessuna consegna»: è un errore, non un esito", async () => {
+    server.use(
+      http.get("/api/v1/deliveries", () =>
+        HttpResponse.json(
+          { type: "/problems/internal-error", title: "Internal Server Error", status: 500 },
+          { status: 500, headers: { "Content-Type": "application/problem+json" } },
+        ),
+      ),
+    );
+    renderWithProviders(<DeliveriesPage />);
+
+    await screen.findByText("Elenco non disponibile per un errore di caricamento.");
+    // Il banner dell'errore c'è accanto al messaggio della tabella, non al suo posto.
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByText(/Nessuna consegna trovata/)).toBeNull();
+  });
+});
+
 describe("DeliveriesPage leggibilità", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -50,7 +74,7 @@ describe("DeliveriesPage leggibilità", () => {
     expect(screen.getAllByText(/Backup notturno/).length).toBeGreaterThan(0);
 
     // si arriva alla notifica inoltrata, senza leggerne il corpo qui
-    const apri = screen.getAllByRole("link", { name: "Apri" });
+    const apri = screen.getAllByRole("link", { name: /^Apri/ });
     expect(apri[0]).toHaveAttribute("href", "/notifications/n1");
   });
 
@@ -66,13 +90,15 @@ describe("DeliveriesPage leggibilità", () => {
     );
 
     renderWithProviders(<DeliveriesPage />);
-    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument(),
+    );
 
     // Il corpo si legge nella notifica: una preview lunga qui sfonda la riga e
     // spinge fuori vista le colonne che dicono com'è andata la consegna.
     expect(screen.queryByText(/disco pieno su \/var/)).not.toBeInTheDocument();
     const riga = screen.getAllByRole("row")[1];
-    expect(within(riga).getByRole("link", { name: "Apri" })).toHaveAttribute(
+    expect(within(riga).getByRole("link", { name: /^Apri/ })).toHaveAttribute(
       "href",
       "/notifications/n1",
     );
@@ -80,7 +106,9 @@ describe("DeliveriesPage leggibilità", () => {
 
   it("la riga resta riconoscibile senza il testo: severity, receiver, quando", async () => {
     renderWithProviders(<DeliveriesPage />);
-    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument(),
+    );
 
     const riga = screen.getAllByRole("row")[1];
     expect(within(riga).getByText("Errore")).toBeInTheDocument();
@@ -91,7 +119,9 @@ describe("DeliveriesPage leggibilità", () => {
 
   it("la severity sta in una colonna sua, come nell'elenco delle notifiche", async () => {
     renderWithProviders(<DeliveriesPage />);
-    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument(),
+    );
 
     const intestazioni = within(screen.getAllByRole("row")[0])
       .getAllByRole("columnheader")
@@ -103,12 +133,14 @@ describe("DeliveriesPage leggibilità", () => {
     // severity si scorrono in verticale.
     expect(within(celle[0]).getByText("Errore")).toBeInTheDocument();
     expect(within(celle[1]).queryByText("Errore")).not.toBeInTheDocument();
-    expect(within(celle[1]).getByRole("link", { name: "Apri" })).toBeInTheDocument();
+    expect(within(celle[1]).getByRole("link", { name: /^Apri/ })).toBeInTheDocument();
   });
 
   it("la data di ricezione ha la colonna «Ricevuta», con giorno e ora su due righe", async () => {
     renderWithProviders(<DeliveriesPage />);
-    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument(),
+    );
 
     const intestazioni = within(screen.getAllByRole("row")[0])
       .getAllByRole("columnheader")
@@ -130,7 +162,9 @@ describe("DeliveriesPage filtri", () => {
 
   it("gli stati della tendina usano le stesse parole della tabella", async () => {
     renderWithProviders(<DeliveriesPage />);
-    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument(),
+    );
 
     const tendina = screen.getByLabelText("Stato della consegna");
     const opzioni = within(tendina)
@@ -146,7 +180,9 @@ describe("DeliveriesPage filtri", () => {
   it("con un filtro attivo compare il modo di azzerarlo", async () => {
     const user = userEvent.setup();
     renderWithProviders(<DeliveriesPage />);
-    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument(),
+    );
 
     expect(screen.queryByRole("button", { name: /Azzera i filtri/ })).not.toBeInTheDocument();
 
@@ -182,7 +218,9 @@ describe("DeliveriesPage paginazione", () => {
     const user = userEvent.setup();
     renderWithProviders(<DeliveriesPage />);
 
-    await waitFor(() => expect(screen.getByText("Morta")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument(),
+    );
     expect(screen.queryByText("Inviata", { selector: ".status-pill" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Carica altri" }));
@@ -277,5 +315,188 @@ describe("DeliveriesPage prossimo tentativo", () => {
 
     expect(await screen.findByText("archived", { selector: ".status-pill" })).toBeInTheDocument();
     expect(screen.getByText(/stato non riconosciuto/)).toBeInTheDocument();
+  });
+});
+
+describe("DeliveriesPage filtro canale del viewer", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setRefreshToken("refresh-token-fixture");
+    server.use(
+      http.get("/api/v1/auth/me", () =>
+        HttpResponse.json({
+          id: "u9",
+          email: "viewer@acme.test",
+          role: "viewer",
+          tenant_id: "t1",
+          tenant_name: "ACME",
+        }),
+      ),
+    );
+  });
+
+  afterEach(() => {
+    server.events.removeAllListeners();
+  });
+
+  it("il viewer filtra per canale senza chiedere /api/v1/channels", async () => {
+    let richiesteCanali = 0;
+    server.events.on("request:start", ({ request }) => {
+      if (new URL(request.url).pathname === "/api/v1/channels") richiesteCanali++;
+    });
+
+    renderWithProviders(<DeliveriesPage />);
+    await waitFor(() =>
+      expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument(),
+    );
+
+    const tendina = screen.getByLabelText("Canale", { selector: "select" });
+    expect(within(tendina).getByRole("option", { name: "Slack #ops" })).toBeInTheDocument();
+    expect(richiesteCanali).toBe(0);
+  });
+
+  it("il canale già filtrato resta nella tendina anche senza consegne", async () => {
+    server.use(
+      http.get("/api/v1/deliveries", () => HttpResponse.json({ deliveries: [], next_cursor: null })),
+    );
+
+    renderWithProviders(<DeliveriesPage />, ["/deliveries?channel_id=c9"]);
+    const tendina = await screen.findByLabelText("Canale", { selector: "select" });
+
+    expect(tendina).toHaveValue("c9");
+    expect(within(tendina).getByRole("option", { name: "Canale selezionato" })).toBeInTheDocument();
+  });
+});
+
+describe("DeliveriesPage stati e azioni", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setRefreshToken("refresh-token-fixture");
+  });
+
+  it("se i canali non si caricano il banner lo dice, la tabella resta", async () => {
+    server.use(
+      http.get("/api/v1/channels", () =>
+        HttpResponse.json(
+          { type: "/problems/internal-error", title: "Internal Server Error", status: 500 },
+          { status: 500, headers: { "Content-Type": "application/problem+json" } },
+        ),
+      ),
+    );
+    renderWithProviders(<DeliveriesPage />);
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    // Le consegne sono un'altra query: la tabella non sparisce per i canali.
+    expect(await screen.findByText("Morta", { selector: ".status-pill" })).toBeInTheDocument();
+  });
+
+  it("con lo stato «morta» e nessun risultato non parla di soglia", async () => {
+    server.use(
+      http.get("/api/v1/deliveries", () => HttpResponse.json({ deliveries: [], next_cursor: null })),
+    );
+    renderWithProviders(<DeliveriesPage />, ["/deliveries?status=dead"]);
+
+    expect(await screen.findByText("Nessuna consegna con questi filtri.")).toBeInTheDocument();
+    expect(screen.queryByText(/soglia/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Stato della consegna")).toHaveValue("dead");
+  });
+
+  it("Ri-accoda aggiorna la riga in place, senza ricaricare l'elenco", async () => {
+    let elenco = 0;
+    server.use(
+      http.get("/api/v1/deliveries", () => {
+        elenco += 1;
+        return HttpResponse.json({ deliveries: [fixtureDeliveries[0]], next_cursor: null });
+      }),
+      http.post("/api/v1/deliveries/:id/retry", () =>
+        HttpResponse.json({ ...fixtureDeliveries[0], status: "pending", attempts: 0 }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<DeliveriesPage />);
+
+    await user.click(await screen.findByRole("button", { name: "Ri-accoda" }));
+
+    expect(await screen.findByText("In attesa", { selector: ".status-pill" })).toBeInTheDocument();
+    expect(screen.queryByText("Morta", { selector: ".status-pill" })).not.toBeInTheDocument();
+    // Il dato arriva dalla risposta: nessuna lettura in più dell'elenco.
+    expect(elenco).toBe(1);
+  });
+});
+
+describe("DeliveriesPage esito e motivo", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setRefreshToken("refresh-token-fixture");
+  });
+
+  it("una morta per 4xx dice che il webhook l'ha rifiutata, non che i tentativi sono finiti", async () => {
+    server.use(
+      http.get("/api/v1/deliveries", () =>
+        HttpResponse.json({
+          deliveries: [
+            {
+              ...fixtureDeliveries[0],
+              id: "r4",
+              status: "dead",
+              attempts: 0,
+              response_code: 404,
+              last_error: "HTTP 404: no_team",
+            },
+            { ...fixtureDeliveries[0], id: "r5", status: "dead", attempts: 5, response_code: 503 },
+            {
+              ...fixtureDeliveries[0],
+              id: "r429",
+              status: "dead",
+              attempts: 5,
+              response_code: 429,
+            },
+          ],
+          next_cursor: null,
+        }),
+      ),
+    );
+    renderWithProviders(<DeliveriesPage />);
+
+    expect(
+      await screen.findByText(/rifiutata dal webhook \(HTTP 404\), nessun tentativo ripetuto/),
+    ).toBeInTheDocument();
+    // Le morte per 5xx e per 429 hanno esaurito i tentativi, come prima.
+    expect(screen.getAllByText(/esauriti i tentativi/)).toHaveLength(2);
+  });
+
+  it("il codice HTTP non si ripete quando il messaggio del backend lo contiene già", async () => {
+    server.use(
+      http.get("/api/v1/deliveries", () =>
+        HttpResponse.json({
+          deliveries: [
+            {
+              ...fixtureDeliveries[0],
+              id: "r4",
+              status: "dead",
+              attempts: 0,
+              response_code: 404,
+              last_error: "HTTP 404: no_team",
+            },
+            {
+              ...fixtureDeliveries[0],
+              id: "r429",
+              status: "failed",
+              attempts: 1,
+              response_code: 429,
+              last_error: "rate limited",
+            },
+          ],
+          next_cursor: null,
+        }),
+      ),
+    );
+    renderWithProviders(<DeliveriesPage />);
+
+    const conMessaggio = await screen.findByText("HTTP 404: no_team");
+    expect(conMessaggio.closest(".cell-diagnostics")?.textContent).toBe("HTTP 404: no_team");
+    // Senza un messaggio che lo ripeta, il codice resta in colonna.
+    const senzaCodiceNelMessaggio = screen.getByText("rate limited").closest(".cell-diagnostics");
+    expect(senzaCodiceNelMessaggio?.textContent).toBe("HTTP 429rate limited");
   });
 });

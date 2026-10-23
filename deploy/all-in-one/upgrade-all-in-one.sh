@@ -37,7 +37,7 @@ KEEP=0
 [ "${1:-}" = "--keep" ] && KEEP=1
 
 USER_EMAIL="owner@acme-notifyhub-upgrade.io"
-USER_PASSWORD="password123"
+USER_PASSWORD="smoke-password-123"
 
 assert_eq() {
     local expected="$1" actual="$2" msg="$3"
@@ -108,6 +108,16 @@ revisione_schema() {
     docker exec "$CONTAINER" su -s /bin/sh postgres \
         -c "psql -tAc 'SELECT version_num FROM alembic_version' notifyhub" 2>/dev/null \
         | tr -d '[:space:]'
+}
+
+# Revisione di testa delle migrazioni dell'immagine di destinazione. Si legge dai
+# file di quella immagine (il backend sta in /opt/notifyhub/app), non da questo
+# checkout: TO_IMAGE puo' essere stata costruita da un altro albero. Una
+# revisione per file, numerata a 4 cifre: l'ultima in ordine e' la testa.
+head_immagine() {
+    docker run --rm --entrypoint sh "$TO_IMAGE" -c \
+        'ls /opt/notifyhub/app/alembic/versions 2>/dev/null' \
+        | grep -E '^[0-9]{4}_.*\.py$' | sort | tail -n1 | cut -c1-4
 }
 
 login() {
@@ -182,7 +192,8 @@ avvia "$TO_IMAGE" "dopo"
 echo ""
 echo "Step 3: verifiche sullo stato migrato..."
 rev_dopo=$(revisione_schema)
-assert_eq "0015" "$rev_dopo" "Lo schema e' salito alla revisione della ricerca sul contenuto intero"
+rev_attesa=$(head_immagine)
+assert_eq "$rev_attesa" "$rev_dopo" "Lo schema e' salito alla testa delle migrazioni di $TO_IMAGE (revisione $rev_attesa)"
 [ "$rev_prima" != "$rev_dopo" ] || echo "  (nota: lo schema non e' cambiato, la revisione di partenza era gia' ${rev_prima})"
 
 # L'entrypoint fa un dump prima di migrare: se l'aggiornamento va storto, i dati

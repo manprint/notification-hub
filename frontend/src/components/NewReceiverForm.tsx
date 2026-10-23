@@ -5,6 +5,7 @@ import type { Severity } from "../api/types";
 import ErrorBanner from "./ErrorBanner";
 import Field, { RequiredLegend, fieldAria } from "./Field";
 import { useAction } from "../hooks/useAction";
+import { severityLabel } from "../lib/format";
 import { invalidateReceiverLists } from "../lib/receiverCache";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
@@ -16,7 +17,7 @@ export default function NewReceiverForm({ groupId }: { groupId: string }) {
   const [nameError, setNameError] = useState<string | null>(null);
   const { busy, error, run } = useAction();
 
-  async function createReceiver(event: React.FormEvent) {
+  async function createReceiver(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (name.trim() === "") {
       setNameError("Il nome del receiver è obbligatorio.");
@@ -49,13 +50,15 @@ export default function NewReceiverForm({ groupId }: { groupId: string }) {
         di severity e la sua sorveglianza dell'attesa.
       </p>
       {error && <ErrorBanner error={error} />}
-      <form className="form-stacked" onSubmit={(event) => void createReceiver(event)}>
+      {/* noValidate: il nome vuoto lo rifiuta createReceiver, con il messaggio sul campo,
+          invece del fumetto del browser. */}
+      <form noValidate className="form-stacked" onSubmit={(event) => void createReceiver(event)}>
         <RequiredLegend />
         <Field id="new-receiver-name" label="Nome receiver" required error={nameError}>
           <input
             {...fieldAria("new-receiver-name", { error: nameError })}
             required
-            maxLength={120}
+            maxLength={255}
             value={name}
             onChange={(event) => setName(event.target.value)}
           />
@@ -63,16 +66,18 @@ export default function NewReceiverForm({ groupId }: { groupId: string }) {
         <Field
           id="new-receiver-severity"
           label="Severity di default"
+          required
           hint="Vale per i messaggi che nessuna regola classifica. Si cambia anche dopo."
         >
           <select
             {...fieldAria("new-receiver-severity", { hint: true })}
+            required
             value={defaultSeverity}
             onChange={(event) => setDefaultSeverity(event.target.value as Severity)}
           >
             {SEVERITIES.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {severityLabel(s)}
               </option>
             ))}
           </select>

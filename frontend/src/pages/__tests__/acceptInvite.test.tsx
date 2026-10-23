@@ -79,8 +79,7 @@ describe("AcceptInvitePage", () => {
     expect(await screen.findByText(/Account attivato/)).toBeInTheDocument();
   });
 
-  it("senza token nel collegamento lo dice invece di provare l'attivazione", async () => {
-    const user = userEvent.setup();
+  it("senza token nel collegamento lo dice subito e non mostra il modulo", async () => {
     let chiamate = 0;
     server.use(
       http.post("/api/v1/invitations/accept", () => {
@@ -91,11 +90,38 @@ describe("AcceptInvitePage", () => {
     window.location.hash = "";
 
     renderWithProviders(<AcceptInvitePage />);
-    await user.type(screen.getByLabelText("Scegli una password"), "password-lunga-123");
-    await user.type(screen.getByLabelText("Ripeti la password"), "password-lunga-123");
+
+    // Niente campi password: chi ha un collegamento senza token non compila
+    // due password per poi scoprire che il link non serve.
+    expect(screen.queryByLabelText("Scegli una password")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Ripeti la password")).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Il collegamento non è valido: chiedi a chi ti ha invitato un nuovo invito.",
+    );
+    // Il sottotitolo promette una password da scegliere: senza token non c'è.
+    expect(screen.queryByText(/Scegli la password del tuo account/)).not.toBeInTheDocument();
+    expect(chiamate).toBe(0);
+  });
+
+  it("una password di 8 caratteri mostra il messaggio italiano, non il fumetto del browser", async () => {
+    const user = userEvent.setup();
+    let chiamate = 0;
+    server.use(
+      http.post("/api/v1/invitations/accept", () => {
+        chiamate += 1;
+        return HttpResponse.json({}, { status: 201 });
+      }),
+    );
+
+    renderWithProviders(<AcceptInvitePage />);
+    await user.type(screen.getByLabelText("Scegli una password"), "12345678");
+    await user.type(screen.getByLabelText("Ripeti la password"), "12345678");
     await user.click(screen.getByRole("button", { name: "Attiva account" }));
 
-    expect(await screen.findByText(/Token di invito mancante/)).toBeInTheDocument();
+    // Con il vincolo minLength nativo il browser bloccava l'invio prima del
+    // controllo del modulo: il messaggio in italiano non compariva mai.
+    expect(await screen.findByText(/almeno 12 caratteri\./)).toBeInTheDocument();
+    expect(screen.getByLabelText("Scegli una password")).toHaveAttribute("aria-invalid", "true");
     expect(chiamate).toBe(0);
   });
 
@@ -121,5 +147,30 @@ describe("AcceptInvitePage", () => {
 
     expect(await screen.findByText(/almeno 12 caratteri\./)).toBeInTheDocument();
     expect(chiamate).toBe(0);
+  });
+
+  it("la pagina di invito e' un <main>, come il resto dell'app", () => {
+    renderWithProviders(<AcceptInvitePage />);
+    expect(screen.getByRole("main")).toHaveClass("auth-shell");
+  });
+
+  it("un invito scaduto si dice in italiano, nel banner e nell'avviso", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.post("/api/v1/invitations/accept", () =>
+        HttpResponse.json(
+          { type: "/problems/unauthorized", title: "Unauthorized", status: 401, detail: "Invitation expired." },
+          { status: 401, headers: { "Content-Type": "application/problem+json" } },
+        ),
+      ),
+    );
+    renderWithProviders(<AcceptInvitePage />);
+    const password = "abcdefghijkl";
+    await user.type(screen.getByLabelText("Scegli una password"), password);
+    await user.type(screen.getByLabelText("Ripeti la password"), password);
+    await user.click(screen.getByRole("button", { name: "Attiva account" }));
+
+    expect(await screen.findAllByText(/Invito scaduto: chiedine uno nuovo\./)).toHaveLength(2);
+    expect(screen.queryByText(/Invitation expired/)).toBeNull();
   });
 });

@@ -39,6 +39,23 @@ docker compose down
 docker compose up -d minio minio-init   # minio-init ricrea il bucket con le nuove credenziali
 ```
 
+### Chiave `NOTIFYHUB_SECRET_KEY`
+
+La stessa chiave firma i JWT e cifra i `webhook_url` a riposo (AES-GCM). Il `.env` di sviluppo e
+versionato nel repository con una chiave dichiarata di solo sviluppo: quel valore e pubblico, quindi
+in produzione generane una propria prima del primo avvio.
+
+```bash
+openssl rand -hex 32   # NOTIFYHUB_SECRET_KEY in .env
+```
+
+L'applicazione rifiuta l'avvio con una chiave più corta di 32 caratteri o che inizia per `change-me`
+(il valore di esempio di `.env.example`, pubblico).
+
+Cambiare la chiave su un database già popolato, o riusare un database di sviluppo creato con il
+vecchio segnaposto `change-me` (nel `.env` tracciato fino al commit `880a5ed1`), rende
+illeggibili i webhook cifrati con la chiave precedente: i canali vanno reinseriti con il loro URL.
+
 ### Terminazione TLS
 
 `nginx` ascolta sulla porta 80 senza TLS (`deploy/nginx/nginx.conf`). Per la produzione:
@@ -95,7 +112,10 @@ Elenco completo in `.env.example`. Le principali:
 | `CORS_ORIGINS` | Origin ammessi dalla SPA |
 | `NOTIFYHUB_PUBLIC_BASE_URL` | URL pubblica dell'istanza: inviti, link delle notifiche, URL di ingestion, script wrapper. Vedi "URL pubblica dietro reverse proxy" |
 | `NOTIFYHUB_WRAPPER_SCRIPT_PATH` | Percorso di `notifyhub-run.sh` servito dal pulsante "Scarica lo script". Vuoto = si cerca accanto al codice; serve solo a deploy fuori standard |
-| `TRUSTED_PROXIES` | Solo questi IP autorizzano la lettura di `X-Forwarded-For` |
+| `NOTIFYHUB_WEBHOOK_INSECURE_HTTP_HOSTS` | Host per cui un `webhook_url` puo usare `http://` invece di `https://`, CSV. Solo per sviluppo e smoke test con un mock interno: il webhook porta il segreto nel percorso, lasciare vuoto in produzione |
+| `LOG_LEVEL` | Livello dei log (`DEBUG`, `INFO`, `WARNING`, `ERROR`...). Un valore sconosciuto blocca l'avvio, invece di ripiegare in silenzio su un livello |
+| `PROMETHEUS_MULTIPROC_DIR` | Directory condivisa fra API e worker per le metriche multiprocess; il server 9100 la legge e somma i valori. Nel compose e il volume `metricsdata` (vedi "Metriche Esposte") |
+| `TRUSTED_PROXIES` | IP singoli o reti CIDR (es. `10.0.0.0/8`) che autorizzano la lettura di `X-Forwarded-For`; una voce non valida, un hostname compreso, blocca l'avvio. Nel compose il nginx incluso e' gia' fidato tramite `FORWARDED_ALLOW_IPS` (IP fisso `172.30.250.10`, subnet `172.30.250.0/24`, sovrascrivibili con le variabili di shell `NOTIFYHUB_NGINX_IP` e `NOTIFYHUB_SUBNET` se l'intervallo e' gia' occupato sull'host; `scripts/smoke.sh` usa `172.30.251.0/24` per convivere con lo stack di sviluppo): lasciare vuoto; cambiare l'IP richiede `docker compose down` prima di `up`, perche' la rete va ricreata. Nota: `FORWARDED_ALLOW_IPS` (uvicorn) fida dello stesso hop anche per `X-Forwarded-Proto`, non solo per `X-Forwarded-For`: deviazione accettata nel compose, dove l'unico hop fidato e' nginx |
 | `SMTP_HOST/_PORT/_USER/_PASSWORD/_FROM` | Opzionali: se assenti, l'invito resta un link copiabile |
 
 ## Job di Manutenzione
@@ -103,6 +123,10 @@ Elenco completo in `.env.example`. Le principali:
 Nove job Celery Beat, definiti in `app/tasks/maintenance.py` e schedulati in
 `app/tasks/celery_app.py` (spec sezione 11). Il worker che li esegue e il servizio `worker`/`beat`
 del compose di produzione (profilo di default, non serve attivare nulla).
+
+I job di manutenzione vanno sulla coda `maintenance`, non su `delivery`: il worker deve consumare
+entrambe (`-Q delivery,maintenance`, come nel compose e nell'all-in-one). Un worker avviato con la
+sola `delivery` non esegue mai i job qui sotto, e il sintomo arriva in ritardo, non come errore.
 
 ### 1. `purge_notifications`
 
@@ -140,7 +164,9 @@ archiviate manualmente.
 
 ### 4. `cleanup_tokens`
 
-**Cosa fa:** elimina refresh token scaduti/revocati e inviti scaduti.
+**Cosa fa:** elimina refresh token scaduti e inviti scaduti. Un refresh token revocato dalla
+rotazione resta fino alla sua scadenza: serve a rilevare il riuso di un token gia ruotato, quindi
+non va cancellato prima.
 
 **Quando:** ogni ora.
 
@@ -305,6 +331,22 @@ La tabella e append-only per l'applicazione (`REVOKE UPDATE`, migrazione 0016): 
 non si corregge dall'API. Un DBA con accesso diretto al database resta fidato — non c'e firma ne
 catena di hash sulle righe.
 
+## Aggiornamento
+
+### Coda Celery dei job di manutenzione
+
+Fino alla v0.0.10 compresa i job di manutenzione di beat finivano sulla coda Celery di default,
+`celery`, che il worker (`-Q delivery,maintenance`) non consumava. Dopo l'aggiornamento i messaggi
+residui restano in Redis senza che nessuno li legga. Una volta sola:
+
+```bash
+docker compose exec redis redis-cli -n 1 LLEN celery   # messaggi residui
+docker compose exec redis redis-cli -n 1 DEL celery
+```
+
+Il database 1 e' quello del broker (`CELERY_BROKER_URL`). Il comando non tocca `delivery` e
+`maintenance`.
+
 ## Backup e Ripristino
 
 I dati vivono in tre posti:
@@ -392,6 +434,13 @@ L'API espone metriche Prometheus sulla porta interna 9100, mai instradata da ngi
 ```bash
 docker compose exec api curl -s http://localhost:9100/metrics
 ```
+
+Il 9100 somma i valori di API e worker: entrambi scrivono nel volume `metricsdata`
+(`PROMETHEUS_MULTIPROC_DIR`). Il volume resta fra un riavvio e l'altro, quindi i contatori non
+ripartono da zero; per azzerarli serve `docker compose down -v` (cancella anche i dati). La
+gauge `notifyhub_tenant_storage_bytes` vale l'ultimo valore scritto da `recompute_tenant_usage`
+(ogni notte alle 04:30): resta visibile anche con il worker fermo, e si aggiorna al ricalcolo
+successivo. Su un volume nuovo, prima del primo ricalcolo, la serie manca.
 
 Metriche definite in `app/core/metrics.py`:
 

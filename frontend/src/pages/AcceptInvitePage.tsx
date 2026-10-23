@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { apiPost } from "../api/client";
+import { apiPost, asApiError } from "../api/client";
 import type { ApiError } from "../api/types";
 import ErrorBanner from "../components/ErrorBanner";
 import Field, { RequiredLegend, fieldAria } from "../components/Field";
 import { useToast } from "../hooks/useToast";
+import { problemMessage } from "../lib/problemMessages";
 
 function readTokenFromHash(): string | null {
   const hash = window.location.hash.replace(/^#/, "");
@@ -26,7 +27,7 @@ export default function AcceptInvitePage() {
   const [submitting, setSubmitting] = useState(false);
   const token = readTokenFromHash();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
     setValidationError(null);
@@ -58,28 +59,47 @@ export default function AcceptInvitePage() {
       toast.success("Account attivato: ora puoi accedere.");
       navigate("/login", { replace: true });
     } catch (err) {
-      const apiError = err as ApiError;
+      const apiError = asApiError(err);
       setError(apiError);
-      toast.error(apiError.detail || apiError.title || "Attivazione non riuscita.");
+      toast.error(problemMessage(apiError));
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <div className="auth-shell">
+    <main className="auth-shell">
       <div className="card auth-card">
         <h1 className="auth-title">Accetta invito</h1>
-        <p className="auth-subtitle">
-          Scegli la password del tuo account: da qui in poi si entra con quella.
-        </p>
+        {/* Senza token la pagina non chiede nessuna password: il sottotitolo lo
+            prometterebbe. */}
+        {token && (
+          <p className="auth-subtitle">
+            Scegli la password del tuo account: da qui in poi si entra con quella.
+          </p>
+        )}
         {error && <ErrorBanner error={error} />}
         {validationError && (
           <div className="error-banner" role="alert">
             {validationError}
           </div>
         )}
-        <form className="form-stacked" onSubmit={(event) => void handleSubmit(event)}>
+        {!token && (
+          // Senza token il modulo non serve: chi l'ha aperto lo sa subito, invece
+          // di scegliere due password e scoprirlo all'invio.
+          <div className="error-banner" role="alert">
+            Il collegamento non è valido: chiedi a chi ti ha invitato un nuovo invito.
+          </div>
+        )}
+        {token && (
+        /* noValidate: i controlli (lunghezza, ripetizione) li fa il modulo e li
+           dice in italiano sotto il campo; il fumetto del browser comparirebbe
+           prima e con un altro testo. */
+        <form
+          className="form-stacked"
+          onSubmit={(event) => void handleSubmit(event)}
+          noValidate
+        >
           <RequiredLegend />
           <Field
             id="password"
@@ -115,7 +135,8 @@ export default function AcceptInvitePage() {
             </button>
           </div>
         </form>
+        )}
       </div>
-    </div>
+    </main>
   );
 }

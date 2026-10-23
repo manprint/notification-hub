@@ -18,7 +18,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -110,7 +110,8 @@ async def _lookup(
     found: dict[uuid.UUID, uuid.UUID] = {}
     for chunk in _chunks(ids):
         result = await session.execute(select(model.id, column).where(model.id.in_(chunk)))
-        for row_id, parent_id in result:
+        rows = cast("Sequence[tuple[uuid.UUID, uuid.UUID]]", result.all())
+        for row_id, parent_id in rows:
             found[row_id] = parent_id
     return found
 
@@ -190,8 +191,10 @@ async def resolve_locations(
     group_ids = set(gruppo_diretti.values()) | {gid for _, gid in receivers.values()}
     gruppi: dict[uuid.UUID, str] = {}
     for chunk in _chunks(sorted(group_ids)):
-        result = await session.execute(select(Group.id, Group.name).where(Group.id.in_(chunk)))
-        for group_id, name in result:
+        gruppi_result = await session.execute(
+            select(Group.id, Group.name).where(Group.id.in_(chunk))
+        )
+        for group_id, name in gruppi_result:
             gruppi[group_id] = name
 
     # 4. Una Location per evento.
@@ -209,9 +212,9 @@ async def resolve_locations(
             receiver_name=name,
         )
     for event_id, group_id in gruppo_diretti.items():
-        name = gruppi.get(group_id)
-        if name is None:
+        gruppo_nome = gruppi.get(group_id)
+        if gruppo_nome is None:
             continue
-        posizioni[event_id] = Location(group_id=str(group_id), group_name=name)
+        posizioni[event_id] = Location(group_id=str(group_id), group_name=gruppo_nome)
 
     return posizioni

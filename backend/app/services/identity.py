@@ -1,11 +1,37 @@
+import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import auth_session
 from app.models.invitation import Invitation
 from app.models.refresh_token import RefreshToken
+from app.models.tenant import Tenant
 from app.models.user import User
+
+
+async def lock_user_token_scope(
+    session: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID
+) -> None:
+    """Lock dei refresh token di un utente, sempre nello stesso ordine: prima la
+    riga del tenant (FOR KEY SHARE), poi quella dell'utente (FOR UPDATE), solo
+    dopo refresh_tokens.
+
+    Un ordine unico evita i deadlock fra refresh, logout e rimozione: il refresh
+    prende il tenant prima del token, come gia fa l'INSERT del successore per la
+    FK. Il FOR UPDATE sull'utente attende le rotazioni in corso dello stesso
+    utente: cosi la lettura dei token che segue vede i successori gia committati,
+    e una revoca non lascia vivo nessun token. Va chiamata prima di modificare
+    l'utente: con modifiche in sospeso l'autoflush le scriverebbe prima del lock
+    del tenant, nell'ordine sbagliato.
+    """
+    await session.execute(
+        select(Tenant.id).where(Tenant.id == tenant_id).with_for_update(read=True, key_share=True)
+    )
+    await session.execute(
+        select(User.id).where(User.id == user_id, User.tenant_id == tenant_id).with_for_update()
+    )
 
 
 @dataclass

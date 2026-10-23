@@ -21,6 +21,15 @@ function topDialog(): HTMLElement | undefined {
   return undefined;
 }
 
+/** Ordine del documento esplicito: il primo e l'ultimo del giro del Tab devono
+ *  essere davvero i primi e gli ultimi nella pagina, senza fidarsi di come il
+ *  motore restituisce una lista di selettori (jsdom 29 li raggruppa per selettore). */
+function inOrdineDelDocumento(elementi: NodeListOf<HTMLElement>): HTMLElement[] {
+  return Array.from(elementi).sort((a, b) =>
+    a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+  );
+}
+
 /** Escape e giro del Tab dentro un dialogo modale.
  *
  *  Il listener sta sul documento, non sul dialogo: un click su un testo non
@@ -28,11 +37,13 @@ function topDialog(): HTMLElement | undefined {
  *  dialogo da lì non riceve più niente — né Escape né Tab, che finirebbe sulla
  *  pagina sotto. Se il fuoco è uscito, il Tab lo riporta dentro. */
 export function useDialogKeyboard(
-  dialogRef: RefObject<HTMLElement>,
+  dialogRef: RefObject<HTMLElement | null>,
   onEscape: () => void,
 ): void {
   const escapeRef = useRef(onEscape);
-  escapeRef.current = onEscape;
+  useEffect(() => {
+    escapeRef.current = onEscape;
+  }, [onEscape]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -48,7 +59,7 @@ export function useDialogKeyboard(
       }
       if (event.key !== "Tab") return;
 
-      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE));
+      const focusable = inOrdineDelDocumento(dialog.querySelectorAll<HTMLElement>(FOCUSABLE));
       if (focusable.length === 0) {
         event.preventDefault();
         return;

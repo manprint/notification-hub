@@ -4,28 +4,32 @@ Montato senza prefisso /api/v1: lo slug e l'unica credenziale (spec, glossario).
 """
 
 import asyncio
+import uuid
 
 from fastapi import APIRouter, Header, Query, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import client_ip
 from app.core.config import get_settings
 from app.core.errors import PROBLEM_TYPES, Problem, ingest_not_found
 from app.core.logging import get_logger
 from app.core.metrics import ingestion_requests_total
-from app.core.redis import get_redis
 from app.db.session import tenant_session
 from app.db.types import TenantStatus
 from app.schemas.ingestion import IngestResponse
 from app.services.idempotency import release, reserve, store_response
 from app.services.ingest import (
+    PreparedNotification,
     persist_notification,
     prepare_notification,
+    record_rejected_send,
     resolve_receiver_by_slug,
 )
 from app.services.quota import enforce_tenant_quotas
 from app.services.ratelimit import check_ip_rate_limit, check_slug_rate_limit
 from app.services.severity import parse_duration_ms, parse_exit_code, parse_phase
+from app.services.storage import should_use_object_storage
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["ingest"])
@@ -70,6 +74,47 @@ async def _read_body_streaming(request: Request, max_bytes: int) -> bytes:
             )
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+async def _persisti(
+    session: AsyncSession,
+    *,
+    tenant_id: uuid.UUID,
+    receiver_id: uuid.UUID,
+    group_id: uuid.UUID,
+    prepared: PreparedNotification,
+    source_ip: str | None,
+) -> dict[str, str | int]:
+    """Insert della notifica, consegne in outbox e accodamento dopo il commit: il
+    corpo della risposta 201 (o del replay)."""
+    await persist_notification(
+        session,
+        tenant_id=tenant_id,
+        receiver_id=receiver_id,
+        prepared=prepared,
+        source_ip=source_ip,
+    )
+
+    from app.services.outbound_resolver import create_deliveries_for_notification
+    from app.tasks.enqueue import register_after_commit_enqueue
+
+    delivery_ids = await create_deliveries_for_notification(
+        session,
+        tenant_id=tenant_id,
+        group_id=group_id,
+        receiver_id=receiver_id,
+        notification_id=prepared.id,
+        severity=prepared.severity,
+    )
+    register_after_commit_enqueue(session, [(str(did), str(tenant_id)) for did in delivery_ids])
+
+    return {
+        "id": str(prepared.id),
+        "severity": prepared.severity.value,
+        "severity_source": prepared.severity_source.value,
+        "forwarded_to": len(delivery_ids),
+        "storage_backend": "object" if prepared.use_object_storage else "inline",
+    }
 
 
 @router.post("/ingest/{slug}", response_model=IngestResponse)
@@ -141,9 +186,7 @@ async def _ingest(
         raise ingest_not_found()
 
     if receiver.status != "active":
-        redis = await get_redis()
-        await redis.incr(f"ingest:rejected:{receiver.id}")
-        await redis.expire(f"ingest:rejected:{receiver.id}", 86400)
+        await record_rejected_send(receiver.id)
         raise ingest_not_found()
 
     # Il tenant sospeso deve rispondere byte-identico al receiver disabilitato
@@ -197,86 +240,100 @@ async def _ingest(
             extra={"retry_after": 1},
         )
 
-    # 6. Normalizzazione, severity, storage backend, scrittura + outbox nella
-    # stessa transazione (spec 8.2).
+    # 6. Normalizzazione, severity, storage backend, scrittura + outbox (spec 8.2).
+    # Il PUT su MinIO sta FUORI dalle transazioni: tenere una connessione del pool
+    # (e il lock di quota, se c'e) per tutta la durata dell'upload fermerebbe
+    # l'istanza se lo storage rallenta. La chiave dell'oggetto dipende solo dall'id
+    # gia generato in prepare_notification (spec 6.5).
+    async def _prepara(session: AsyncSession) -> PreparedNotification:
+        return await prepare_notification(
+            session,
+            tenant_id=receiver.tenant_id,
+            receiver_id=receiver.id,
+            raw_body=raw_body,
+            header_severity=x_severity,
+            query_severity=severity,
+            default_severity=receiver.default_severity,
+            exit_code=parse_exit_code(x_exit_code),
+            exit_code_severity=receiver.exit_code_severity,
+            duration_ms=parse_duration_ms(x_duration_ms),
+            duration_threshold_seconds=receiver.duration_threshold_seconds,
+            duration_severity=receiver.duration_severity,
+            phase=parse_phase(x_phase),
+        )
+
     try:
-        async with tenant_session(receiver.tenant_id) as session:
-            # Quota giornaliera e di storage (spec 4.1, enforcement F7): colonne
-            # presenti da subito, applicate qui. NULL = illimitata.
-            await enforce_tenant_quotas(session, receiver.tenant_id, len(raw_body))
+        if not should_use_object_storage(len(raw_body)):
+            # Payload inline: nessun I/O esterno fra le fasi. Una sola transazione per
+            # normalizzazione, quota, scrittura e outbox: i totali di quota si calcolano
+            # una volta sola e il lock di quota resta per la sola scrittura.
+            async with tenant_session(receiver.tenant_id) as session:
+                prepared = await _prepara(session)
+                # Quota giornaliera e di storage (spec 4.1, enforcement F7): NULL =
+                # illimitata. Il controllo sta nella stessa transazione che scrive.
+                await enforce_tenant_quotas(session, receiver.tenant_id, len(raw_body))
+                body = await _persisti(
+                    session,
+                    tenant_id=receiver.tenant_id,
+                    receiver_id=receiver.id,
+                    group_id=receiver.group_id,
+                    prepared=prepared,
+                    source_ip=source_ip,
+                )
+        else:
+            # Payload oggetto: il PUT su MinIO sta fra due transazioni, perche' e' I/O
+            # esterno. Il pre-controllo di quota evita il PUT per una richiesta gia
+            # destinata al rifiuto.
+            async with tenant_session(receiver.tenant_id) as session:
+                await enforce_tenant_quotas(session, receiver.tenant_id, len(raw_body))
+                prepared = await _prepara(session)
 
-            prepared = await prepare_notification(
-                session,
-                tenant_id=receiver.tenant_id,
-                receiver_id=receiver.id,
-                raw_body=raw_body,
-                header_severity=x_severity,
-                query_severity=severity,
-                default_severity=receiver.default_severity,
-                exit_code=parse_exit_code(x_exit_code),
-                exit_code_severity=receiver.exit_code_severity,
-                duration_ms=parse_duration_ms(x_duration_ms),
-                duration_threshold_seconds=receiver.duration_threshold_seconds,
-                duration_severity=receiver.duration_severity,
-                phase=parse_phase(x_phase),
-            )
+            from app.services.storage import upload_object
 
-            if prepared.use_object_storage:
-                from app.services.storage import upload_object
+            assert prepared.storage_key is not None
+            try:
+                await upload_object(prepared.storage_key, raw_body)
+            except Exception as exc:
+                raise Problem(
+                    status=503,
+                    type=PROBLEM_TYPES["storage_unavailable"],
+                    title="Service Unavailable",
+                    detail="Object storage unreachable.",
+                ) from exc
 
-                assert prepared.storage_key is not None
-                try:
-                    await upload_object(prepared.storage_key, raw_body)
-                except Exception as exc:
-                    raise Problem(
-                        status=503,
-                        type=PROBLEM_TYPES["storage_unavailable"],
-                        title="Service Unavailable",
-                        detail="Object storage unreachable.",
-                    ) from exc
-
-            await persist_notification(
-                session,
-                tenant_id=receiver.tenant_id,
-                receiver_id=receiver.id,
-                prepared=prepared,
-                source_ip=source_ip,
-            )
-
-            from app.services.outbound_resolver import create_deliveries_for_notification
-            from app.tasks.enqueue import register_after_commit_enqueue
-
-            delivery_ids = await create_deliveries_for_notification(
-                session,
-                tenant_id=receiver.tenant_id,
-                group_id=receiver.group_id,
-                receiver_id=receiver.id,
-                notification_id=prepared.id,
-                severity=prepared.severity,
-            )
-            register_after_commit_enqueue(
-                session, [(str(did), str(receiver.tenant_id)) for did in delivery_ids]
-            )
-            forwarded_to = len(delivery_ids)
-
-            body = {
-                "id": str(prepared.id),
-                "severity": prepared.severity.value,
-                "severity_source": prepared.severity_source.value,
-                "forwarded_to": forwarded_to,
-                "storage_backend": "object" if prepared.use_object_storage else "inline",
-            }
-
-        await store_response(str(receiver.id), x_request_id, reservation.owner_token, body)
+            async with tenant_session(receiver.tenant_id) as session:
+                # Quota riverificata sotto FOR UPDATE nella transazione che scrive: fra il
+                # pre-controllo e questo punto un'altra richiesta puo aver consumato la
+                # quota. Un rifiuto qui lascia un oggetto orfano, che purge_orphan_objects
+                # recupera (spec 6.5).
+                await enforce_tenant_quotas(session, receiver.tenant_id, len(raw_body))
+                body = await _persisti(
+                    session,
+                    tenant_id=receiver.tenant_id,
+                    receiver_id=receiver.id,
+                    group_id=receiver.group_id,
+                    prepared=prepared,
+                    source_ip=source_ip,
+                )
     except BaseException:
         # Solo il proprietario puo eliminare la sentinella: una richiesta
         # subentrata dopo la scadenza non viene mai cancellata da quella vecchia.
         # Il cleanup e' best effort: un secondo guasto Redis non deve mascherare
         # il Problem originale. shield prova a completarlo anche su cancellazione.
+        # Questo ramo vale solo per i fallimenti PRIMA del commit: dopo il commit la
+        # notifica esiste e rilasciare la chiave farebbe duplicare il retry (spec 6.3).
         try:
             await asyncio.shield(release(str(receiver.id), x_request_id, reservation.owner_token))
         except Exception:
             logger.warning("idempotency_release_failed", exc_info=True)
         raise
+
+    # Commit riuscito: la chiave resta. Se il salvataggio del replay fallisce, la
+    # sentinella resta `in elaborazione` fino alla scadenza della finestra: un retry
+    # in quel tempo riceve 409, non un doppione. La risposta resta 201.
+    try:
+        await store_response(str(receiver.id), x_request_id, reservation.owner_token, body)
+    except Exception:
+        logger.warning("idempotency_store_failed", receiver_id=str(receiver.id), exc_info=True)
 
     return JSONResponse(status_code=201, content=body)

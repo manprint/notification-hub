@@ -72,6 +72,17 @@ ensure_layout() {
     ensure_owner "${PGDATA}" postgres:postgres 0700
 }
 
+# Directory delle metriche multiprocess: si svuota a ogni avvio. I file di un run
+# precedente (pid ormai morti) verrebbero sommati dal server 9100 per sempre.
+# Va pronta prima di qualunque processo Python del container, quindi prima di
+# pg_prepare, dove partono alembic e sync-presets.
+metrics_prepare() {
+    rm -rf "${PROMETHEUS_MULTIPROC_DIR}"
+    mkdir -p "${PROMETHEUS_MULTIPROC_DIR}"
+    chown "${APP_USER}:${APP_GROUP}" "${PROMETHEUS_MULTIPROC_DIR}"
+    chmod 0755 "${PROMETHEUS_MULTIPROC_DIR}"
+}
+
 # ---------------------------------------------------------------------------
 # PostgreSQL
 # ---------------------------------------------------------------------------
@@ -117,7 +128,11 @@ pg_write_hba() {
     cat > "${PGDATA}/pg_hba.conf" <<EOF
 # Gestito dall'immagine all-in-one di NotifyHub: riscritto a ogni avvio.
 # Il cluster ascolta solo su loopback dentro al container.
-local   all             all                                     trust
+# Sul socket il superutente entra solo come utente di sistema postgres (peer):
+# un processo di un altro uid nel container (nginx, redis, minio, l'app) non
+# ottiene il superutente senza password.
+local   all             postgres                                peer
+local   all             all                                     scram-sha-256
 host    all             all             127.0.0.1/32            scram-sha-256
 host    all             all             ::1/128                 scram-sha-256
 EOF
@@ -385,9 +400,14 @@ EOF
 }
 
 nginx_render_conf() {
-    local max_body_mb=$(( NOTIFYHUB_HARD_MAX_BODY_BYTES / 1048576 ))
-    [ "${max_body_mb}" -lt 1 ] && max_body_mb=1
-    sed -e "s|__CLIENT_MAX_BODY__|${max_body_mb}m|g" \
+    # Il limite va in byte esatti: nginx accetta i byte senza suffisso. Con una
+    # divisione intera (in MiB) un limite di 1.5 MiB diventava 1 MiB e nginx
+    # rispondeva 413 a richieste che il backend avrebbe accettato.
+    local max_body_bytes="${NOTIFYHUB_HARD_MAX_BODY_BYTES}"
+    case "${max_body_bytes}" in
+        ''|*[!0-9]*|0) die "NOTIFYHUB_HARD_MAX_BODY_BYTES deve essere un intero positivo di byte, non '${max_body_bytes}'" ;;
+    esac
+    sed -e "s|__CLIENT_MAX_BODY__|${max_body_bytes}|g" \
         -e "s|__API_PORT__|${API_PORT_LOCAL}|g" \
         /etc/notifyhub/nginx.conf > "${RUN_DIR}/nginx.conf"
     chmod 0644 "${RUN_DIR}/nginx.conf"
@@ -461,6 +481,7 @@ boot() {
 
     load_secrets
     export_runtime_env
+    metrics_prepare
     check_version_transition
 
     pg_prepare

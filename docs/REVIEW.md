@@ -779,3 +779,109 @@ di gruppo, legame gruppo-canale; lato UI la colonna e i suoi collegamenti, il
 trattino, il link "Apri", il filtro che arriva dall'URL e si toglie, il
 collegamento assente per il member.
 
+
+## Verifica 7 — 2026-10-23 (revisione completa backend, frontend, deploy e dipendenze)
+
+Richiesta: revisione sistematica di tutte le funzionalita' alla ricerca di bug,
+race, deadlock e problemi di prestazioni; verifica di tutta l'interfaccia web
+(stili divergenti, moduli, placeholder, tabelle, testi tagliati); aggiornamento
+delle librerie; test mancanti; nessuna regressione. Branch
+`review/full-2026-10`, base `0fbb7f34`.
+
+### Metodo
+
+1. **Revisione a tappeto.** Il codice e' stato diviso per area (ingestion,
+   consegne, configurazione, autenticazione, letture, infrastruttura,
+   all-in-one, stili, componenti condivisi, pagine) e per asse (bug, race,
+   deadlock, prestazioni, sicurezza, integrita' dei dati, test mancanti, UI). Ogni
+   difetto trovato e' passato da verificatori indipendenti incaricati di
+   smentirlo: **289 confermati** (2 critici, 17 alti, 114 medi, 156 bassi),
+   50 scartati.
+2. **Correzione per lotti** con proprieta' dei file separate, ognuno rivisto da
+   un revisore indipendente e riparato quando il revisore bloccava.
+3. **Verifica visiva** dello stack reale: 271 screenshot (owner a 1440, 1024,
+   768 e 375 px; admin, member e viewer a 1440 e 375; pagine anonime) con
+   metriche automatiche (scorrimento orizzontale, testi tagliati, campi senza
+   etichetta, errori di console).
+4. **Revisione finale** del diff completo e degli screenshot dopo le
+   correzioni: 54 segnalazioni, 44 confermate e corrette, piu' 22 residui dei
+   lotti precedenti ricontrollati sul codice attuale.
+
+### Difetti principali chiusi
+
+| Area | Difetto | Correzione |
+|---|---|---|
+| Manutenzione | I job di beat finivano nella coda `celery`, che nessun worker consumava: pulizie, riconciliazione e sorveglianza non giravano mai (critico) | Code `delivery` e `maintenance` esplicite, worker di compose e all-in-one su entrambe |
+| Ingestion | Un errore dopo il commit rilasciava la chiave di idempotenza: un retry del client duplicava la notifica | Chiave rilasciata solo prima del commit, risposta memorizzata dopo il commit |
+| Ingestion | PUT su MinIO e scansione delle regole dentro la transazione: connessioni del pool e lock del tenant tenuti per tutta la durata | Upload fuori transazione, quota ricontrollata sotto lock nella sessione di scrittura |
+| Ingestion | Rate limit per IP: un solo secchio per tutti i client dietro nginx, e `X-Forwarded-For` falsificabile dal client | IP del client dalla catena XFF letta da destra con proxy fidati in CIDR; uvicorn si fida del solo IP fisso di nginx |
+| API | La dipendenza del DB faceva il commit dopo l'invio della risposta: un commit fallito diventava un 2xx | Dipendenza a scope di funzione, commit prima della risposta |
+| Gruppi / receiver | Eliminare un gruppo o un receiver con un canale collegato rispondeva 204 senza cancellare niente | Migrazione `0017`: `ON DELETE CASCADE` e indici sulle chiavi esterne |
+| Receiver | `delete-impact` andava in 500 oltre 32767 notifiche (una lista di id passata come parametri supera il limite del protocollo) | Conteggio in SQL, senza liste di id |
+| Audit | La cancellazione di una notifica non lasciava traccia | Evento `notification.deleted` |
+| Autenticazione | Rate limit del login aggirabile cambiando le maiuscole dell'email | Chiave normalizzata |
+| Concorrenza | Il lock `FOR UPDATE` sul tenant nelle scritture di impostazioni bloccava le insert dell'ingestion (chiave esterna) | `FOR NO KEY UPDATE`, compatibile con il `KEY SHARE` delle insert; resta `FOR UPDATE` nella quota |
+| Consegne | Un broker che rifiuta un accodamento fermava sorveglianza e riconciliazione per i tenant successivi | Errore registrato per singola delivery, il giro continua |
+| All-in-one | Backup che dichiarava successo senza l'archivio della configurazione; restore che perdeva o non applicava `NOTIFYHUB_SECRET_KEY` | Esito del backup verificato; con una chiave cambiata i servizi restano fermi fino al riavvio |
+| All-in-one | Metriche di API e worker invisibili al server 9100; nginx senza le intestazioni di sicurezza di compose | `PROMETHEUS_MULTIPROC_DIR` comune; intestazioni ripetute nelle location che ne aggiungono |
+| Interfaccia | Pagine che scorrevano in orizzontale a 375-1024 px (canali, utenze, consegne): gli `.sr-only` assoluti sfuggivano al `.table-wrap` | `.table-wrap { position: relative }` |
+| Interfaccia | Slug a una lettera per riga, colonne delle azioni fuori schermo, pattern RE2 schiacciati, menu mobile che nascondeva le voci | Regole di a-capo per colonna, larghezza minima del pattern, voce attiva centrata |
+| Interfaccia | Riordino di regole e preset costruito dalla cache: un riordino concorrente veniva annullato in silenzio | Lettura fresca dal server prima di ogni PUT; se la schermata e' smentita il PUT non parte |
+| Interfaccia | Severity in inglese grezzo (`error`, `critical`) accanto ai badge in italiano; accenti scritti con l'apostrofo | Etichette uniche da `lib/format.ts`; migrazione che corregge le descrizioni dei preset predefiniti non modificate dall'utente |
+
+Il resto (moduli con validazione nativa al posto del messaggio italiano, stati
+vuoti mostrati sopra un errore, pulsanti che andavano a capo, etichette e
+maiuscole incoerenti, test mancanti) e' registrato nei messaggi di commit del
+branch.
+
+### Non corretti, consapevolmente
+
+| Segnalazione | Motivo |
+|---|---|
+| Corpo dell'ingestion letto tutto in memoria (spool) | Un tetto di memoria richiederebbe un 503 non previsto dalla spec |
+| Accodamento Celery sincrono nel listener dopo il commit | La spec 8.3 lo prescrive; un timeout di socket kombu romperebbe il BRPOP del worker |
+| Bulk-read in una sola transazione su molte righe | La spec impone una UPDATE e un solo evento di audit; il trigram GIN e' gia' previsto |
+| Filtro di visibilita' del member risolto con subquery | Correzione affidabile solo con una riscrittura LATERAL, da misurare su dati reali |
+| Differenza di tempi residua nel login con email nota e password errata | La scrittura dell'audit del fallimento resta; l'email sconosciuta esegue gia' argon2 |
+| Utente MinIO di servizio separato da root | Richiede il provisioning di un utente con policy sul bucket |
+| `.env` versionato con una chiave di cifratura nota | Parzialmente: il validatore rifiuta le chiavi `change-me…` e `.env` porta ora una chiave di solo sviluppo, ma resta pubblica come il file. Chi installa deve generarne una (`openssl rand -hex 32`, README e OPERAZIONI.md); togliere `.env` dal repository cambierebbe l'avvio documentato di compose |
+| Lock del refresh fra schede su origini non sicure | Nessun primitivo atomico lato client senza Web Locks; una finestra di grazia lato server contraddice la spec 4.1 |
+| Contatori di caratteri sui campi nome/descrizione, banner unificati in un componente, tutte le tabelle scritte a mano portate su `DataTable` | Coerenza estetica, nessun difetto funzionale; i limiti sono gia' applicati da `maxLength` e dal server |
+
+### Dipendenze
+
+- Frontend: React 19.3, react-router 7.18, TanStack Query 5.104, Vite 8,
+  `@vitejs/plugin-react` 6, Vitest 5 con coverage-v8 5, jsdom 29, MSW 3,
+  ESLint 10 (config flat) con typescript-eslint 8 e react-hooks 7, TypeScript
+  6.0, `@types/node` 26.6.
+- Backend: FastAPI 0.161, uvicorn 0.54, SQLAlchemy 2.1, pydantic 2.14,
+  pydantic-settings 2.16, asyncpg 0.32, psycopg 3.3, alembic 1.20, redis 6.4,
+  celery 5.6, argon2-cffi 25, structlog 26, gunicorn 26, aioboto3 15.5,
+  pytest 9, pytest-asyncio 1.4, mypy 2.4, ruff 0.17.
+- Bloccati, con motivo: TypeScript 7 (typescript-eslint non lo supporta
+  ancora), redis 8 (kombu richiede redis < 6.5), aiobotocore 3 e boto3 recenti
+  (aioboto3 15.5, l'ultima, li fissa), pytest-cov 7 (cambia la misura della
+  copertura: da adottare con una taratura a parte delle soglie).
+- MinIO: Docker Hub e quay.io non distribuiscono piu' le immagini; compose usa la
+  build comunitaria `ghcr.io/coollabsio/minio`.
+
+### Note operative per l'aggiornamento
+
+- Le chiavi di sviluppo in `.env` sono cambiate: i canali creati su uno stack di
+  sviluppo con la chiave precedente non si decifrano piu' e vanno reinseriti.
+- Dopo l'aggiornamento la coda `celery` non e' piu' consumata: i messaggi
+  rimasti si svuotano una volta (vedi `deploy/all-in-one/README.md`).
+- `scripts/smoke.sh` ha un progetto compose, porte e subnet propri: gira accanto
+  allo stack di sviluppo. Subnet e IP di nginx sono sovrascrivibili con
+  `NOTIFYHUB_SUBNET` e `NOTIFYHUB_NGINX_IP`.
+- `make gates` comprende `test-deploy`; `make test-deploy-docker` prova le
+  intestazioni di nginx reale (compose e all-in-one).
+
+### Gate
+
+- Backend: `ruff format --check`, `ruff check`, `mypy` puliti; **941 test** (erano 761), copertura dei rami 94,4% (era 91,8%).
+- Frontend: lint a zero warning, build pulita; **654 test** in 47 file (erano 437), copertura 93,2% istruzioni / 87,4% rami / 89,2% funzioni / 94,4% righe.
+- `scripts/smoke.sh` sullo stack containerizzato: 26 controlli passati, 0 falliti. `make test-deploy` e `make test-deploy-docker` (nginx reale, compose e all-in-one) verdi.
+- All-in-one 0.0.11: build, smoke (27/27) e aggiornamento da `v0.0.9` sullo stesso `/data` (11/11) verdi.
+- Soglie di copertura alzate: backend `fail_under` 92 (era 88), frontend
+  89/83/85/90 (erano 85/78/60/85).

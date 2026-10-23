@@ -10,6 +10,8 @@ import {
 } from "../../api/mocks/handlers";
 import { server } from "../../api/mocks/server";
 import type { ReceiverOut } from "../../api/types";
+import { formatDate, formatTime } from "../../lib/format";
+import { phaseLabel, severitySourceLabel } from "../../lib/severitySource";
 import { renderWithProviders } from "../../pages/__tests__/testUtils";
 
 const receiver = fixtureReceiver as unknown as ReceiverOut;
@@ -57,7 +59,7 @@ describe("ReceiverNotificationsTable", () => {
     renderTable();
 
     const tabella = within(await screen.findByRole("table"));
-    const link = tabella.getAllByRole("link", { name: "Apri" });
+    const link = tabella.getAllByRole("link", { name: /^Apri/ });
     expect(link).toHaveLength(2);
     expect(link[0]).toHaveAttribute("href", "/notifications/n1");
 
@@ -95,10 +97,54 @@ describe("ReceiverNotificationsTable", () => {
     renderTable();
 
     await screen.findByRole("table");
-    const cella = screen.getByRole("link", { name: "Apri" }).closest(".content-cell") as HTMLElement;
+    const cella = screen.getByRole("link", { name: /^Apri/ }).closest(".content-cell") as HTMLElement;
     expect(cella).not.toBeNull();
-    expect(within(cella).getByText("contenuto normalizzato")).toBeInTheDocument();
-    expect(within(cella).getByText("2097152 byte su object storage")).toBeInTheDocument();
+    expect(within(cella).getByText("Contenuto normalizzato")).toBeInTheDocument();
+    expect(within(cella).getByText("2 MB su object storage")).toBeInTheDocument();
+    expect(within(cella).getByTitle("2097152 byte")).toBeInTheDocument();
+  });
+
+  it("T-RCV15 sotto i 760px il riepilogo nel contenuto porta anche la fase di un ping di avvio", async () => {
+    const RICEVUTA = "2026-08-01T05:00:00Z";
+    server.use(
+      http.get("/api/v1/notifications", () =>
+        HttpResponse.json({
+          notifications: [
+            {
+              id: "nstart",
+              receiver_id: "r1",
+              content_preview: "job avviato",
+              content_size: 120,
+              content_normalized: false,
+              storage_backend: "inline",
+              severity: "info",
+              severity_source: "explicit",
+              phase: "start",
+              status: "unread",
+              verified: false,
+              received_at: RICEVUTA,
+            },
+          ],
+          next_cursor: null,
+          unread_count: 1,
+        }),
+      ),
+    );
+
+    renderTable();
+
+    await screen.findByRole("table");
+    const cella = screen
+      .getByRole("link", { name: /^Apri/ })
+      .closest(".content-cell") as HTMLElement;
+    const riepilogo = cella.querySelector(".receiver-narrow-info") as HTMLElement;
+    expect(riepilogo).not.toBeNull();
+    // Sotto i 760px la colonna Origine e' nascosta: la fase di avvio deve
+    // restare leggibile qui, altrimenti il ping non si distingue da un esito.
+    expect(riepilogo).toHaveTextContent(severitySourceLabel("explicit"));
+    expect(riepilogo).toHaveTextContent(formatDate(RICEVUTA));
+    expect(riepilogo).toHaveTextContent(formatTime(RICEVUTA));
+    expect(riepilogo).toHaveTextContent(phaseLabel("start") as string);
   });
 
   it("T-RCV4 l'intestazione porta il nome del receiver e linka al suo dettaglio", async () => {
@@ -141,7 +187,7 @@ describe("ReceiverNotificationsTable", () => {
     );
 
     await screen.findByRole("table");
-    expect(screen.getByText("disabilitato")).toBeInTheDocument();
+    expect(screen.getByText("Disabilitato")).toBeInTheDocument();
   });
 
   it("T-RCV8 un errore sull'azione resta dentro la sua tabella", async () => {
@@ -163,7 +209,7 @@ describe("ReceiverNotificationsTable", () => {
     const user = userEvent.setup();
 
     const tabella = within(await screen.findByRole("table"));
-    await user.click((await tabella.findAllByRole("button", { name: "Segna come letta" }))[0]);
+    await user.click((await tabella.findAllByRole("button", { name: /^Segna come letta/ }))[0]);
 
     // Il messaggio compare due volte, e deve: il toast lo dice subito, il
     // banner dentro la tabella resta e dice quale tabella ha fallito.
@@ -217,7 +263,7 @@ describe("ReceiverNotificationsTable", () => {
     const tabella = within(await screen.findByRole("table"));
     // La sessione e' caricata (le azioni di riga ci sono), il pulsante no.
     expect(
-      (await tabella.findAllByRole("button", { name: "Segna come non letta" })).length,
+      (await tabella.findAllByRole("button", { name: /^Segna come non letta/ })).length,
     ).toBeGreaterThan(0);
     expect(
       screen.queryByRole("button", { name: /Segna tutte come lette/ }),
@@ -249,5 +295,45 @@ describe("ReceiverNotificationsTable", () => {
     } finally {
       server.events.removeAllListeners();
     }
+  });
+
+  it("T-RCV12 ogni riga ha pulsanti e link con un nome suo, non ripetuto fra le righe", async () => {
+    renderTable();
+
+    const tabella = within(await screen.findByRole("table"));
+    const pulsanti = tabella.getAllByRole("button", { name: /^Segna come (letta|non letta)/ });
+    const nomi = pulsanti.map((b) => b.getAttribute("aria-label") ?? "");
+    // Due righe con lo stesso nome non si distinguono per chi usa lo screen reader.
+    expect(nomi.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(nomi).size).toBe(nomi.length);
+
+    const apri = tabella.getAllByRole("link", { name: /^Apri la notifica di/ });
+    expect(new Set(apri.map((a) => a.getAttribute("aria-label"))).size).toBe(apri.length);
+  });
+
+  it("T-RCV13 l'ultima colonna, quella delle azioni, ha un nome anche se non ha titolo", async () => {
+    renderTable();
+
+    const tabella = within(await screen.findByRole("table"));
+    const intestazioni = tabella.getAllByRole("columnheader");
+    expect(intestazioni[intestazioni.length - 1]).toHaveAccessibleName("Azioni");
+  });
+
+  it("T-RCV14 se il caricamento fallisce la tabella non dice «Nessuna notifica»", async () => {
+    server.use(
+      http.get("/api/v1/notifications", () =>
+        HttpResponse.json(
+          { type: "/problems/internal", title: "Internal Server Error", status: 500 },
+          { status: 500 },
+        ),
+      ),
+    );
+
+    renderTable();
+
+    expect(
+      await screen.findByText("Elenco non disponibile per un errore di caricamento."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Nessuna notifica trovata.")).not.toBeInTheDocument();
   });
 });

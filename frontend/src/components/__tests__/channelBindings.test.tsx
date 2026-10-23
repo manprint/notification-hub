@@ -93,7 +93,7 @@ describe("ChannelBindings", () => {
     );
     renderWithProviders(<ChannelBindings groupId={GROUP_ID} channels={canali} />);
 
-    expect(await screen.findByText(/Caricamento dei collegamenti/)).toBeInTheDocument();
+    expect(await screen.findByText("Caricamento…")).toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
 
     rispondi();
@@ -116,7 +116,7 @@ describe("ChannelBindings", () => {
     const tendina = await within(await screen.findByRole("table")).findByLabelText(
       "Soglia di Slack #ops",
     );
-    expect(tendina).toHaveDisplayValue("Disattivato (soglia error)");
+    expect(tendina).toHaveDisplayValue("Disattivato (soglia Errore)");
     expect(within(rigaDi("Slack #ops")).getByText(/nessun inoltro/)).toBeInTheDocument();
 
     // Scegliere una soglia lo riattiva.
@@ -183,6 +183,8 @@ describe("ChannelBindings", () => {
     await waitFor(() => expect(inviato).not.toBeNull());
     expect(metodo).toBe("POST");
     expect(inviato).toEqual({ channel_id: "c1", min_severity: "critical" });
+    // L'avviso di esito dice la severity con la stessa parola del badge.
+    expect(await screen.findByText(/inoltro da Critica in su/)).toBeInTheDocument();
   });
 
   it("cambiare la soglia di un canale gia collegato usa PUT, non un secondo POST", async () => {
@@ -240,6 +242,45 @@ describe("ChannelBindings", () => {
     );
 
     await waitFor(() => expect(chiamato).toBe("DELETE"));
+  });
+
+  it("dopo un errore rilegge i collegamenti, così la modifica successiva non riparte da una lettura vecchia", async () => {
+    const user = userEvent.setup();
+    const chiamate: string[] = [];
+    // Un altro admin ha slegato il canale mentre la pagina era aperta: la
+    // cache dice ancora "collegato", il server no.
+    renderBindings([
+      { id: "b1", group_id: GROUP_ID, channel_id: "c1", min_severity: "error", enabled: true },
+    ]);
+    await waitFor(() => {
+      expect(within(rigaDi("Slack #ops")).getByRole("combobox")).toHaveValue("error");
+    });
+
+    // Da qui in poi la lettura non trova più il collegamento.
+    server.use(
+      http.get(`/api/v1/groups/${GROUP_ID}/channels`, () => HttpResponse.json([])),
+      http.put(`/api/v1/groups/${GROUP_ID}/channels/c1`, () => {
+        chiamate.push("PUT");
+        return HttpResponse.json(
+          { type: "/problems/not-found", title: "Not Found", status: 404, detail: "Binding not found." },
+          { status: 404 },
+        );
+      }),
+      http.post(`/api/v1/groups/${GROUP_ID}/channels`, () => {
+        chiamate.push("POST");
+        return HttpResponse.json({}, { status: 201 });
+      }),
+    );
+
+    await user.selectOptions(within(rigaDi("Slack #ops")).getByRole("combobox"), "warning");
+    await waitFor(() => expect(chiamate).toEqual(["PUT"]));
+    // Dopo il 404 la lettura si rifà: il canale risulta non collegato.
+    await waitFor(() => {
+      expect(within(rigaDi("Slack #ops")).getByRole("combobox")).toHaveValue("");
+    });
+
+    await user.selectOptions(within(rigaDi("Slack #ops")).getByRole("combobox"), "info");
+    await waitFor(() => expect(chiamate).toEqual(["PUT", "POST"]));
   });
 
   it("un errore dell'API resta visibile invece di far sparire la modifica", async () => {
