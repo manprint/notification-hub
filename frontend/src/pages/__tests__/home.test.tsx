@@ -125,4 +125,39 @@ describe("HomePage", () => {
       "/notifications?group_id=g2",
     );
   });
+
+  it("le colonne di conteggio sono numeriche: intestazione e cella allineate a destra", async () => {
+    renderWithProviders(<HomePage />);
+
+    await screen.findByRole("link", { name: "Backup" });
+    for (const nome of ["Totale", "Non lette"]) {
+      expect(screen.getByRole("columnheader", { name: nome })).toHaveClass("num");
+    }
+    const riga = screen.getByRole("link", { name: "Backup" }).closest("tr") as HTMLElement;
+    expect(riga.querySelectorAll("td.num")).toHaveLength(2);
+  });
+
+  it("il titolo Riepilogo c'e' anche mentre carica", () => {
+    server.use(http.get("/api/v1/stats/summary", () => new Promise(() => {})));
+    renderWithProviders(<HomePage />);
+
+    expect(screen.getByRole("heading", { name: "Riepilogo" })).toBeInTheDocument();
+    expect(screen.getByText("Caricamento…")).toBeInTheDocument();
+  });
+
+  it("il titolo Riepilogo c'e' anche quando non c'e' nessun dato e la richiesta fallisce", async () => {
+    server.use(
+      http.get("/api/v1/stats/summary", () =>
+        HttpResponse.json(
+          { type: "/problems/internal-error", title: "Internal Server Error", status: 500, detail: "Riepilogo non disponibile" },
+          { status: 500 },
+        ),
+      ),
+    );
+    renderWithProviders(<HomePage />);
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Riepilogo non disponibile"));
+    expect(screen.getByRole("heading", { name: "Riepilogo" })).toBeInTheDocument();
+  });
+
 });

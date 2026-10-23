@@ -122,4 +122,10 @@ describe("AcceptInvitePage", () => {
     expect(await screen.findByText(/almeno 12 caratteri\./)).toBeInTheDocument();
     expect(chiamate).toBe(0);
   });
+
+  it("la pagina di invito e' un <main>, come il resto dell'app", () => {
+    renderWithProviders(<AcceptInvitePage />);
+    expect(screen.getByRole("main")).toHaveClass("auth-shell");
+  });
+
 });

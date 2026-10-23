@@ -33,7 +33,15 @@ export default function LoginPage() {
 
   // Mentre si ricarica una sessione salvata il form non si mostra: un login
   // fatto in quel momento si incrocerebbe col refresh della sessione di prima.
-  if (loading) return <div className="empty-state">Caricamento…</div>;
+  // Stessa cornice della pagina vera: il testo non sta in alto e poi il
+  // riquadro del login compare al centro.
+  if (loading) {
+    return (
+      <main className="auth-shell">
+        <div className="empty-state">Caricamento…</div>
+      </main>
+    );
+  }
   // Chi è già dentro non rientra come un altro utente sopra la sessione
   // aperta: token e cache di A resterebbero sotto il nome di B. Per cambiare
   // utente si passa da "Esci", che revoca la sessione e svuota la cache.
@@ -45,7 +53,7 @@ export default function LoginPage() {
   const retryAfterMinutes = retryAfterSeconds !== null ? Math.ceil(retryAfterSeconds / 60) : null;
 
   return (
-    <div className="auth-shell">
+    <main className="auth-shell">
       <div className="card auth-card">
         <h1 className="auth-title">NotifyHub</h1>
         <p className="auth-subtitle">Accedi per vedere le notifiche del tuo tenant.</p>
@@ -86,6 +94,6 @@ export default function LoginPage() {
           </div>
         </form>
       </div>
-    </div>
+    </main>
   );
 }

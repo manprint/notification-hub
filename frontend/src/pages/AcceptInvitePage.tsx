@@ -67,7 +67,7 @@ export default function AcceptInvitePage() {
   }
 
   return (
-    <div className="auth-shell">
+    <main className="auth-shell">
       <div className="card auth-card">
         <h1 className="auth-title">Accetta invito</h1>
         <p className="auth-subtitle">
@@ -116,6 +116,6 @@ export default function AcceptInvitePage() {
           </div>
         </form>
       </div>
-    </div>
+    </main>
   );
 }

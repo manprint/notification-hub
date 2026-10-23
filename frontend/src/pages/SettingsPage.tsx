@@ -214,7 +214,7 @@ export default function SettingsPage() {
       {conflicting && (
         <div className="error-banner">
           <p>Questi receiver hanno un limite superiore a quello richiesto:</p>
-          <ul>
+          <ul className="error-details">
             {conflicting.map((r) => (
               <li key={r.name}>
                 {r.name}: {formatBytes(r.max_body_bytes)}

@@ -14,7 +14,7 @@ import {
   shortLabel,
   startOfDay,
 } from "../lib/audit";
-import { formatDateTime } from "../lib/format";
+import { formatDate, formatTime } from "../lib/format";
 
 /** Vista dedicata a "segna come letta" e "segna come verificata": la stessa
  * tabella dell'audit, filtrata sulle azioni che rispondono alla domanda
@@ -51,7 +51,12 @@ export default function AuditNotificationStatusPage() {
     {
       key: "occurred_at",
       header: "Quando",
-      render: (event) => formatDateTime(event.occurred_at),
+      render: (event) => (
+        <span className="received-at">
+          <span>{formatDate(event.occurred_at)}</span>
+          <span>{formatTime(event.occurred_at)}</span>
+        </span>
+      ),
     },
     {
       key: "actor",
