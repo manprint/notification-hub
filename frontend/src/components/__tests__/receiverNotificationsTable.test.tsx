@@ -57,7 +57,7 @@ describe("ReceiverNotificationsTable", () => {
     renderTable();
 
     const tabella = within(await screen.findByRole("table"));
-    const link = tabella.getAllByRole("link", { name: "Apri" });
+    const link = tabella.getAllByRole("link", { name: /^Apri/ });
     expect(link).toHaveLength(2);
     expect(link[0]).toHaveAttribute("href", "/notifications/n1");
 
@@ -95,7 +95,7 @@ describe("ReceiverNotificationsTable", () => {
     renderTable();
 
     await screen.findByRole("table");
-    const cella = screen.getByRole("link", { name: "Apri" }).closest(".content-cell") as HTMLElement;
+    const cella = screen.getByRole("link", { name: /^Apri/ }).closest(".content-cell") as HTMLElement;
     expect(cella).not.toBeNull();
     expect(within(cella).getByText("contenuto normalizzato")).toBeInTheDocument();
     expect(within(cella).getByText("2 MB su object storage")).toBeInTheDocument();
@@ -164,7 +164,7 @@ describe("ReceiverNotificationsTable", () => {
     const user = userEvent.setup();
 
     const tabella = within(await screen.findByRole("table"));
-    await user.click((await tabella.findAllByRole("button", { name: "Segna come letta" }))[0]);
+    await user.click((await tabella.findAllByRole("button", { name: /^Segna come letta/ }))[0]);
 
     // Il messaggio compare due volte, e deve: il toast lo dice subito, il
     // banner dentro la tabella resta e dice quale tabella ha fallito.
@@ -218,7 +218,7 @@ describe("ReceiverNotificationsTable", () => {
     const tabella = within(await screen.findByRole("table"));
     // La sessione e' caricata (le azioni di riga ci sono), il pulsante no.
     expect(
-      (await tabella.findAllByRole("button", { name: "Segna come non letta" })).length,
+      (await tabella.findAllByRole("button", { name: /^Segna come non letta/ })).length,
     ).toBeGreaterThan(0);
     expect(
       screen.queryByRole("button", { name: /Segna tutte come lette/ }),
@@ -250,5 +250,45 @@ describe("ReceiverNotificationsTable", () => {
     } finally {
       server.events.removeAllListeners();
     }
+  });
+
+  it("T-RCV12 ogni riga ha pulsanti e link con un nome suo, non ripetuto fra le righe", async () => {
+    renderTable();
+
+    const tabella = within(await screen.findByRole("table"));
+    const pulsanti = tabella.getAllByRole("button", { name: /^Segna come (letta|non letta)/ });
+    const nomi = pulsanti.map((b) => b.getAttribute("aria-label") ?? "");
+    // Due righe con lo stesso nome non si distinguono per chi usa lo screen reader.
+    expect(nomi.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(nomi).size).toBe(nomi.length);
+
+    const apri = tabella.getAllByRole("link", { name: /^Apri la notifica di/ });
+    expect(new Set(apri.map((a) => a.getAttribute("aria-label"))).size).toBe(apri.length);
+  });
+
+  it("T-RCV13 l'ultima colonna, quella delle azioni, ha un nome anche se non ha titolo", async () => {
+    renderTable();
+
+    const tabella = within(await screen.findByRole("table"));
+    const intestazioni = tabella.getAllByRole("columnheader");
+    expect(intestazioni[intestazioni.length - 1]).toHaveAccessibleName("Azioni");
+  });
+
+  it("T-RCV14 se il caricamento fallisce la tabella non dice «Nessuna notifica»", async () => {
+    server.use(
+      http.get("/api/v1/notifications", () =>
+        HttpResponse.json(
+          { type: "/problems/internal", title: "Internal Server Error", status: 500 },
+          { status: 500 },
+        ),
+      ),
+    );
+
+    renderTable();
+
+    expect(
+      await screen.findByText("Elenco non disponibile per un errore di caricamento."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Nessuna notifica trovata.")).not.toBeInTheDocument();
   });
 });
