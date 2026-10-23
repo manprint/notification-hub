@@ -53,7 +53,9 @@ function EditGroupForm({ group, onDone }: { group: GroupOut; onDone: () => void 
 
   return (
     <Modal title={`Modifica «${group.name}»`} onClose={onDone} busy={busy !== null}>
-      <form onSubmit={(event) => void handleSubmit(event)}>
+      {/* noValidate: il nome obbligatorio lo controlla il modulo e lo dice in
+          italiano sotto il campo; il fumetto del browser comparirebbe prima. */}
+      <form noValidate onSubmit={(event) => void handleSubmit(event)}>
         {error && <ErrorBanner error={error} />}
         <RequiredLegend />
         <Field id={nameId} label="Nome" required error={nameError}>
@@ -207,7 +209,7 @@ function NewGroupForm() {
     <details className="card collapsible">
       <summary>Nuovo gruppo</summary>
       {error && <ErrorBanner error={error} />}
-      <form className="form-stacked" onSubmit={(event) => void createGroup(event)}>
+      <form className="form-stacked" noValidate onSubmit={(event) => void createGroup(event)}>
         <RequiredLegend />
         <Field
           id="group-name"
@@ -276,7 +278,9 @@ export default function GroupsPage() {
       header: "Nome",
       render: (g) => (
         <div className="cell-preview">
-          <span>{g.name}</span>
+          {/* Il nome è un collegamento: `td a` va a capo, così una colonna stretta
+              non obbliga a scorrere la tabella per aprire il gruppo. */}
+          <Link to={`/groups/${g.id}`}>{g.name}</Link>
           {g.description && <div className="cell-diagnostics">{g.description}</div>}
         </div>
       ),

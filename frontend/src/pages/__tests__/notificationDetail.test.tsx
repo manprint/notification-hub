@@ -5,7 +5,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
-import { Link, Route, Routes } from "react-router-dom";
+import { Link, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import NotificationDetailPage from "../NotificationDetailPage";
 import { setRefreshToken } from "../../api/client";
@@ -15,6 +15,12 @@ import {
 } from "../../api/mocks/handlers";
 import { server } from "../../api/mocks/server";
 import { renderWithProviders } from "./testUtils";
+
+/** Mostra il percorso e la query in cui il router è arrivato, per le asserzioni sul ritorno. */
+function PosizioneCorrente() {
+  const { pathname, search } = useLocation();
+  return <p>{pathname + search}</p>;
+}
 
 function renderDetail(id: string) {
   return renderWithProviders(
@@ -279,6 +285,23 @@ describe("NotificationDetailPage", () => {
     }
   });
 
+  it("durante il download il pulsante dice Scaricamento…, in italiano come gli altri stati", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/v1/notifications/n1", () =>
+        HttpResponse.json({ ...fixtureNotificationDetailObject, id: "n1" }),
+      ),
+      // Una risposta che non arriva mai: il pulsante resta nello stato di attesa.
+      http.get("/api/v1/notifications/n1/content", () => new Promise(() => {})),
+    );
+    renderDetail("n1");
+
+    await user.click(await screen.findByRole("button", { name: "Scarica contenuto completo" }));
+
+    expect(await screen.findByRole("button", { name: "Scaricamento…" })).toBeDisabled();
+    expect(screen.queryByText("Download…")).not.toBeInTheDocument();
+  });
+
   it("elimina e torna all'elenco", async () => {
     const user = userEvent.setup();
     let eliminata = false;
@@ -434,6 +457,39 @@ describe("NotificationDetailPage", () => {
       "href",
       "/notifications?group_id=g1&q=disco",
     );
+  });
+
+  // Dopo l'eliminazione si torna alla lista da cui si era partiti, e non alla
+  // griglia dei gruppi: gruppo e filtri restano dove l'utente li aveva.
+  it("elimina dalla lista di partenza: torna lì, col gruppo e i filtri", async () => {
+    serviDettaglio(fixtureNotificationDetailInline);
+    server.use(
+      http.delete("/api/v1/notifications/n1", () => new HttpResponse(null, { status: 204 })),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(
+      <Routes>
+        <Route
+          path="/"
+          element={
+            <Link to="/notifications/n1" state={{ from: "/notifications?group_id=g1&q=disco" }}>
+              Apri
+            </Link>
+          }
+        />
+        <Route path="/notifications/:id" element={<NotificationDetailPage />} />
+        <Route path="/notifications" element={<PosizioneCorrente />} />
+      </Routes>,
+    );
+
+    await user.click(await screen.findByRole("link", { name: "Apri" }));
+    await user.click(await screen.findByRole("button", { name: "Elimina" }));
+    const dialogo = within(await screen.findByRole("dialog"));
+    await user.click(dialogo.getByRole("button", { name: "Elimina" }));
+
+    expect(
+      await screen.findByText("/notifications?group_id=g1&q=disco", { selector: "p" }),
+    ).toBeInTheDocument();
   });
 
   it("con l'errore di caricamento il ritorno resta disponibile", async () => {

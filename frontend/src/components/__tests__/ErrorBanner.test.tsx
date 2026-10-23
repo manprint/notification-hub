@@ -88,6 +88,26 @@ describe("ErrorBanner", () => {
     expect(within(banner).getByText("Disco pieno.")).toBeInTheDocument();
   });
 
+  it("il messaggio della pagina sostituisce quello generato, detail del backend compreso", () => {
+    render(
+      <ErrorBanner
+        message="Non fai parte di questo gruppo."
+        error={{
+          status: 403,
+          type: "/problems/forbidden",
+          title: "Forbidden",
+          detail: "Not a member of this receiver group.",
+          extra: {},
+        }}
+      />,
+    );
+
+    const banner = screen.getByRole("alert");
+    expect(banner).toHaveTextContent("Non fai parte di questo gruppo.");
+    expect(banner).not.toHaveTextContent("receiver");
+    expect(banner).not.toHaveTextContent("Not a member");
+  });
+
   it("T-ERR2 senza dettagli mostra solo il messaggio", () => {
     render(
       <ErrorBanner

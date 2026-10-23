@@ -1486,8 +1486,10 @@ details[open] > .group-summary::before {
   min-width: 0;
 }
 
+/* break-word, non anywhere: lo slug ha trattini, e anywhere porta la colonna
+   a un carattere per riga (vedi la nota su td). */
 .slug-cell code {
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   white-space: normal;
 }
 

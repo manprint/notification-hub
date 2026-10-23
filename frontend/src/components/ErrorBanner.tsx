@@ -26,15 +26,18 @@ function validationIssues(error: ApiError): ValidationIssue[] {
   });
 }
 
-export default function ErrorBanner({ error }: { error: ApiError }) {
+export default function ErrorBanner({ error, message }: { error: ApiError; message?: string }) {
   // Senza i dettagli un 422 diceva solo "Request validation failed.": vero, ma
   // non dice quale campo correggere.
   const issues = validationIssues(error);
-  const { message, detail } = problemText(error);
+  // `message` è per le pagine che sanno dire di più del backend (il backend usa
+  // la stessa frase per gruppi, receiver e canali): in quel caso il testo della
+  // pagina sostituisce quello generato, detail compreso.
+  const text = message === undefined ? problemText(error) : { message, detail: "" };
   return (
     <div className="error-banner" role="alert" aria-live="assertive">
-      {message}
-      {detail && <span className="error-detail"> {detail}</span>}
+      {text.message}
+      {text.detail && <span className="error-detail"> {text.detail}</span>}
       {issues.length > 0 && (
         <ul className="error-details">
           {issues.map((issue, index) => (
