@@ -117,6 +117,9 @@ export default function HomePage() {
           Apri un gruppo per vedere i totali dei singoli receiver. Un receiver a zero non ha mai
           ricevuto notifiche.
         </p>
+        {/* Senza gruppi niente intestazioni vuote: il messaggio sta al posto della
+            tabella, come negli altri elenchi vuoti. */}
+        {data.by_group.length > 0 && (
         <div className="table-wrap">
           <table>
             <thead>
@@ -184,6 +187,7 @@ export default function HomePage() {
             </tbody>
           </table>
         </div>
+        )}
         {data.by_group.length === 0 && <EmptyState message="Nessun gruppo." />}
       </div>
     </div>

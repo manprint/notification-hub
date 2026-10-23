@@ -116,7 +116,33 @@ describe("LoginPage", () => {
     renderWithProviders(<LoginPage />);
     await compilaEInvia(user);
 
-    expect(await screen.findByText(/riprova fra qualche minuti/)).toBeInTheDocument();
+    expect(await screen.findByText("Troppi tentativi, riprova più tardi.")).toBeInTheDocument();
+  });
+
+  it("retry_after sotto il minuto: 'riprova fra 1 minuto', al singolare", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.post("/api/v1/auth/login", () =>
+        HttpResponse.json(
+          {
+            type: "/problems/rate-limited",
+            title: "Too Many Requests",
+            status: 429,
+            detail: "Too many login attempts.",
+            retry_after: 45,
+          },
+          { status: 429 },
+        ),
+      ),
+    );
+
+    renderWithProviders(<LoginPage />);
+    await compilaEInvia(user);
+
+    // 45 secondi arrotondati per eccesso fanno un minuto: "1 minuto", non "1 minuti".
+    expect(
+      await screen.findByText("Troppi tentativi, riprova fra 1 minuto."),
+    ).toBeInTheDocument();
   });
 
   it("il pulsante si disabilita durante l'invio: niente doppio login", async () => {

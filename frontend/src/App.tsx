@@ -21,6 +21,17 @@ const ReceiverDetailPage = lazy(() => import("./pages/ReceiverDetailPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const UsersPage = lazy(() => import("./pages/UsersPage"));
 
+/** Il testo di attesa sta nella stessa cornice del login (`auth-shell`): chi
+ *  aspetta vede il messaggio al centro, e il riquadro che arriva dopo non lo
+ *  sposta da un angolo. */
+function CaricamentoPagina() {
+  return (
+    <main className="auth-shell">
+      <div className="empty-state">Caricamento…</div>
+    </main>
+  );
+}
+
 /** Il server non ha risposto all'avvio: la sessione salvata resta, e chi la
  *  possiede può riprovare senza rifare il login. */
 function ServerUnreachable({ onRetry }: { onRetry: () => void }) {
@@ -42,7 +53,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading, unreachable, retryProfile } = useSession();
   const location = useLocation();
 
-  if (loading) return <div className="empty-state">Caricamento…</div>;
+  if (loading) return <CaricamentoPagina />;
   if (!user && unreachable) return <ServerUnreachable onRetry={retryProfile} />;
   if (!user) {
     // La pagina chiesta viaggia con il redirect: un link a una notifica aperto
@@ -75,7 +86,7 @@ export default function App() {
       {/* Un errore su una schermata non si porta dietro la successiva: al cambio
           di indirizzo il confine riparte pulito (senza smontare il layout). */}
       <ErrorBoundary resetKey={location.pathname}>
-      <Suspense fallback={<div className="empty-state">Caricamento…</div>}>
+      <Suspense fallback={<CaricamentoPagina />}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/invite" element={<AcceptInvitePage />} />

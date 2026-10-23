@@ -160,4 +160,17 @@ describe("HomePage", () => {
     expect(screen.getByRole("heading", { name: "Riepilogo" })).toBeInTheDocument();
   });
 
+  it("senza gruppi niente intestazioni vuote: lo dice una riga sola", async () => {
+    server.use(
+      http.get("/api/v1/stats/summary", () =>
+        HttpResponse.json({ ...fixtureStatsSummary, by_group: [] }),
+      ),
+    );
+    renderWithProviders(<HomePage />);
+
+    expect(await screen.findByText("Nessun gruppo.")).toBeInTheDocument();
+    // Una tabella con intestazioni e nessuna riga non diceva niente a chi legge.
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Totale" })).not.toBeInTheDocument();
+  });
 });
