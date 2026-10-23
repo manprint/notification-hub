@@ -46,10 +46,15 @@ export default function ReceiverPresetsPanel({ receiverId }: { receiverId: strin
     if (!ready) return;
     await run(
       async () => {
-        await apiPut(`/api/v1/receivers/${receiverId}/presets`, { preset_ids: presetIds });
-        await queryClient.invalidateQueries({ queryKey: ["receiver-presets", receiverId] });
-        await queryClient.invalidateQueries({ queryKey: ["severity-chain", receiverId] });
-        await queryClient.invalidateQueries({ queryKey: ["severity-replay", receiverId] });
+        try {
+          await apiPut(`/api/v1/receivers/${receiverId}/presets`, { preset_ids: presetIds });
+        } finally {
+          // Anche dopo un errore: la lista in cache è quella che il 409 o il 404
+          // hanno appena smentito, e va riletta prima della prossima azione.
+          await queryClient.invalidateQueries({ queryKey: ["receiver-presets", receiverId] });
+          await queryClient.invalidateQueries({ queryKey: ["severity-chain", receiverId] });
+          await queryClient.invalidateQueries({ queryKey: ["severity-replay", receiverId] });
+        }
       },
       { success: messaggio },
     );

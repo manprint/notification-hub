@@ -57,19 +57,25 @@ export default function ChannelBindings({ groupId, channels }: ChannelBindingsPr
     setLastSaved(channelId);
     await run(
       async () => {
-        const existing = byChannelId.get(channelId);
-        if (existing) {
-          await apiPut(`/api/v1/groups/${groupId}/channels/${channelId}`, {
-            min_severity: minSeverity,
-            enabled: true,
-          });
-        } else {
-          await apiPost(`/api/v1/groups/${groupId}/channels`, {
-            channel_id: channelId,
-            min_severity: minSeverity,
-          });
+        try {
+          const existing = byChannelId.get(channelId);
+          if (existing) {
+            await apiPut(`/api/v1/groups/${groupId}/channels/${channelId}`, {
+              min_severity: minSeverity,
+              enabled: true,
+            });
+          } else {
+            await apiPost(`/api/v1/groups/${groupId}/channels`, {
+              channel_id: channelId,
+              min_severity: minSeverity,
+            });
+          }
+        } finally {
+          // Anche se la scrittura fallisce: un 404 vuol dire che la lettura in
+          // cache è vecchia, e senza il refetch ogni modifica successiva
+          // ripartirebbe dalla stessa decisione sbagliata.
+          await queryClient.invalidateQueries({ queryKey: ["group-channel-bindings", groupId] });
         }
-        await queryClient.invalidateQueries({ queryKey: ["group-channel-bindings", groupId] });
       },
       {
         name: channelId,
@@ -82,8 +88,11 @@ export default function ChannelBindings({ groupId, channels }: ChannelBindingsPr
     setLastSaved(channelId);
     await run(
       async () => {
-        await apiDelete(`/api/v1/groups/${groupId}/channels/${channelId}`);
-        await queryClient.invalidateQueries({ queryKey: ["group-channel-bindings", groupId] });
+        try {
+          await apiDelete(`/api/v1/groups/${groupId}/channels/${channelId}`);
+        } finally {
+          await queryClient.invalidateQueries({ queryKey: ["group-channel-bindings", groupId] });
+        }
       },
       { name: channelId, success: `«${channelName}» scollegato dal gruppo.` },
     );

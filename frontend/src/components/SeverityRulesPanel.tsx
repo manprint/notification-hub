@@ -349,10 +349,16 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
 
   async function mutate(action: () => Promise<unknown>, success: string) {
     await run(async () => {
-      await action();
-      await queryClient.invalidateQueries({ queryKey: ["severity-rules", receiverId] });
-      await queryClient.invalidateQueries({ queryKey: ["severity-chain", receiverId] });
-      await queryClient.invalidateQueries({ queryKey: ["severity-replay", receiverId] });
+      try {
+        await action();
+      } finally {
+        // Anche dopo un errore (un 422 o un 404 smentiscono la lettura in
+        // cache): la lista va riletta, altrimenti l'azione successiva riparte
+        // dallo stesso stato sbagliato.
+        await queryClient.invalidateQueries({ queryKey: ["severity-rules", receiverId] });
+        await queryClient.invalidateQueries({ queryKey: ["severity-chain", receiverId] });
+        await queryClient.invalidateQueries({ queryKey: ["severity-replay", receiverId] });
+      }
     }, { success });
   }
 
