@@ -46,7 +46,9 @@ async def test_viewer_non_legge_i_canali_ma_member_si(
 
     viewer = await _token_di_ruolo(api_client, tenant_id, make_user, UserRole.VIEWER)
     assert (await api_client.get("/api/v1/channels", headers=viewer)).status_code == 403
-    assert (await api_client.get(f"/api/v1/channels/{channel_id}", headers=viewer)).status_code == 403
+    assert (
+        await api_client.get(f"/api/v1/channels/{channel_id}", headers=viewer)
+    ).status_code == 403
 
     member = await _token_di_ruolo(api_client, tenant_id, make_user, UserRole.MEMBER)
     elenco = await api_client.get("/api/v1/channels", headers=member)
