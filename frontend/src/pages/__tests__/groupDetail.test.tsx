@@ -107,4 +107,29 @@ describe("GroupDetailPage", () => {
     expect(screen.queryByText("Nessun receiver in questo gruppo.")).not.toBeInTheDocument();
     expect(screen.queryByText(/configurati/)).not.toBeInTheDocument();
   });
+
+  it("T-GRP10 un gruppo non visibile tiene ritorno e titolo, e dice 'gruppo' non 'receiver'", async () => {
+    const negato = {
+      type: "/problems/forbidden",
+      title: "Forbidden",
+      status: 403,
+      detail: "Not a member of this receiver group.",
+    };
+    server.use(
+      http.get("/api/v1/groups/g1", () => HttpResponse.json(negato, { status: 403 })),
+      http.get("/api/v1/groups/g1/receivers", () => HttpResponse.json(negato, { status: 403 })),
+    );
+    setRefreshToken("refresh-token-fixture");
+    renderGroupDetail();
+
+    const avviso = await screen.findByRole("alert");
+    expect(avviso).toHaveTextContent("Non fai parte di questo gruppo.");
+    expect(avviso).not.toHaveTextContent("receiver");
+    expect(screen.getByRole("link", { name: "← Torna ai gruppi" })).toHaveAttribute(
+      "href",
+      "/groups",
+    );
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Gruppo");
+    expect(screen.queryByText("Receiver del gruppo")).not.toBeInTheDocument();
+  });
 });
