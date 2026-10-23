@@ -12,7 +12,9 @@ import { formatBytes } from "../lib/format";
 import { INT4_MAX } from "../lib/duration";
 
 interface ConflictingReceiver {
+  id: string;
   name: string;
+  group_name: string;
   max_body_bytes: number;
 }
 
@@ -301,11 +303,11 @@ export default function SettingsPage() {
         <div className="error-banner">
           <p>Questi receiver hanno un limite superiore a quello richiesto:</p>
           <ul className="error-details">
-            {/* Il nome non è unico (due receiver "backup" in gruppi diversi): la
-                posizione nell'elenco è la chiave, il nome solo testo. */}
-            {conflicting.map((r, index) => (
-              <li key={`${index}-${r.name}`}>
-                {r.name}: {formatBytes(r.max_body_bytes)}
+            {/* Il nome non è unico (due receiver "backup" in gruppi diversi): la chiave
+                è l'id del receiver, e il gruppo dice quale dei due è. */}
+            {conflicting.map((r) => (
+              <li key={r.id}>
+                {r.name} (gruppo {r.group_name}): {formatBytes(r.max_body_bytes)}
               </li>
             ))}
           </ul>

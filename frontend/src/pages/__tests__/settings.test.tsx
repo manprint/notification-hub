@@ -19,8 +19,13 @@ describe("SettingsPage", () => {
             status: 409,
             detail: "Some receivers have a higher max_body_bytes than requested.",
             conflicting_receivers: [
-              { name: "Backup notturno", max_body_bytes: 5_000_000 },
-              { name: "API pubblica", max_body_bytes: 2_000_000 },
+              {
+                id: "r-1",
+                name: "Backup notturno",
+                group_name: "Produzione",
+                max_body_bytes: 5_000_000,
+              },
+              { id: "r-2", name: "API pubblica", group_name: "Web", max_body_bytes: 2_000_000 },
             ],
           },
           { status: 409 },
@@ -311,8 +316,13 @@ describe("SettingsPage", () => {
             status: 409,
             detail: "Some receivers have a higher max_body_bytes than requested.",
             conflicting_receivers: [
-              { name: "backup", max_body_bytes: 5_000_000 },
-              { name: "backup", max_body_bytes: 6_000_000 },
+              {
+                id: "r-1",
+                name: "backup",
+                group_name: "Produzione",
+                max_body_bytes: 5_000_000,
+              },
+              { id: "r-2", name: "backup", group_name: "Staging", max_body_bytes: 6_000_000 },
             ],
           },
           { status: 409 },
@@ -325,7 +335,9 @@ describe("SettingsPage", () => {
     await user.type(await screen.findByLabelText(/cap corpo/i), "500000");
     await user.click(screen.getByRole("button", { name: "Salva" }));
 
-    // Nomi uguali in gruppi diversi: due righe, ciascuna con il suo valore.
-    expect(await screen.findAllByText(/^backup:/)).toHaveLength(2);
+    // Nomi uguali in gruppi diversi: due righe, ciascuna con il suo gruppo e il suo valore.
+    expect(await screen.findAllByText(/^backup \(gruppo /)).toHaveLength(2);
+    expect(screen.getByText(/^backup \(gruppo Produzione\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^backup \(gruppo Staging\)/)).toBeInTheDocument();
   });
 });
