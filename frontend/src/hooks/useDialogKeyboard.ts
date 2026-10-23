@@ -37,7 +37,7 @@ function inOrdineDelDocumento(elementi: NodeListOf<HTMLElement>): HTMLElement[] 
  *  dialogo da lì non riceve più niente — né Escape né Tab, che finirebbe sulla
  *  pagina sotto. Se il fuoco è uscito, il Tab lo riporta dentro. */
 export function useDialogKeyboard(
-  dialogRef: RefObject<HTMLElement>,
+  dialogRef: RefObject<HTMLElement | null>,
   onEscape: () => void,
 ): void {
   const escapeRef = useRef(onEscape);

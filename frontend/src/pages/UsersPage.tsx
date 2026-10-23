@@ -52,6 +52,9 @@ function GroupPicker({
   disabled?: boolean;
 }) {
   function toggle(groupId: string, checked: boolean) {
+    // Un controllo disabilitato non salva, neanche se un click sintetico arriva
+    // comunque al gestore: nel test il secondo click finiva per salvare due volte.
+    if (disabled) return;
     onChange(checked ? [...value, groupId] : value.filter((id) => id !== groupId));
   }
 
