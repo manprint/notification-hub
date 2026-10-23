@@ -1,3 +1,4 @@
+import logging
 import uuid
 from typing import Any
 
@@ -21,7 +22,7 @@ def configure_logging() -> None:
             structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(
-            int(getattr(structlog.stdlib, settings.log_level, 20))
+            logging.getLevelNamesMapping().get(settings.log_level.upper(), logging.INFO)
         ),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),

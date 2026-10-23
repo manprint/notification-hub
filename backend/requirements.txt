@@ -23,6 +23,6 @@ google-re2~=1.1
 # mancanti): la stessa riga che sta nel crontab, valutata lato server.
 croniter~=6.2.4
 httpx~=0.28.1
-structlog~=24.4
+structlog~=26.1.0
 prometheus-client~=0.26.0
 click~=8.5.0
