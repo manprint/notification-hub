@@ -532,3 +532,36 @@ async def test_riaccensione_recente_batte_un_invio_piu_vecchio(two_tenants):
     _esegui_job()
 
     assert await _notifiche(tenant_id, receiver_id) == []
+
+
+@pytest.mark.integration
+async def test_un_tenant_che_fallisce_non_ferma_la_sorveglianza_degli_altri(
+    two_tenants, monkeypatch
+):
+    """Un errore sul tenant A (per esempio un deadlock) non deve saltare il tenant
+    B nello stesso giro: il giro dopo riprova A, B riceve il suo allarme ora."""
+    from app.tasks import maintenance
+
+    tenant_a, tenant_b = two_tenants
+    receiver_a = await create_receiver(tenant_a, uuid.uuid4().hex[:22])
+    receiver_b = await create_receiver(tenant_b, uuid.uuid4().hex[:22])
+    for tenant_id, receiver_id in ((tenant_a, receiver_a), (tenant_b, receiver_b)):
+        await _sorveglia(
+            tenant_id,
+            receiver_id,
+            last_notification_at=datetime.now(UTC) - timedelta(days=2),
+        )
+
+    schedule_reale = maintenance.schedule_from_receiver
+
+    def schedule_guasto(receiver):
+        if receiver.tenant_id == tenant_a:
+            raise RuntimeError("errore simulato sul tenant A")
+        return schedule_reale(receiver)
+
+    monkeypatch.setattr(maintenance, "schedule_from_receiver", schedule_guasto)
+
+    _esegui_job()
+
+    assert len(await _notifiche(tenant_b, receiver_b)) == 1
+    assert await _notifiche(tenant_a, receiver_a) == []
