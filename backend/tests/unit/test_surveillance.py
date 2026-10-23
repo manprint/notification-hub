@@ -393,7 +393,7 @@ def test_diagnose_phase_senza_ping_di_avvio_dichiara_di_non_sapere():
         last_notification_at=_at("2026-08-03T03:00:00"),
         now=_at("2026-08-04T04:00:00"),
     )
-    assert "non e' possibile dire" in testo
+    assert "non è possibile dire" in testo
     assert "--ping-start" in testo
 
 
@@ -406,7 +406,7 @@ def test_diagnose_phase_partito_e_mai_concluso():
         last_notification_at=_at("2026-08-03T03:12:00"),
         now=_at("2026-08-04T05:00:05"),
     )
-    assert "E' partito e si e' interrotto" in testo
+    assert "È partito e si è interrotto" in testo
     assert "2026-08-04T03:00:05Z" in testo
     assert "2h00m fa" in testo
 
@@ -420,7 +420,7 @@ def test_diagnose_phase_mai_avviato():
         last_notification_at=_at("2026-08-03T03:12:00"),
         now=_at("2026-08-04T05:00:00"),
     )
-    assert "non e' stato avviato" in testo
+    assert "non è stato avviato" in testo
 
 
 @pytest.mark.unit
@@ -430,7 +430,7 @@ def test_diagnose_phase_avviato_senza_nessuna_conclusione_mai():
         last_notification_at=None,
         now=_at("2026-08-04T06:00:05"),
     )
-    assert "E' partito e si e' interrotto" in testo
+    assert "È partito e si è interrotto" in testo
 
 
 @pytest.mark.unit
@@ -445,6 +445,6 @@ def test_missing_content_include_la_diagnosi_della_fase():
         deadline=_at("2026-08-04T03:30:00"),
         now=_at("2026-08-04T04:00:05"),
     )
-    assert "E' partito e si e' interrotto" in testo
+    assert "È partito e si è interrotto" in testo
     # La conclusione resta quella vera: un avvio non e' una conclusione.
     assert "ultima conclusione: 2026-08-03T03:00:00Z" in testo
