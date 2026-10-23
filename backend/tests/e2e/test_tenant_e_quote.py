@@ -6,10 +6,11 @@ errore non si vede in dashboard, si vede sui job che smettono di riuscire a
 parlare.
 """
 
+import asyncio
 import uuid
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import text, update
 
 from app.db.session import tenant_session
 from app.db.types import UserRole
@@ -217,3 +218,48 @@ async def test_quote_a_null_sono_illimitate(api_client, two_tenants, owner_token
     for i in range(3):
         resp = await api_client.post(f"/ingest/{receiver['slug']}", content=f"messaggio {i}")
         assert resp.status_code == 201
+
+
+@pytest.mark.e2e
+async def test_max_storage_bytes_oltre_bigint_e_422_non_500(api_client, two_tenants, owner_token):
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, owner_token, tenant_id)
+
+    resp = await api_client.patch(
+        "/api/v1/tenant", json={"max_storage_bytes": 10**20}, headers=headers
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.e2e
+async def test_cap_tenant_e_receiver_non_si_scavalcano_in_parallelo(
+    api_client, two_tenants, owner_token, owner_conn
+):
+    """Il PATCH che abbassa il cap a 1 MB resta aperto mentre un receiver da 5 MB
+    viene creato: il receiver deve leggere il cap nuovo e rifiutarsi con 409,
+    non accettare il valore vecchio (write skew)."""
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, owner_token, tenant_id)
+    await owner_conn.execute(
+        text("UPDATE tenants SET max_body_bytes = 20971520 WHERE id = :id"), {"id": tenant_id}
+    )
+    await owner_conn.commit()
+    gruppo = await api_client.post(
+        "/api/v1/groups", json={"name": f"Skew {uuid.uuid4().hex[:8]}"}, headers=headers
+    )
+    group_id = gruppo.json()["id"]
+
+    async with tenant_session(tenant_id) as abbassa:
+        await abbassa.execute(
+            update(Tenant).where(Tenant.id == tenant_id).values(max_body_bytes=1048576)
+        )
+        creazione = asyncio.create_task(
+            api_client.post(
+                f"/api/v1/groups/{group_id}/receivers",
+                json={"name": "grosso", "max_body_bytes": 5 * 1024 * 1024},
+                headers=headers,
+            )
+        )
+        await asyncio.sleep(0.3)
+    resp = await creazione
+    assert resp.status_code == 409

@@ -200,7 +200,10 @@ async def _get_group_or_404(
 async def _validate_max_body_bytes(
     session: AsyncSession, tenant_id: uuid.UUID, requested: int | None
 ) -> int:
-    tenant_result = await session.execute(select(Tenant).where(Tenant.id == tenant_id))
+    # FOR UPDATE: serializza con un PATCH /tenant che abbassa il cap (write skew).
+    tenant_result = await session.execute(
+        select(Tenant).where(Tenant.id == tenant_id).with_for_update()
+    )
     tenant = tenant_result.scalar_one()
     if requested is None:
         return tenant.max_body_bytes
@@ -326,6 +329,11 @@ async def update_receiver(
     tenant_id = uuid.UUID(claims.tid)
     receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
     await assert_group_access(session, claims, receiver.group_id, write=True)
+    if body.max_body_bytes is not None:
+        # Lock del tenant prima di modificare il receiver: la validazione del cap
+        # fa autoflush, quindi senza questo lock la riga receiver verrebbe scritta
+        # prima del tenant, nell'ordine inverso a quello dell'ingestion.
+        await session.execute(select(Tenant.id).where(Tenant.id == tenant_id).with_for_update())
 
     if body.name is not None:
         receiver.name = body.name
