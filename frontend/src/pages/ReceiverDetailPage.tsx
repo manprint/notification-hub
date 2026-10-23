@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiDelete, apiGet, apiGetFile, apiPatch, apiPost } from "../api/client";
-import type { ApiError, ReceiverOut, Severity } from "../api/types";
+import type { ApiError, ReceiverOut, Severity, TenantOut } from "../api/types";
 import ConfirmDialog from "../components/ConfirmDialog";
 import CopyButton from "../components/CopyButton";
 import Detail from "../components/Detail";
@@ -10,6 +10,7 @@ import EmptyState from "../components/EmptyState";
 import ErrorBanner from "../components/ErrorBanner";
 import Field, { RequiredLegend, fieldAria } from "../components/Field";
 import ReceiverPresetsPanel from "../components/ReceiverPresetsPanel";
+import SeverityBadge from "../components/SeverityBadge";
 import SeverityRulesPanel from "../components/SeverityRulesPanel";
 import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
@@ -31,7 +32,7 @@ import {
   splitDuration,
 } from "../lib/duration";
 import { saveBlob } from "../lib/download";
-import { formatBytes, formatInstantOr } from "../lib/format";
+import { formatBytes, formatInstantOr, severityLabel } from "../lib/format";
 import { invalidateReceiverLists } from "../lib/receiverCache";
 import { ADMIN_ROLES, MEMBER_ROLES, hasRole } from "../lib/roles";
 
@@ -175,12 +176,22 @@ function describeExpectation(receiver: ReceiverOut): string {
     receiver.expected_cron !== null
       ? `cron ${receiver.expected_cron} (${receiver.expected_timezone ?? DEFAULT_TIMEZONE})`
       : `ogni ${formatIntervalSeconds(receiver.expected_every_seconds ?? 0)}`;
-  return `${quando}, tolleranza ${grace} → ${receiver.missing_severity}`;
+  return `${quando}, tolleranza ${grace} → ${severityLabel(receiver.missing_severity)}`;
 }
 
 function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone: () => void }) {
   const queryClient = useQueryClient();
   const { busy, error, run } = useAction();
+  // Il tetto che il backend applica al limite del corpo (409 sopra). Finché
+  // non arriva, o se la lettura fallisce, vale il massimo del campo.
+  const { data: tenant } = useQuery<TenantOut, ApiError>({
+    queryKey: ["tenant"],
+    queryFn: () => apiGet<TenantOut>("/api/v1/tenant"),
+  });
+  const bodyCap = tenant?.max_body_bytes ?? INT4_MAX;
+  const bodyHint = tenant
+    ? `Massimo per questo tenant: ${formatBytes(tenant.max_body_bytes)}.`
+    : undefined;
   // Lo stato letto all'apertura del form: la PATCH manda solo ciò che l'utente
   // ha cambiato rispetto a questo, non il receiver com'è adesso sul server.
   // Rimandare i campi non toccati riscriverebbe una modifica fatta da un altro
@@ -239,6 +250,9 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
     const errors: Partial<Record<FieldKey, string>> = {};
     const body = parseIntegerInput(maxBodyBytes, {
       min: 1,
+      // Un limite già salvato sopra il tetto (tetto abbassato dopo) non blocca il
+      // salvataggio degli altri campi: il backend lo rifiuta solo se cambia.
+      max: Math.max(bodyCap, initial.max_body_bytes),
       empty: "Indica il limite del corpo in byte.",
     });
     if (!body.ok) errors.body = body.error;
@@ -397,7 +411,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
           >
             {SEVERITIES.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {severityLabel(s)}
               </option>
             ))}
           </select>
@@ -406,13 +420,14 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
           id="receiver-edit-body"
           label="Limite corpo (byte)"
           required
+          hint={bodyHint}
           error={fieldErrors.body}
         >
           <input
-            {...fieldAria("receiver-edit-body", { error: fieldErrors.body })}
+            {...fieldAria("receiver-edit-body", { hint: bodyHint, error: fieldErrors.body })}
             type="number"
             min={1}
-            max={INT4_MAX}
+            max={bodyCap}
             required
             value={maxBodyBytes}
             onChange={(event) => setMaxBodyBytes(event.target.value)}
@@ -453,7 +468,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
               <option value={EXIT_CODE_DISABLED}>nessun effetto</option>
               {SEVERITIES.map((s) => (
                 <option key={s} value={s}>
-                  {s}
+                  {severityLabel(s)}
                 </option>
               ))}
             </select>
@@ -475,7 +490,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
                 onChange={(event) => setDurationAmount(event.target.value)}
               />
               <select
-                aria-label="Unita della soglia di durata"
+                aria-label="Unità della soglia di durata"
                 value={durationUnit}
                 onChange={(event) => setDurationUnit(event.target.value as DurationUnit)}
               >
@@ -496,7 +511,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
               <option value={DURATION_DISABLED}>nessun effetto</option>
               {SEVERITIES.map((s) => (
                 <option key={s} value={s}>
-                  {s}
+                  {severityLabel(s)}
                 </option>
               ))}
             </select>
@@ -509,8 +524,8 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
         <p className="card-hint">
           Notifica quando un invio <strong>non</strong> arriva: macchina spenta, cron rimosso, rete
           verso NotifyHub assente. Se il job usa <code>--only-on-failure</code> non va sorvegliato
-          cosi': un'esecuzione riuscita non manda niente e verrebbe segnalata come assenza. Con{" "}
-          <code>--ping-start</code> l'allarme dice anche se il job non e' partito o se e' partito e
+          così: un'esecuzione riuscita non manda niente e verrebbe segnalata come assenza. Con{" "}
+          <code>--ping-start</code> l'allarme dice anche se il job non è partito o se è partito e
           non ha concluso.
         </p>
         <Field
@@ -552,7 +567,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
                 onChange={(event) => setIntervalAmount(event.target.value)}
               />
               <select
-                aria-label="Unita dell'intervallo atteso"
+                aria-label="Unità dell'intervallo atteso"
                 value={intervalUnit}
                 onChange={(event) => setIntervalUnit(event.target.value as DurationUnit)}
               >
@@ -649,7 +664,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
                   onChange={(event) => setGraceAmount(event.target.value)}
                 />
                 <select
-                  aria-label="Unita della tolleranza"
+                  aria-label="Unità della tolleranza"
                   value={graceUnit}
                   onChange={(event) => setGraceUnit(event.target.value as DurationUnit)}
                 >
@@ -670,7 +685,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
               >
                 {SEVERITIES.map((s) => (
                   <option key={s} value={s}>
-                    {s}
+                    {severityLabel(s)}
                   </option>
                 ))}
               </select>
@@ -696,8 +711,14 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
   );
 }
 
-function DownloadWrapperButton({ receiver }: { receiver: ReceiverOut }) {
-  const { busy, error, run } = useAction();
+function DownloadWrapperButton({
+  receiver,
+  action,
+}: {
+  receiver: ReceiverOut;
+  action: ReturnType<typeof useAction>;
+}) {
+  const { busy, run } = action;
 
   async function download() {
     await run(async () => {
@@ -716,12 +737,9 @@ function DownloadWrapperButton({ receiver }: { receiver: ReceiverOut }) {
   }
 
   return (
-    <>
-      {error && <ErrorBanner error={error} />}
-      <button onClick={() => void download()} disabled={busy !== null}>
-        {busy !== null ? "Preparazione…" : "Scarica lo script"}
-      </button>
-    </>
+    <button onClick={() => void download()} disabled={busy !== null}>
+      {busy !== null ? "Preparazione…" : "Scarica lo script"}
+    </button>
   );
 }
 
@@ -740,6 +758,9 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { busy, error: actionError, run } = useAction();
+  // Azione propria del download: il suo `busy` non deve bloccare i pulsanti
+  // dell'intestazione, e il suo errore va fuori dalla riga dei pulsanti.
+  const downloadAction = useAction();
   const [editing, setEditing] = useState(false);
   // Una sola conferma aperta alla volta: le tre azioni che cambiano qualcosa in
   // modo non banale (slug, stato, esistenza) passano tutte di qui.
@@ -832,7 +853,7 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
                 Modifica receiver
               </button>
             )}
-            <DownloadWrapperButton key={receiver.id} receiver={receiver} />
+            <DownloadWrapperButton key={receiver.id} receiver={receiver} action={downloadAction} />
             {hasRole(role, ADMIN_ROLES) && (
               <button disabled={busy !== null} onClick={() => setConfirming("rotate")}>
                 Rigenera slug
@@ -856,6 +877,7 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
         )}
       </div>
       {actionError && <ErrorBanner error={actionError} />}
+      {downloadAction.error && <ErrorBanner error={downloadAction.error} />}
 
       {editing ? (
         <div className="card">
@@ -895,7 +917,7 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
               </Detail>
             </div>
             <p className="card-hint">
-              Per i job da crontab: <code>notifyhub-run.sh</code> con URL e slug gia' compilati,
+              Per i job da crontab: <code>notifyhub-run.sh</code> con URL e slug già compilati,
               scritti in due variabili in cima al file e modificabili a mano.
             </p>
             {disabled && (
@@ -917,15 +939,26 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
                   {disabled ? "Disabilitato" : "Attivo"}
                 </span>
               </Detail>
-              <Detail label="Severity di default">{receiver.default_severity}</Detail>
+              <Detail label="Severity di default">
+                <SeverityBadge severity={receiver.default_severity} />
+              </Detail>
               <Detail label="Severity per exit code diverso da zero">
-                {receiver.exit_code_severity ?? "nessun effetto"}
+                {receiver.exit_code_severity ? (
+                  <SeverityBadge severity={receiver.exit_code_severity} />
+                ) : (
+                  "nessun effetto"
+                )}
               </Detail>
               <Detail label="Soglia di durata">
                 {receiver.duration_threshold_seconds !== null &&
-                receiver.duration_severity !== null
-                  ? `oltre ${formatDurationSeconds(receiver.duration_threshold_seconds)} → ${receiver.duration_severity}`
-                  : "nessun effetto"}
+                receiver.duration_severity !== null ? (
+                  <>
+                    oltre {formatDurationSeconds(receiver.duration_threshold_seconds)} →{" "}
+                    <SeverityBadge severity={receiver.duration_severity} />
+                  </>
+                ) : (
+                  "nessun effetto"
+                )}
               </Detail>
               <Detail label="Limite corpo">
                 {formatBytes(receiver.max_body_bytes)}
