@@ -350,4 +350,15 @@ describe("AuditNotificationStatusPage", () => {
     await waitFor(() => expect(screen.queryByText(/Storico di una sola notifica/)).toBeNull());
     expect(urls.some((url) => !url.includes("notification_id"))).toBe(true);
   });
+
+  it("la data va a capo fra giorno e ora, mai alla virgola", async () => {
+    renderWithProviders(<AuditPage />);
+    await waitFor(() => expect(screen.getByText("mario@acme.test")).toBeInTheDocument());
+
+    const quando = cella(1, "Quando");
+    const parti = quando.querySelectorAll(".received-at > span");
+    expect(parti).toHaveLength(2);
+    expect(quando.textContent).not.toContain(",");
+  });
+
 });

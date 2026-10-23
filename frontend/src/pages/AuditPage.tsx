@@ -14,7 +14,7 @@ import {
   resourceLabel,
   startOfDay,
 } from "../lib/audit";
-import { formatDateTime } from "../lib/format";
+import { formatDate, formatTime } from "../lib/format";
 
 export default function AuditPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -48,7 +48,12 @@ export default function AuditPage() {
     {
       key: "occurred_at",
       header: "Quando",
-      render: (event) => formatDateTime(event.occurred_at),
+      render: (event) => (
+        <span className="received-at">
+          <span>{formatDate(event.occurred_at)}</span>
+          <span>{formatTime(event.occurred_at)}</span>
+        </span>
+      ),
     },
     {
       key: "actor",

@@ -31,18 +31,38 @@ export default function HomePage() {
     });
   }
 
-  if (isLoading) return <EmptyState message="Caricamento…" />;
+  // Il titolo c'e' anche mentre si carica e se manca il dato: la pagina non
+  // cambia forma quando arriva la risposta.
+  const title = (
+    <div className="page-header">
+      <h1>Riepilogo</h1>
+    </div>
+  );
+
+  if (isLoading) {
+    return (
+      <div>
+        {title}
+        <EmptyState message="Caricamento…" />
+      </div>
+    );
+  }
   // Senza dati l'errore e' tutta la pagina. Con i dati di un giro precedente,
   // un polling fallito (una rete che singhiozza, un deploy) non li cancella:
   // restano a video, col banner sopra che dice che potrebbero non essere
   // aggiornati.
-  if (!data) return error ? <ErrorBanner error={error} /> : null;
+  if (!data) {
+    return (
+      <div>
+        {title}
+        {error && <ErrorBanner error={error} />}
+      </div>
+    );
+  }
 
   return (
     <div>
-      <div className="page-header">
-        <h1>Riepilogo</h1>
-      </div>
+      {title}
       {error && (
         <>
           <ErrorBanner error={error} />
@@ -103,8 +123,8 @@ export default function HomePage() {
               <tr>
                 <th className="stats-toggle-col"></th>
                 <th>Gruppo / receiver</th>
-                <th>Totale</th>
-                <th>Non lette</th>
+                <th className="num">Totale</th>
+                <th className="num">Non lette</th>
               </tr>
             </thead>
             <tbody>
@@ -135,15 +155,15 @@ export default function HomePage() {
                           {group.group_name}
                         </Link>
                       </td>
-                      <td>{group.total}</td>
-                      <td>{group.unread_count}</td>
+                      <td className="num">{group.total}</td>
+                      <td className="num">{group.unread_count}</td>
                     </tr>
                     {open &&
                       receivers.map((receiver) => (
                         <tr key={receiver.receiver_id} className="stats-receiver-row">
                           <td className="stats-toggle-col"></td>
                           <td>
-                            <span className="status-cell">
+                            <span className="status-cell status-cell-wrap">
                               <Link
                                 to={`/notifications?group_id=${group.group_id}&receiver_id=${receiver.receiver_id}`}
                               >
@@ -154,8 +174,8 @@ export default function HomePage() {
                               )}
                             </span>
                           </td>
-                          <td>{receiver.total}</td>
-                          <td>{receiver.unread_count}</td>
+                          <td className="num">{receiver.total}</td>
+                          <td className="num">{receiver.unread_count}</td>
                         </tr>
                       ))}
                   </Fragment>
