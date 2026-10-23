@@ -54,8 +54,8 @@ services:
       MINIO_ROOT_USER: ${NOTIFYHUB_S3_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${NOTIFYHUB_S3_SECRET_KEY:-minioadmin}
     ports:
-      # sola console di amministrazione, solo da loopback
-      - "127.0.0.1:9001:9001"
+      # sola console di amministrazione, solo da loopback (lo smoke test usa un'altra porta)
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - miniodata:/data
     healthcheck:
@@ -184,7 +184,7 @@ services:
     command: ["python", "/scripts/mock_webhook.py"]
     ports:
       # lo smoke test interroga /_received da host, l'API lo raggiunge come mock-webhook:8899
-      - "127.0.0.1:8899:8899"
+      - "127.0.0.1:${SMOKE_WEBHOOK_PORT:-8899}:8899"
     volumes:
       - ./scripts:/scripts:ro
     networks: [notifyhub]
