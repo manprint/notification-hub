@@ -220,6 +220,7 @@ export default function ReceiverNotificationsTable({
         rows={rows}
         rowKey={(n) => n.id}
         loading={isLoading}
+        error={error}
         hasMore={hasNextPage}
         loadingMore={isFetchingNextPage}
         onLoadMore={() => void fetchNextPage()}

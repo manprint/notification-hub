@@ -185,6 +185,7 @@ export default function AuditPage() {
         rows={rows}
         rowKey={(event) => event.id}
         loading={isLoading}
+        error={error}
         emptyMessage="Nessun evento con questi filtri."
         hasMore={hasNextPage}
         onLoadMore={() => void fetchNextPage()}

@@ -239,6 +239,7 @@ export default function DeliveriesPage() {
         rows={rows}
         rowKey={(d) => d.id}
         loading={isLoading}
+        error={error}
         emptyMessage="Nessuna consegna trovata: nessuna notifica ha ancora superato la soglia di un canale."
         hasMore={hasNextPage}
         onLoadMore={() => void fetchNextPage()}

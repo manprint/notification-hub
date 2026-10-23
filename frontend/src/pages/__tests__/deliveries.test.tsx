@@ -32,6 +32,28 @@ describe("DeliveriesPage", () => {
   });
 });
 
+describe("DeliveriesPage errori", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setRefreshToken("refresh-token-fixture");
+  });
+
+  it("se la lettura fallisce non dice «nessuna consegna»: è un errore, non un esito", async () => {
+    server.use(
+      http.get("/api/v1/deliveries", () =>
+        HttpResponse.json(
+          { type: "/problems/internal-error", title: "Internal Server Error", status: 500 },
+          { status: 500, headers: { "Content-Type": "application/problem+json" } },
+        ),
+      ),
+    );
+    renderWithProviders(<DeliveriesPage />);
+
+    await screen.findByText("Elenco non disponibile per un errore di caricamento.");
+    expect(screen.queryByText(/Nessuna consegna trovata/)).toBeNull();
+  });
+});
+
 describe("DeliveriesPage leggibilità", () => {
   beforeEach(() => {
     localStorage.clear();

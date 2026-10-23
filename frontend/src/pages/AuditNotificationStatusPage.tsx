@@ -189,6 +189,7 @@ export default function AuditNotificationStatusPage() {
         rows={rows}
         rowKey={(event) => event.id}
         loading={isLoading}
+        error={error}
         emptyMessage="Nessuna lettura o verifica con questi filtri."
         hasMore={hasNextPage}
         onLoadMore={() => void fetchNextPage()}
