@@ -13,7 +13,6 @@ from app.core.config import get_settings
 from app.core.errors import PROBLEM_TYPES, Problem, ingest_not_found
 from app.core.logging import get_logger
 from app.core.metrics import ingestion_requests_total
-from app.core.redis import get_redis
 from app.db.session import tenant_session
 from app.db.types import TenantStatus
 from app.schemas.ingestion import IngestResponse
@@ -21,6 +20,7 @@ from app.services.idempotency import release, reserve, store_response
 from app.services.ingest import (
     persist_notification,
     prepare_notification,
+    record_rejected_send,
     resolve_receiver_by_slug,
 )
 from app.services.quota import enforce_tenant_quotas
@@ -141,9 +141,7 @@ async def _ingest(
         raise ingest_not_found()
 
     if receiver.status != "active":
-        redis = await get_redis()
-        await redis.incr(f"ingest:rejected:{receiver.id}")
-        await redis.expire(f"ingest:rejected:{receiver.id}", 86400)
+        await record_rejected_send(receiver.id)
         raise ingest_not_found()
 
     # Il tenant sospeso deve rispondere byte-identico al receiver disabilitato

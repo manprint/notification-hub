@@ -4,9 +4,10 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.redis import get_redis
 from app.db.session import ingest_session
 from app.db.types import NotificationPhase, NotificationStatus, Severity, SeveritySource
 from app.models.receiver import Receiver
@@ -15,6 +16,22 @@ from app.services.severity import resolve_severity_async
 from app.services.storage import object_key, should_use_object_storage
 
 CONTENT_PREVIEW_CHARS = 4096
+REJECTED_WINDOW_SECONDS = 86400
+
+
+async def record_rejected_send(receiver_id: uuid.UUID) -> None:
+    """Conta un invio verso un receiver disabilitato, per la finestra di 24 ore
+    mostrata in dashboard (spec 9.1).
+
+    La scadenza si fissa alla prima bocciatura e non scivola a ogni rifiuto:
+    SET NX crea la chiave con il suo TTL (senza toccarla se esiste gia), INCR la
+    conta. Le due istruzioni stanno in una sola transazione Redis."""
+    redis = await get_redis()
+    key = f"ingest:rejected:{receiver_id}"
+    pipe = redis.pipeline(transaction=True)
+    pipe.set(key, 0, nx=True, ex=REJECTED_WINDOW_SECONDS)
+    pipe.incr(key)
+    await pipe.execute()
 
 
 @dataclass
@@ -210,11 +227,21 @@ async def persist_notification(
     # job e' partito, non che ha concluso. Se contasse come conclusione la
     # sorveglianza tacerebbe proprio nel caso peggiore, il job morto a meta'
     # esecuzione insieme alla macchina.
-    heartbeat = (
-        {"last_start_at": notification.received_at}
-        if prepared.phase is NotificationPhase.START
-        else {"last_notification_at": notification.received_at}
-    )
+    # GREATEST: l'istante non arretra mai. Due ingestion concorrenti sullo stesso
+    # receiver possono prendere il timestamp in un ordine e committare nell'altro:
+    # senza GREATEST il piu vecchio sovrascriverebbe il piu recente. GREATEST ignora
+    # il NULL, quindi il primo battito riempie la colonna ancora vuota.
+    heartbeat: dict[str, object]
+    if prepared.phase is NotificationPhase.START:
+        heartbeat = {
+            "last_start_at": func.greatest(Receiver.last_start_at, notification.received_at)
+        }
+    else:
+        heartbeat = {
+            "last_notification_at": func.greatest(
+                Receiver.last_notification_at, notification.received_at
+            )
+        }
     await session.execute(
         update(Receiver)
         .where(Receiver.id == receiver_id, Receiver.tenant_id == tenant_id)
