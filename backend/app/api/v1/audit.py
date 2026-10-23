@@ -336,12 +336,19 @@ async def export_audit_events(
         media_type = "text/csv"
         filename = f"audit-{stamp}.csv"
 
-    async def _righe(session: AsyncSession) -> AsyncIterator[bytes]:
+    async def _righe() -> AsyncIterator[bytes]:
         # Le righe escono a blocchi in ordine (occurred_at, id) DESC, con un
         # cursore sull'ultima di ciascun blocco: l'export intero non sta mai in
         # memoria. Il blocco e' piccolo perche' una riga puo' portare fino a
         # BULK_IDS_CAP id. Lo stesso contesto che si legge a schermo: gruppo e
         # receiver si risolvono per blocco, non per tutte le righe.
+        #
+        # Ogni blocco apre e chiude la sua sessione prima di consegnare i byte: un
+        # download lento non tiene una connessione del pool per tutta la sua durata
+        # (con qualche export lento il pool si esauriva e il resto aspettava). Il
+        # cursore keyset rende i blocchi indipendenti. Di conseguenza l'export non
+        # legge uno snapshot unico: gli eventi nuovi entrano in testa all'ordine DESC
+        # e non spostano la pagina successiva.
         if format == "json":
             yield b"["
         else:
@@ -358,18 +365,20 @@ async def export_audit_events(
                 blocco = blocco.where(
                     func.row(AuditEvent.occurred_at, AuditEvent.id) < func.row(*cursore)
                 )
-            result = await session.execute(
-                blocco.order_by(AuditEvent.occurred_at.desc(), AuditEvent.id.desc()).limit(
-                    EXPORT_BATCH_ROWS
+            async with tenant_session(tenant_id) as sessione:
+                result = await sessione.execute(
+                    blocco.order_by(AuditEvent.occurred_at.desc(), AuditEvent.id.desc()).limit(
+                        EXPORT_BATCH_ROWS
+                    )
                 )
-            )
-            righe = result.scalars().all()
-            if not righe:
-                break
-            posizioni = await resolve_locations(session, righe)
-            records = [
-                _to_out(row, posizioni.get(row.id, EMPTY)).model_dump(mode="json") for row in righe
-            ]
+                righe = result.scalars().all()
+                if not righe:
+                    break
+                posizioni = await resolve_locations(sessione, righe)
+                records = [
+                    _to_out(row, posizioni.get(row.id, EMPTY)).model_dump(mode="json")
+                    for row in righe
+                ]
             if format == "json":
                 parti = [json.dumps(record, ensure_ascii=False) for record in records]
                 yield (("" if primo else ", ") + ", ".join(parti)).encode()
@@ -388,16 +397,11 @@ async def export_audit_events(
         if format == "json":
             yield b"]"
 
-    async def _stream() -> AsyncIterator[bytes]:
-        # La sessione della richiesta chiude (e fa il commit) prima che il corpo parta,
-        # perche' `db` ha scope "function": lo streaming legge con una sessione sua,
-        # sullo stesso tenant, e cosi' RLS resta attiva per tutta la lettura.
-        async with tenant_session(tenant_id) as sessione:
-            async for blocco in _righe(sessione):
-                yield blocco
-
+    # Il corpo non usa la sessione della richiesta: `db` ha scope "function" e chiude
+    # prima che il corpo parta. Ogni blocco di _righe apre la sua sessione sullo
+    # stesso tenant, e cosi' RLS resta attiva per tutta la lettura.
     return StreamingResponse(
-        _stream(),
+        _righe(),
         media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
