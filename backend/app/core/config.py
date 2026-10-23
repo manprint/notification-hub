@@ -7,7 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     notifyhub_secret_key: str
-    database_url_owner: str
+    # Usato solo da Alembic (che legge os.environ): api, worker e beat non lo ricevono.
+    database_url_owner: str | None = None
     database_url_app: str
     database_url_auth: str
     database_url_ingest: str

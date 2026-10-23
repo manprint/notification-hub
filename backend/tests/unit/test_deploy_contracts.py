@@ -109,3 +109,17 @@ def test_url_pubblica_di_default_e_quella_di_loopback_senza_porta_di_sviluppo(fi
     from app.core.urls import DEFAULT_BASE_URL
 
     assert _valore_env(REPO / file_env, "NOTIFYHUB_PUBLIC_BASE_URL") == DEFAULT_BASE_URL
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("servizio", ["api", "worker", "beat"])
+def test_solo_le_migrazioni_ricevono_il_ruolo_owner(servizio):
+    # Il ruolo owner fa DDL e puo' disattivare l'RLS: a runtime non serve e non deve arrivare.
+    env = _compose()["services"][servizio]["environment"]
+    assert env["DATABASE_URL_OWNER"] == ""
+
+
+@pytest.mark.unit
+def test_migrate_ha_la_url_del_ruolo_owner():
+    env = _compose()["services"]["migrate"]["environment"]
+    assert env["DATABASE_URL_OWNER"].startswith("postgresql+asyncpg://notifyhub_owner:")

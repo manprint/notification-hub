@@ -156,3 +156,12 @@ def test_file_env_tracciati_non_usano_la_chiave_di_esempio(file_env):
     assert len(chiavi) == 1
     assert len(chiavi[0]) >= 32
     assert not chiavi[0].lower().startswith("change-me")
+
+
+@pytest.mark.unit
+def test_runtime_si_avvia_senza_il_ruolo_owner(monkeypatch):
+    _ambiente_minimo(monkeypatch, "a" * 32)
+    monkeypatch.setenv("DATABASE_URL_OWNER", "")  # come nel compose per api, worker e beat
+
+    s = Settings(_env_file=None)
+    assert s.database_url_owner is None

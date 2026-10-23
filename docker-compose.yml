@@ -116,6 +116,9 @@ services:
     env_file: .env
     environment:
       <<: *db_env
+      # Solo le migrazioni usano il ruolo owner: qui la variabile resta vuota (env_ignore_empty la
+      # tratta come assente) e la password di .env, caricata da env_file, non arriva al container.
+      DATABASE_URL_OWNER: ""
       NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST: ${NOTIFYHUB_WEBHOOK_HOST_ALLOWLIST:-hooks.slack.com,chat.googleapis.com}
       # Metriche multiprocess condivise con il worker: il server 9100 le somma (vedi core/metrics.py).
       PROMETHEUS_MULTIPROC_DIR: /var/lib/notifyhub/metrics
@@ -156,6 +159,7 @@ services:
     env_file: .env
     environment:
       <<: *db_env
+      DATABASE_URL_OWNER: ""
       PROMETHEUS_MULTIPROC_DIR: /var/lib/notifyhub/metrics
     volumes:
       - metricsdata:/var/lib/notifyhub/metrics
@@ -173,7 +177,9 @@ services:
       redis:
         condition: service_healthy
     env_file: .env
-    environment: *db_env
+    environment:
+      <<: *db_env
+      DATABASE_URL_OWNER: ""
     networks: [notifyhub]
     restart: unless-stopped
 
