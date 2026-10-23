@@ -19,11 +19,24 @@ import SeverityBadge from "./SeverityBadge";
 import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
 import { formatDurationSeconds } from "../lib/duration";
-import { formatDateTime } from "../lib/format";
+import { formatDateTime, severityLabel } from "../lib/format";
 import { MEMBER_ROLES, hasRole } from "../lib/roles";
 import { severitySourceLabel } from "../lib/severitySource";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
+
+/** Errore da mostrare quando la lettura fresca smentisce la schermata: l'ordine
+ *  non si invia. Ha la forma di un ApiError, così il banner lo tratta come gli
+ *  altri errori. */
+function staleOrderError(detail: string): ApiError {
+  return {
+    status: 0,
+    type: "/problems/generic",
+    title: "Ordine non modificato",
+    detail,
+    extra: {},
+  };
+}
 
 // Etichette condivise con l'elenco e il dettaglio delle notifiche: la stessa
 // origine non puo' chiamarsi in due modi diversi in due schermate.
@@ -141,7 +154,7 @@ function RuleForm({
     <form noValidate onSubmit={(event) => void handleSubmit(event)}>
       {error && <ErrorBanner error={error} />}
       <div className="toolbar">
-        <label className="inline-check">
+        <label className="inline-check pattern-field">
           <span>Pattern</span>
           <input
             aria-describedby={patternError ? patternErrorId : undefined}
@@ -159,7 +172,7 @@ function RuleForm({
           <select value={severity} onChange={(event) => setSeverity(event.target.value as Severity)}>
             {SEVERITIES.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {severityLabel(s)}
               </option>
             ))}
           </select>
@@ -206,9 +219,9 @@ function EffectiveChain({ receiverId }: { receiverId: string }) {
   if (isLoading || !data) return <p className="card-hint">Caricamento della catena…</p>;
   if (data.length === 0) {
     return (
-      <p className="card-hint">
-        Nessuna regola attiva: ogni notifica riceve la severity di default del receiver.
-      </p>
+      <EmptyState
+        message="Nessuna regola attiva: ogni notifica riceve la severity di default del receiver."
+      />
     );
   }
 
@@ -228,7 +241,7 @@ function EffectiveChain({ receiverId }: { receiverId: string }) {
             <tr key={item.rule_id}>
               <td>{item.position}</td>
               <td>
-                <code>{item.pattern}</code>
+                <code className="rule-pattern">{item.pattern}</code>
               </td>
               <td>
                 <SeverityBadge severity={item.severity} />
@@ -311,7 +324,7 @@ function ReplayPanel({ receiverId }: { receiverId: string }) {
                     </td>
                     <td>
                       <SeverityBadge severity={item.replayed_severity} />
-                      {item.changed && <span className="status-pill">cambia</span>}
+                      {item.changed && <span className="status-pill">Cambia</span>}
                       <div className="cell-diagnostics">
                         {sourceLabel(item.replayed_source)}
                         {item.matched_preset_name && <> «{item.matched_preset_name}»</>}
@@ -379,18 +392,29 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
     }, { success });
   }
 
-  function move(index: number, delta: number) {
-    const next = [...ordered];
-    const target = index + delta;
-    if (target < 0 || target >= next.length) return;
-    [next[index], next[target]] = [next[target], next[index]];
-    void mutate(
-      () =>
-        apiPut(`/api/v1/receivers/${receiverId}/severity-rules/order`, {
-          rule_ids: next.map((r) => r.id),
-        }),
-      "Ordine delle regole aggiornato.",
-    );
+  function move(ruleId: string, delta: number) {
+    void mutate(async () => {
+      // Lettura fresca dal server, non la cache: il nuovo ordine si costruisce
+      // da quello che c'è davvero adesso. Da una cache vecchia il PUT
+      // riporterebbe indietro la modifica di chi ha riordinato per primo.
+      const fresh = await queryClient.fetchQuery({
+        queryKey: ["severity-rules", receiverId],
+        queryFn: () => apiGet<SeverityRuleOut[]>(`/api/v1/receivers/${receiverId}/severity-rules`),
+        staleTime: 0,
+      });
+      const next = [...fresh];
+      const index = next.findIndex((r) => r.id === ruleId);
+      const target = index + delta;
+      if (index === -1 || target < 0 || target >= next.length) {
+        throw staleOrderError(
+          "L'elenco delle regole è cambiato nel frattempo: ricontrolla l'ordine e riprova.",
+        );
+      }
+      [next[index], next[target]] = [next[target], next[index]];
+      await apiPut(`/api/v1/receivers/${receiverId}/severity-rules/order`, {
+        rule_ids: next.map((r) => r.id),
+      });
+    }, "Ordine delle regole aggiornato.");
   }
 
   async function runTest(event: React.SubmitEvent<HTMLFormElement>) {
@@ -441,7 +465,9 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
         </div>
         <SeverityChainSummary
           receiver={receiver}
-          activeRules={rules === undefined ? null : ordered.filter((r) => r.enabled).length}
+          activeRules={
+            rules === undefined || rulesError ? null : ordered.filter((r) => r.enabled).length
+          }
         />
       </div>
 
@@ -467,7 +493,9 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
                   <th>Severity</th>
                   <th>Maiuscole</th>
                   <th>Stato</th>
-                  <th></th>
+                  <th>
+                    <span className="sr-only">Azioni</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -495,14 +523,14 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
                               <button
                                 aria-label={`Sposta su ${rule.pattern}`}
                                 disabled={index === 0 || busy !== null}
-                                onClick={() => move(index, -1)}
+                                onClick={() => move(rule.id, -1)}
                               >
                                 ↑
                               </button>
                               <button
                                 aria-label={`Sposta giù ${rule.pattern}`}
                                 disabled={index === ordered.length - 1 || busy !== null}
-                                onClick={() => move(index, 1)}
+                                onClick={() => move(rule.id, 1)}
                               >
                                 ↓
                               </button>
@@ -514,7 +542,7 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
                         )}
                       </td>
                       <td>
-                        <code>{rule.pattern}</code>
+                        <code className="rule-pattern">{rule.pattern}</code>
                       </td>
                       <td>
                         <SeverityBadge severity={rule.severity} />
@@ -547,10 +575,15 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
                       <td>
                         {canManage && (
                           <div className="row-actions">
-                            <button disabled={busy !== null} onClick={() => setEditingId(rule.id)}>
+                            <button
+                              aria-label={`Modifica la regola ${rule.pattern}`}
+                              disabled={busy !== null}
+                              onClick={() => setEditingId(rule.id)}
+                            >
                               Modifica
                             </button>
                             <button
+                              aria-label={`Elimina la regola ${rule.pattern}`}
                               className="danger"
                               disabled={busy !== null}
                               onClick={() => setDeletingRule(rule)}
@@ -570,9 +603,9 @@ export default function SeverityRulesPanel({ receiver }: { receiver: ReceiverOut
         {rules === undefined && rulesLoading && (
           <p className="card-hint">Caricamento delle regole…</p>
         )}
-        {rules !== undefined && ordered.length === 0 && (
+        {rules !== undefined && !rulesError && ordered.length === 0 && (
           <EmptyState
-            message={`Nessuna regola: ogni notifica riceve la severity di default del receiver (${receiver.default_severity}).`}
+            message={`Nessuna regola: ogni notifica riceve la severity di default del receiver (${severityLabel(receiver.default_severity)}).`}
           />
         )}
 

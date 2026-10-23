@@ -177,6 +177,17 @@ describe("cascata: regole che devono vincere sui pulsanti", () => {
     const mobile = rules.filter((r) => r.selectors.includes(".app-sidebar"));
     expect(mobile.some((r) => r.decls["grid-template-columns"] === "minmax(0, 1fr) auto")).toBe(true);
   });
+
+  it("il pattern RE2 in tabella ha una larghezza minima: la colonna non si schiaccia a un carattere per riga", () => {
+    expect(declared("code.rule-pattern", "display")).toBe("inline-block");
+    expect(declared("code.rule-pattern", "min-width")).toBe("20ch");
+  });
+
+  it("l'etichetta del pattern prende lo spazio che resta nella toolbar, e il campo dentro la riempie", () => {
+    expect(declared(".pattern-field", "flex")).toBe("1 1 18rem");
+    expect(declared(".grow-input", "width")).toBe("100%");
+    expect(declared(".grow-input", "min-width")).toBe("0");
+  });
 });
 
 describe("distanze e breakpoint", () => {
