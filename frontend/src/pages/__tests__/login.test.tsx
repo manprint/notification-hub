@@ -160,4 +160,19 @@ describe("LoginPage", () => {
     expect(screen.getByRole("button", { name: "Accedi" })).toBeEnabled();
     expect(screen.getByLabelText("Email")).toBeInTheDocument();
   });
+
+  it("la pagina di accesso e' un <main>, come il resto dell'app", () => {
+    renderWithProviders(<LoginPage />);
+
+    expect(screen.getByRole("main")).toHaveClass("auth-shell");
+  });
+
+  it("con una sessione salvata il caricamento sta nella stessa cornice del login", () => {
+    localStorage.setItem("notifyhub.refresh_token", "refresh-salvato");
+    server.use(http.get("/api/v1/auth/me", () => new Promise(() => {})));
+    renderWithProviders(<LoginPage />);
+
+    expect(screen.getByText("Caricamento…").closest("main")).toHaveClass("auth-shell");
+  });
+
 });
