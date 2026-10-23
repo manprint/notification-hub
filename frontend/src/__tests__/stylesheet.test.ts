@@ -183,7 +183,7 @@ describe("cascata: regole che devono vincere sui pulsanti", () => {
     expect(declared(".audit-table .audit-chi", "white-space")).toBe("nowrap");
   });
 
-  it("sotto i 760px Origine e Ricevuta si nascondono e le loro informazioni restano nel contenuto", () => {
+  it("sotto i 760px Origine e Ricevuta si nascondono e il riepilogo nel contenuto diventa visibile", () => {
     expect(declared(".receiver-notifications .table-wrap th:nth-child(3)", "display")).toBe("none");
     expect(declared(".receiver-notifications .table-wrap td:nth-child(5)", "display")).toBe("none");
     const base = rules.some(

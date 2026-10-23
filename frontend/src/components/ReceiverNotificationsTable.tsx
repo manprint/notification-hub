@@ -148,6 +148,7 @@ export default function ReceiverNotificationsTable({
           <div className="receiver-narrow-info">
             {severitySourceLabel(n.severity_source)} · {formatDate(n.received_at)}{" "}
             {formatTime(n.received_at)}
+            {n.phase === "start" && ` · ${phaseLabel(n.phase)}`}
           </div>
         </div>
       ),
