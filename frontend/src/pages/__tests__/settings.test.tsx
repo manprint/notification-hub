@@ -212,7 +212,7 @@ describe("SettingsPage", () => {
 
     // Prima il server rispondeva 422 in inglese, o 500 oltre il bigint.
     expect(await screen.findByText("Il massimo è 2147483647.")).toBeInTheDocument();
-    expect(screen.getByText("Il massimo è 9223372036854775807.")).toBeInTheDocument();
+    expect(screen.getByText("Il massimo è 9007199254740991.")).toBeInTheDocument();
     expect(retention).toHaveAttribute("aria-invalid", "true");
     expect(bodies).toEqual([]);
   });
@@ -226,8 +226,53 @@ describe("SettingsPage", () => {
     const spazio = screen.getByLabelText("Spazio massimo (byte)");
     await user.type(spazio, "9223372036854775808");
     await user.click(screen.getByRole("button", { name: "Salva" }));
-    expect(await screen.findByText("Il massimo è 9223372036854775807.")).toBeInTheDocument();
+    expect(await screen.findByText("Il massimo è 9007199254740991.")).toBeInTheDocument();
     expect(bodies).toEqual([]);
+  });
+
+  it("lo spazio al tetto esatto parte con le cifre intere, senza arrotondarle", async () => {
+    // Il JSON di un numero JS arrotonda oltre 2^53: 9223372036854775807 partiva
+    // come 9223372036854776000 e il backend lo rifiutava con 422. Qui il massimo
+    // è 2^53-1, che si legge esatto: il corpo grezzo deve contenere quelle cifre.
+    const raw: string[] = [];
+    server.use(
+      http.patch("/api/v1/tenant", async ({ request }) => {
+        raw.push(await request.text());
+        return HttpResponse.json(fixtureTenant);
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<SettingsPage />);
+
+    await user.click(await screen.findByRole("checkbox", { name: "Spazio illimitato" }));
+    const spazio = screen.getByLabelText("Spazio massimo (byte)");
+    await user.type(spazio, "9007199254740991");
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+    await waitFor(() => expect(raw).toHaveLength(1));
+    expect(raw[0]).toBe('{"max_storage_bytes":9007199254740991}');
+  });
+
+  it("il valore 9223372036854775807 si ferma sul campo invece di partire arrotondato", async () => {
+    const bodies = catturaPatch();
+    const user = userEvent.setup();
+    renderWithProviders(<SettingsPage />);
+
+    await user.click(await screen.findByRole("checkbox", { name: "Spazio illimitato" }));
+    await user.type(screen.getByLabelText("Spazio massimo (byte)"), "9223372036854775807");
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+    expect(await screen.findByText("Il massimo è 9007199254740991.")).toBeInTheDocument();
+    expect(bodies).toEqual([]);
+  });
+
+  it("gli zeri in testa non contano fra le cifre: 0…01 vale 1", async () => {
+    const bodies = catturaPatch();
+    const user = userEvent.setup();
+    renderWithProviders(<SettingsPage />);
+
+    await user.click(await screen.findByRole("checkbox", { name: "Spazio illimitato" }));
+    await user.type(screen.getByLabelText("Spazio massimo (byte)"), "00000000000000000000001");
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+    await waitFor(() => expect(bodies).toEqual([{ max_storage_bytes: 1 }]));
   });
 
   it("a salvataggio riuscito si svuota ciò che è partito, non ciò che si è digitato dopo", async () => {

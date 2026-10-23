@@ -30,8 +30,14 @@ interface Limite {
 
 /** Colonne integer di PostgreSQL: retention e quote giornaliere (schemas/tenant.py). */
 const LIMITE_INT4: Limite = { max: INT4_MAX, testo: String(INT4_MAX) };
-/** Colonna BIGINT: lo spazio massimo in byte (schemas/tenant.py, BIGINT_MAX). */
-const LIMITE_BIGINT: Limite = { max: 2 ** 63, testo: "9223372036854775807" };
+/** Colonna BIGINT: lo spazio massimo in byte (schemas/tenant.py, BIGINT_MAX).
+ *  Il JSON parte da un numero JS, esatto solo fino a 2^53-1: oltre il valore
+ *  verrebbe arrotondato (9223372036854775807 partirebbe come ...776000 e il
+ *  backend lo rifiuterebbe). Il tetto del campo qui è quindi 2^53-1. */
+const LIMITE_BIGINT: Limite = {
+  max: Number.MAX_SAFE_INTEGER,
+  testo: String(Number.MAX_SAFE_INTEGER),
+};
 /** Il cap corpo: il tetto del backend (TenantUpdate.max_body_bytes). */
 const LIMITE_CAP: Limite = {
   max: MAX_BODY_BYTES_LIMIT,
@@ -117,7 +123,8 @@ const NOT_A_COUNT = "Serve un numero intero maggiore di zero.";
  *  il campo. Il massimo sta qui, non solo nel backend: un valore fuori scala
  *  arriverebbe come 422 in inglese (o come 500 oltre il bigint). */
 function parseCount(raw: string, limite: Limite = LIMITE_INT4): number | string {
-  const text = raw.trim();
+  // Gli zeri in testa non sono cifre: "0000…01" vale 1.
+  const text = raw.trim().replace(/^0+(?=\d)/, "");
   const value = Number(text);
   if (!Number.isInteger(value) || value < 1) return NOT_A_COUNT;
   // Confronto sulle cifre, non sul numero: oltre 2^53 Number arrotonda e un

@@ -50,7 +50,9 @@ export default function LoginPage() {
   const rateLimited = error?.status === 429;
   const retryAfterSeconds =
     typeof error?.extra?.retry_after === "number" ? error.extra.retry_after : null;
-  const retryAfterMinutes = retryAfterSeconds !== null ? Math.ceil(retryAfterSeconds / 60) : null;
+  // Zero secondi non è un'attesa da dire: come assente, niente «fra 0 minuti».
+  const retryAfterMinutes =
+    retryAfterSeconds !== null && retryAfterSeconds > 0 ? Math.ceil(retryAfterSeconds / 60) : null;
   // Il singolare per un minuto solo: il backend manda secondi, e sotto i 60 il
   // conto arrotondato fa 1. Senza il valore non si inventa un numero.
   const messaggioRateLimit =

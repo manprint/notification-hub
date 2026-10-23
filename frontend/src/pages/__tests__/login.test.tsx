@@ -145,6 +145,30 @@ describe("LoginPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("retry_after zero non dice «fra 0 minuti»: come senza valore", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.post("/api/v1/auth/login", () =>
+        HttpResponse.json(
+          {
+            type: "/problems/rate-limited",
+            title: "Too Many Requests",
+            status: 429,
+            detail: "Too many login attempts.",
+            retry_after: 0,
+          },
+          { status: 429 },
+        ),
+      ),
+    );
+
+    renderWithProviders(<LoginPage />);
+    await compilaEInvia(user);
+
+    expect(await screen.findByText("Troppi tentativi, riprova più tardi.")).toBeInTheDocument();
+    expect(screen.queryByText(/fra 0 minuti/)).not.toBeInTheDocument();
+  });
+
   it("il pulsante si disabilita durante l'invio: niente doppio login", async () => {
     const user = userEvent.setup();
     let chiamate = 0;
