@@ -10,6 +10,7 @@ from app.db.session import async_session_factory_app, tenant_session
 from app.db.types import TenantStatus, UserRole, UserStatus
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.schemas.auth import PASSWORD_MIN_LENGTH
 from app.services.identity import find_user_by_email
 from app.services.severity_presets import sync_builtin_presets
 
@@ -36,6 +37,14 @@ def bootstrap(tenant_name: str, email: str, password: str) -> None:
     non crea schema, solo dati. Va lanciato con `ALLOW_PUBLIC_REGISTRATION=false`
     per creare il primo tenant di un'istanza self-hosted (spec 10.2).
     """
+    # Stessa policy della password dell'API: il primo owner e quello con piu
+    # privilegi e non deve sfuggire al limite minimo.
+    if len(password) < PASSWORD_MIN_LENGTH:
+        raise click.BadParameter(
+            f"deve avere almeno {PASSWORD_MIN_LENGTH} caratteri, come nell'API.",
+            param_hint="--password",
+        )
+
     # Stessa validazione dell'API, e forma normalizzata: un owner creato qui con
     # un'email che il login rifiuta sarebbe un utente inutilizzabile, rimediabile
     # solo con una UPDATE a mano (vedi app/core/emails.py).
@@ -64,10 +73,11 @@ async def _bootstrap(tenant_name: str, email: str, password: str) -> None:
     # tenants non ha RLS (spec 4): l'insert avviene sulla sessione app "nuda",
     # senza app.tenant_id impostato.
     async with async_session_factory_app() as session:
+        # Stesso slug di register: il nome non e univoco, lo slug si (suffisso).
         tenant = Tenant(
             id=tenant_id,
             name=tenant_name,
-            slug=tenant_name.lower().replace(" ", "-"),
+            slug=f"{tenant_name.lower().replace(' ', '-')}-{tenant_id.hex[:8]}",
             status=TenantStatus.ACTIVE,
         )
         session.add(tenant)

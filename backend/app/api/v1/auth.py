@@ -10,6 +10,7 @@ from app.api.deps import client_ip, current_claims, db, require_admin
 from app.core.config import get_settings
 from app.core.errors import PROBLEM_TYPES, Problem
 from app.core.security import (
+    DUMMY_PASSWORD_HASH,
     AccessClaims,
     create_access_token,
     hash_password,
@@ -49,6 +50,7 @@ from app.services.identity import (
     find_invitation,
     find_refresh_token,
     find_user_by_email,
+    lock_user_token_scope,
 )
 from app.services.ratelimit import sliding_window_hit
 
@@ -82,31 +84,33 @@ async def register(body: RegisterIn) -> dict:
             detail="Email already registered.",
         )
 
-    from app.db.session import async_session_factory_app
-
     tenant_id = uuid.uuid4()
-    async with async_session_factory_app() as session:
-        tenant = Tenant(
-            id=tenant_id,
-            name=body.tenant_name,
-            slug=f"{body.tenant_name.lower().replace(' ', '-')}-{tenant_id.hex[:8]}",
-            status=TenantStatus.ACTIVE,
-        )
-        session.add(tenant)
-        await session.commit()
-
-    password_hash = await asyncio.to_thread(hash_password, body.password)
     user_id = uuid.uuid4()
+    password_hash = await asyncio.to_thread(hash_password, body.password)
+
+    # Tenant e owner nella stessa transazione: se l'INSERT dell'owner fallisce (corsa
+    # su users.email), il tenant torna indietro con lui e non resta senza utenti.
+    # tenants non ha RLS, quindi si inserisce sulla sessione gia legata al tenant.
     async with tenant_session(tenant_id) as session:
-        user = User(
-            id=user_id,
-            tenant_id=tenant_id,
-            email=body.email,
-            password_hash=password_hash,
-            role=UserRole.OWNER,
-            status=UserStatus.ACTIVE,
+        session.add(
+            Tenant(
+                id=tenant_id,
+                name=body.tenant_name,
+                slug=f"{body.tenant_name.lower().replace(' ', '-')}-{tenant_id.hex[:8]}",
+                status=TenantStatus.ACTIVE,
+            )
         )
-        session.add(user)
+        await session.flush()
+        session.add(
+            User(
+                id=user_id,
+                tenant_id=tenant_id,
+                email=body.email,
+                password_hash=password_hash,
+                role=UserRole.OWNER,
+                status=UserStatus.ACTIVE,
+            )
+        )
 
     # Come nel bootstrap da CLI: un tenant nuovo trova i preset predefiniti gia
     # installati e modificabili, invece di una sezione Preset vuota.
@@ -163,7 +167,10 @@ async def login(body: LoginIn, request: Request) -> TokenPairOut:
     # chiave si riduce di fatto alla sola email ed e' di nuovo possibile bloccare
     # un account noto con dieci tentativi sbagliati — esattamente cio' che questa
     # chiave composta doveva impedire.
-    rate_limit_key = f"login_attempts:{body.email}:{client_ip(request)}"
+    # L'email si confronta in citext, quindi le grafie che differiscono solo per
+    # maiuscole sono lo stesso account: la chiave deve normalizzarle tutte (anche
+    # la parte locale, che normalize_email non tocca).
+    rate_limit_key = f"login_attempts:{body.email.lower()}:{client_ip(request)}"
     rate_limit = await sliding_window_hit(rate_limit_key, 10, 900)
 
     if not rate_limit.allowed:
@@ -177,10 +184,15 @@ async def login(body: LoginIn, request: Request) -> TokenPairOut:
 
     user_identity = await find_user_by_email(body.email)
 
-    password_matches = bool(
-        user_identity
-        and await asyncio.to_thread(verify_password, body.password, user_identity.password_hash)
-    )
+    if user_identity is None:
+        # Stesso lavoro di una verifica reale: senza, il 401 dell'email sconosciuta
+        # arriverebbe in pochi ms e quello dell'email registrata in centinaia.
+        await asyncio.to_thread(verify_password, body.password, DUMMY_PASSWORD_HASH)
+        password_matches = False
+    else:
+        password_matches = await asyncio.to_thread(
+            verify_password, body.password, user_identity.password_hash
+        )
     if not password_matches or user_identity is None:
         if user_identity is not None:
             await _record_login_failure(user_identity, request, "invalid_password")
@@ -203,61 +215,83 @@ async def login(body: LoginIn, request: Request) -> TokenPairOut:
     tenant_id = uuid.UUID(user_identity.tenant_id)
     async with tenant_session(tenant_id) as session:
         tenant_result = await session.execute(select(Tenant).where(Tenant.id == tenant_id))
-        tenant = tenant_result.scalar_one()
+        tenant_active = tenant_result.scalar_one().status == "active"
 
-        if tenant.status != "active":
-            await _record_login_failure(user_identity, request, "tenant_suspended")
-            raise Problem(
-                status=401,
-                type=PROBLEM_TYPES["unauthorized"],
-                title="Unauthorized",
-                detail="Invalid credentials.",
-            )
+    if not tenant_active:
+        # Fuori dalla sessione sopra: l'audit apre una connessione sua, e tenerne una
+        # in attesa di un'altra esaurirebbe il pool sotto carico.
+        await _record_login_failure(user_identity, request, "tenant_suspended")
+        raise Problem(
+            status=401,
+            type=PROBLEM_TYPES["unauthorized"],
+            title="Unauthorized",
+            detail="Invalid credentials.",
+        )
 
+    utente_disattivato = False
+    async with tenant_session(tenant_id) as session:
+        # Lock prima di rileggere lo stato: quello letto da find_user_by_email e'
+        # vecchio di tutto il tempo speso in argon2. Il lock attende una disabilitazione
+        # in corso, e il token non nasce dopo di lei. Stesso ordine di refresh, logout
+        # e rimozione: prima il tenant, poi l'utente.
+        await lock_user_token_scope(session, tenant_id, uuid.UUID(user_identity.id))
         user_result = await session.execute(
             select(User).where(User.id == uuid.UUID(user_identity.id))
         )
         user = user_result.scalar_one()
-        user.last_login_at = datetime.now(UTC)
+        if user.status != UserStatus.ACTIVE:
+            utente_disattivato = True
+        else:
+            user.last_login_at = datetime.now(UTC)
 
-        settings = get_settings()
-        refresh_plain, refresh_hash = new_refresh_token()
-        # Una famiglia nuova per ogni login: sessioni su dispositivi diversi
-        # non condividono la stessa famiglia, cosi il riuso rilevato su una
-        # non revoca le altre (spec 4.1, contrariamente al bug descritto in
-        # docs/REVIEW.md S4, dove family_id coincideva con lo user_id).
-        family_id = uuid.uuid4()
+            settings = get_settings()
+            refresh_plain, refresh_hash = new_refresh_token()
+            # Una famiglia nuova per ogni login: sessioni su dispositivi diversi
+            # non condividono la stessa famiglia, cosi il riuso rilevato su una
+            # non revoca le altre (spec 4.1, contrariamente al bug descritto in
+            # docs/REVIEW.md S4, dove family_id coincideva con lo user_id).
+            family_id = uuid.uuid4()
 
-        refresh_token_row = RefreshToken(
-            tenant_id=tenant_id,
-            user_id=user.id,
-            token_hash=refresh_hash,
-            jti=str(uuid.uuid4()),
-            family_id=family_id,
-            expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_ttl_days),
-            revoked_at=None,
-            user_agent=None,
-            ip=None,
+            refresh_token_row = RefreshToken(
+                tenant_id=tenant_id,
+                user_id=user.id,
+                token_hash=refresh_hash,
+                jti=str(uuid.uuid4()),
+                family_id=family_id,
+                expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_ttl_days),
+                revoked_at=None,
+                user_agent=None,
+                ip=None,
+            )
+            session.add(refresh_token_row)
+            await session.flush()
+
+            record_event(
+                session,
+                tenant_id=tenant_id,
+                actor_user_id=user.id,
+                actor_email=user.email,
+                actor_role=user.role,
+                action=ACTION_LOGIN,
+                resource_type="session",
+                resource_id=user.id,
+                resource_label=user.email,
+                ip=client_ip(request),
+                user_agent=request.headers.get("user-agent"),
+                request_id=current_request_id(),
+            )
+
+            access_token, expires_in = create_access_token(str(user.id), str(tenant_id), user.role)
+
+    if utente_disattivato:
+        # Fuori dalla sessione sopra, come il rifiuto per tenant sospeso.
+        await _record_login_failure(user_identity, request, "user_disabled")
+        raise Problem(
+            status=401,
+            type=PROBLEM_TYPES["unauthorized"],
+            title="Unauthorized",
+            detail="Invalid credentials.",
         )
-        session.add(refresh_token_row)
-        await session.flush()
-
-        record_event(
-            session,
-            tenant_id=tenant_id,
-            actor_user_id=user.id,
-            actor_email=user.email,
-            actor_role=user.role,
-            action=ACTION_LOGIN,
-            resource_type="session",
-            resource_id=user.id,
-            resource_label=user.email,
-            ip=client_ip(request),
-            user_agent=request.headers.get("user-agent"),
-            request_id=current_request_id(),
-        )
-
-        access_token, expires_in = create_access_token(str(user.id), str(tenant_id), user.role)
 
     return TokenPairOut(
         access_token=access_token,
@@ -281,6 +315,8 @@ async def refresh(body: RefreshIn) -> TokenPairOut:
 
     tenant_id = uuid.UUID(refresh_token_identity.tenant_id)
     async with tenant_session(tenant_id) as session:
+        # Lock di tenant e utente prima del token: stesso ordine di logout e rimozione.
+        await lock_user_token_scope(session, tenant_id, uuid.UUID(refresh_token_identity.user_id))
         refresh_result = await session.execute(
             select(RefreshToken)
             .where(RefreshToken.id == uuid.UUID(refresh_token_identity.id))
@@ -371,6 +407,11 @@ async def logout(
     claims: AccessClaims = Depends(current_claims),  # noqa: B008
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> None:
+    # Stesso ordine di refresh e rimozione (tenant, utente, token). Il lock
+    # sull'utente attende le rotazioni in corso: i successori che ne escono
+    # sono visibili ai SELECT che seguono e vengono revocati nella stessa
+    # transazione, invece di sopravvivere al logout.
+    await lock_user_token_scope(session, uuid.UUID(claims.tid), uuid.UUID(claims.sub))
     if body.revoke_all:
         refresh_result = await session.execute(
             select(RefreshToken).where(
