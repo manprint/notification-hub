@@ -204,7 +204,10 @@ async def list_users(
     session: AsyncSession = Depends(db),  # noqa: B008
 ) -> list[UserOut]:
     tenant_id = uuid.UUID(claims.tid)
-    result = await session.execute(select(User).where(User.tenant_id == tenant_id))
+    # Ordine esplicito: senza ORDER BY la tabella cambia riga di posto a ogni UPDATE.
+    result = await session.execute(
+        select(User).where(User.tenant_id == tenant_id).order_by(User.email.asc(), User.id.asc())
+    )
     users = result.scalars().all()
 
     memberships_result = await session.execute(
