@@ -196,6 +196,7 @@ async def delete_channel(
         )
     await session.flush()
     await session.delete(channel)
+    await session.flush()
 
 
 @router.post("/channels/{channel_id}/test", response_model=DeliveryChannelTestOut)
@@ -396,6 +397,7 @@ async def delete_receiver_override(
     receiver = await _get_receiver_or_404(session, tenant_id, receiver_id)
     await assert_group_access(session, claims, receiver.group_id, write=True)
     await session.delete(override)
+    await session.flush()
 
 
 def _delivery_out(

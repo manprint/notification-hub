@@ -276,6 +276,7 @@ async def delete_preset(
     regole, senza restare con un riferimento morto."""
     preset = await _get_preset_or_404(session, uuid.UUID(claims.tid), preset_id)
     await session.delete(preset)
+    await session.flush()
 
 
 @router.post("/severity-presets/{preset_id}/reset", response_model=SeverityPresetDetailOut)
@@ -467,3 +468,4 @@ async def delete_preset_rule(
 ) -> None:
     rule = await _get_preset_rule_or_404(session, uuid.UUID(claims.tid), rule_id)
     await session.delete(rule)
+    await session.flush()

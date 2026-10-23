@@ -27,6 +27,7 @@ class Delivery(Base, UUIDPrimaryKeyMixin):
             postgresql_where="status='sending'",
         ),
         Index("ix_deliveries_tenant_id_channel_id_status", "tenant_id", "channel_id", "status"),
+        Index("ix_deliveries_channel_id", "channel_id"),
     )
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False)

@@ -397,6 +397,8 @@ async def delete_receiver(
     receiver = await _get_receiver_or_404(session, uuid.UUID(claims.tid), receiver_id)
     await assert_group_access(session, claims, receiver.group_id, write=True)
     await session.delete(receiver)
+    # Stesso motivo di delete_group: il flush porta gli errori di FK dentro la richiesta.
+    await session.flush()
 
 
 @router.post("/receivers/{receiver_id}/rotate-slug", response_model=ReceiverOut)
@@ -703,6 +705,7 @@ async def delete_severity_rule(
     receiver = await _get_receiver_or_404(session, tenant_id, rule.receiver_id)
     await assert_group_access(session, claims, receiver.group_id, write=True)
     await session.delete(rule)
+    await session.flush()
 
 
 @router.post("/receivers/{receiver_id}/test-severity", response_model=TestSeverityOut)

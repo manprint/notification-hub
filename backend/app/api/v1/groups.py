@@ -204,6 +204,9 @@ async def delete_group(
             detail="confirm must match the exact group name.",
         )
     await session.delete(group)
+    # Flush qui e non al commit dopo la risposta: una violazione di FK esce come
+    # 409 dall'handler globale invece di un 204 seguito da una cancellazione mancante.
+    await session.flush()
 
 
 @router.get("/{group_id}/channels", response_model=list[GroupChannelBindingOut])
@@ -301,3 +304,4 @@ async def unbind_group_channel(
             detail="Binding not found.",
         )
     await session.delete(binding)
+    await session.flush()
