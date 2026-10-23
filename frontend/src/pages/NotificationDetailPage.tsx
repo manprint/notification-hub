@@ -101,7 +101,8 @@ export default function NotificationDetailPage() {
       name: "delete",
       success: "Notifica eliminata.",
     });
-    if (ok) navigate("/notifications", { replace: true });
+    // Torna dove si era: con un gruppo e dei filtri aperti, la lista li ritrova.
+    if (ok) navigate(tornaA, { replace: true });
   }
 
   // L'endpoint del contenuto richiede il Bearer token: un <a href download>
@@ -254,7 +255,7 @@ export default function NotificationDetailPage() {
           {data.content === null && data.content_url && (
             <div className="card-header-actions">
               <button disabled={busyAction !== null} onClick={() => void downloadContent()}>
-                {busyAction === "download" ? "Download…" : "Scarica contenuto completo"}
+                {busyAction === "download" ? "Scaricamento…" : "Scarica contenuto completo"}
               </button>
             </div>
           )}
