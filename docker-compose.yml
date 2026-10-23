@@ -125,7 +125,7 @@ services:
       PROMETHEUS_MULTIPROC_DIR: /var/lib/notifyhub/metrics
       # Senza questo uvicorn ignora X-Forwarded-For di nginx, che e' sempre il peer: tutti i client
       # collassano su un solo IP (rate limit di ingestion e lockout del login condivisi).
-      FORWARDED_ALLOW_IPS: 172.30.250.10
+      FORWARDED_ALLOW_IPS: ${NOTIFYHUB_NGINX_IP:-172.30.250.10}
     expose:
       - "8000"
       - "9100"  # /metrics, mai instradata da nginx (spec 10.4)
@@ -196,7 +196,9 @@ services:
     networks:
       notifyhub:
         # IP fisso: l'API si fida di X-Forwarded-For solo da questo hop (FORWARDED_ALLOW_IPS).
-        ipv4_address: 172.30.250.10
+        # Subnet e IP sono sovrascrivibili: due progetti compose sullo stesso host (sviluppo e
+        # smoke test) o una rete gia' esistente sullo stesso intervallo andrebbero in conflitto.
+        ipv4_address: ${NOTIFYHUB_NGINX_IP:-172.30.250.10}
     restart: unless-stopped
 
   mock-webhook:
@@ -222,4 +224,4 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.30.250.0/24
+        - subnet: ${NOTIFYHUB_SUBNET:-172.30.250.0/24}

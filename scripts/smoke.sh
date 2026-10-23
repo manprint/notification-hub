@@ -31,6 +31,9 @@ WEBHOOK_BASE="http://localhost:${SMOKE_WEBHOOK_PORT}"
 export HTTP_PORT="${SMOKE_HTTP_PORT}"
 export SMOKE_WEBHOOK_PORT
 export MINIO_CONSOLE_PORT="${SMOKE_MINIO_CONSOLE_PORT}"
+# Rete propria: la subnet fissa del compose di sviluppo non puo' esistere due volte.
+export NOTIFYHUB_SUBNET="${SMOKE_SUBNET:-172.30.251.0/24}"
+export NOTIFYHUB_NGINX_IP="${SMOKE_NGINX_IP:-172.30.251.10}"
 COMPOSE=(docker compose -p "${SMOKE_PROJECT}" --profile smoke)
 
 assert_eq() {
