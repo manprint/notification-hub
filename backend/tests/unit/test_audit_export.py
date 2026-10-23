@@ -6,7 +6,9 @@ from app.api.v1.audit import _csv_cell
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("valore", ["=1+1", "+39 02", "-cmd|' /C calc'!A1", "@SUM(A1)", "\tx", "\rx"])
+@pytest.mark.parametrize(
+    "valore", ["=1+1", "+39 02", "-cmd|' /C calc'!A1", "@SUM(A1)", "\tx", "\rx"]
+)
 def test_cella_con_prefisso_da_formula_riceve_un_apice(valore: str) -> None:
     assert _csv_cell(valore) == f"'{valore}"
 
