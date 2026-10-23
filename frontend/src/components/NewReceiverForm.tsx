@@ -16,7 +16,7 @@ export default function NewReceiverForm({ groupId }: { groupId: string }) {
   const [nameError, setNameError] = useState<string | null>(null);
   const { busy, error, run } = useAction();
 
-  async function createReceiver(event: React.FormEvent) {
+  async function createReceiver(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (name.trim() === "") {
       setNameError("Il nome del receiver è obbligatorio.");

@@ -26,7 +26,7 @@ export default function AcceptInvitePage() {
   const [submitting, setSubmitting] = useState(false);
   const token = readTokenFromHash();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
     setValidationError(null);

@@ -190,7 +190,7 @@ function InviteForm({ roles }: { roles: UserRole[] }) {
   const [emailError, setEmailError] = useState<string | null>(null);
   const { busy, error, run } = useAction();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!email.includes("@")) {
       setEmailError("Indica un indirizzo email valido.");
@@ -275,7 +275,7 @@ function CreateUserForm({ groups, roles }: { groups: GroupOut[]; roles: UserRole
   const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
   const { busy, error, run } = useAction();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     // Le stesse due regole del backend, dette prima di spendere un giro di
     // rete e con il campo indicato invece di un 422 generico.

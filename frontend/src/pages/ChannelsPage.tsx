@@ -42,7 +42,7 @@ function CreateChannelForm() {
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; webhook?: string }>({});
   const { busy, error, run } = useAction();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const errors: { name?: string; webhook?: string } = {};
     if (name.trim() === "") errors.name = "Il nome del canale è obbligatorio.";
@@ -133,7 +133,7 @@ function EditChannelForm({ channel, onDone }: { channel: DeliveryChannelOut; onD
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; webhook?: string }>({});
   const { busy, error, run } = useAction();
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const errors: { name?: string; webhook?: string } = {};
     if (name.trim() === "") errors.name = "Il nome del canale è obbligatorio.";
@@ -433,7 +433,7 @@ function ReceiverOverrideForm({
     .map((r) => ({ id: r.id, label: receiverLabel(r, groupNames) }))
     .sort((a, b) => a.label.localeCompare(b.label, "it"));
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     await run(
       async () => {

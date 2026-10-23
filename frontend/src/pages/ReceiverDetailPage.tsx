@@ -223,7 +223,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
       ? nextCronExecutions(cron.trim(), timezone.trim() || "UTC")
       : [];
 
-  async function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
 
