@@ -72,3 +72,23 @@ def test_api_e_worker_condividono_la_directory_delle_metriche(servizio):
     # L'immagine crea la directory con l'utente dell'app, cosi' il volume nasce scrivibile.
     dockerfile = (REPO / "deploy/api/Dockerfile").read_text(encoding="utf-8")
     assert f"mkdir -p {cartella}" in dockerfile
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "frammento",
+    [
+        "location = /index.html {",
+        "expires -1;",
+        "location /assets/ {",
+        "try_files $uri =404;",
+        "server_tokens off;",
+        "gzip on;",
+        "add_header X-Frame-Options DENY always;",
+        "add_header X-Content-Type-Options nosniff always;",
+    ],
+)
+def test_nginx_spa_ha_cache_e_intestazioni(frammento):
+    # Il comportamento reale lo verifica deploy/nginx/test-headers.sh con nginx; qui il contratto testuale.
+    nginx = (REPO / "deploy/nginx/nginx.conf").read_text(encoding="utf-8")
+    assert frammento in nginx
