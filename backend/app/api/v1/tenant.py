@@ -3,12 +3,13 @@
 import uuid
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import current_claims, db, require_owner
 from app.core.errors import PROBLEM_TYPES, Problem
 from app.core.security import AccessClaims
+from app.models.group import Group
 from app.models.receiver import Receiver
 from app.models.tenant import Tenant
 from app.schemas.tenant import TenantOut, TenantUpdate
@@ -48,15 +49,27 @@ async def update_tenant(
     tenant = await lock_tenant_settings(session, tenant_id)
 
     if body.max_body_bytes is not None and body.max_body_bytes < tenant.max_body_bytes:
+        # Il nome di un receiver e' unico solo nel suo gruppo: il client riceve id e
+        # gruppo per distinguerli, e la chiave della lista non puo' essere il nome.
         conflicting_result = await session.execute(
-            select(Receiver.name, Receiver.max_body_bytes).where(
+            select(Receiver.id, Receiver.name, Group.name, Receiver.max_body_bytes)
+            .join(
+                Group,
+                and_(Group.id == Receiver.group_id, Group.tenant_id == tenant_id),
+            )
+            .where(
                 Receiver.tenant_id == tenant_id,
                 Receiver.max_body_bytes > body.max_body_bytes,
             )
         )
         conflicting = [
-            {"name": name, "max_body_bytes": max_body_bytes}
-            for name, max_body_bytes in conflicting_result.all()
+            {
+                "id": str(receiver_id),
+                "name": name,
+                "group_name": group_name,
+                "max_body_bytes": max_body_bytes,
+            }
+            for receiver_id, name, group_name, max_body_bytes in conflicting_result.all()
         ]
         if conflicting:
             raise Problem(
