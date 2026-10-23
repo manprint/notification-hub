@@ -377,7 +377,7 @@ describe("NotificationDetailPage", () => {
     );
     renderDetail("n1");
 
-    expect(await screen.findByText(/Notification not found/)).toBeInTheDocument();
+    expect(await screen.findByText(/Notifica non trovata/)).toBeInTheDocument();
   });
 
   it("porta allo storico di chi l'ha letta o verificata, senza esporre l'id", async () => {

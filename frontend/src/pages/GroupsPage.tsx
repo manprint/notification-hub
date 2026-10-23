@@ -282,6 +282,7 @@ export default function GroupsPage() {
         rows={filtered}
         rowKey={(g) => g.id}
         loading={isLoading}
+        error={error}
         emptyMessage={q ? "Nessun gruppo corrisponde alla ricerca." : "Nessun gruppo configurato."}
       />
 

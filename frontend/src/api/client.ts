@@ -131,6 +131,36 @@ async function safeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
 }
 
+/** Legge il corpo di una risposta. Se la lettura cade (connessione interrotta a
+ *  metà, JSON guasto) l'errore diventa quello di rete: un TypeError grezzo non
+ *  ha titolo, e il banner dell'errore resterebbe vuoto. */
+async function readBody<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch {
+    throw networkError();
+  }
+}
+
+function isApiError(error: unknown): error is ApiError {
+  if (typeof error !== "object" || error === null) return false;
+  const { status, title } = error as Partial<ApiError>;
+  return typeof status === "number" && typeof title === "string" && title !== "";
+}
+
+/** Un errore qualunque come ApiError: quello che il client non ha già
+ *  normalizzato (un'eccezione fuori dal client) diventa comunque leggibile. */
+export function asApiError(error: unknown): ApiError {
+  if (isApiError(error)) return error;
+  return {
+    status: 0,
+    type: "/problems/generic",
+    title: "Errore imprevisto",
+    detail: "",
+    extra: {},
+  };
+}
+
 async function toApiError(response: Response): Promise<ApiError> {
   let body: Record<string, unknown> = {};
   try {
@@ -204,7 +234,9 @@ async function refreshAccessToken(): Promise<boolean> {
       if (response.status === 401 || response.status === 403) break;
       if (!response.ok) throw await toApiError(response);
 
-      storeTokens((await response.json()) as { access_token: string; refresh_token: string });
+      storeTokens(
+        await readBody(() => response.json() as Promise<{ access_token: string; refresh_token: string }>),
+      );
       return true;
     }
     emitLogout();
@@ -274,7 +306,10 @@ async function rawRequest(
 
   const url = buildUrl(path, options.query);
   const headers: Record<string, string> = {};
-  if (accessToken && !withoutSession) headers.Authorization = `Bearer ${accessToken}`;
+  // Il token con cui parte questa richiesta: se al suo 401 la sessione è già
+  // stata rinnovata da un'altra richiesta, non serve un altro giro di rotazione.
+  const sentToken = accessToken;
+  if (sentToken && !withoutSession) headers.Authorization = `Bearer ${sentToken}`;
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
 
   const response = await safeFetch(url, {
@@ -284,6 +319,9 @@ async function rawRequest(
   });
 
   if (response.status === 401 && !isRetry && !withoutSession) {
+    if (accessToken !== null && accessToken !== sentToken) {
+      return rawRequest(method, path, options, true);
+    }
     const refreshed = await refreshOnce();
     if (refreshed) {
       return rawRequest(method, path, options, true);
@@ -311,13 +349,23 @@ async function request<T>(
 
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
-    return (await response.json()) as T;
+    return await readBody(() => response.json() as Promise<T>);
   }
-  return (await response.text()) as unknown as T;
+  const text = await readBody(() => response.text());
+  return text as unknown as T;
 }
 
 export function apiGet<T>(path: string, query?: RequestOptions["query"]): Promise<T> {
   return request<T>("GET", path, { query });
+}
+
+/** Una lettura con un token dato, senza passare dalla sessione di questa scheda:
+ *  serve al login, prima che il token venga salvato. Un 401 qui vuol dire che il
+ *  token non vale, non che la sessione è scaduta: niente refresh. */
+export async function apiGetWithToken<T>(token: string, path: string): Promise<T> {
+  const response = await safeFetch(path, { headers: { Authorization: `Bearer ${token}` } });
+  if (!response.ok) throw await toApiError(response);
+  return await readBody(() => response.json() as Promise<T>);
 }
 
 const FILENAME_MARKER = 'filename="';
@@ -341,7 +389,7 @@ export async function apiGetFile(
   fallbackFilename: string,
 ): Promise<{ content: string; filename: string }> {
   const response = await rawRequest("GET", path);
-  const content = await response.text();
+  const content = await readBody(() => response.text());
   return {
     content,
     filename: filenameFromDisposition(

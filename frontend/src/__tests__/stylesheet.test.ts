@@ -176,8 +176,10 @@ describe("cascata: regole che devono vincere sui pulsanti", () => {
 
 describe("distanze e breakpoint", () => {
   it("nessuna distanza (padding, margin, gap) scritta in px fuori dai token", () => {
+    // .sr-only usa il margine di -1px dell'idioma standard per i testi solo per lettori di
+    // schermo: non e' una distanza di layout.
     const hand = rules
-      .filter((r) => !r.selectors.includes(":root"))
+      .filter((r) => !r.selectors.includes(":root") && !r.selectors.includes(".sr-only"))
       .flatMap((r) =>
         Object.entries(r.decls)
           .filter(([p, v]) => /^(padding|margin|gap|row-gap|column-gap)/.test(p) && /\b\d+(\.\d+)?px\b/.test(v))

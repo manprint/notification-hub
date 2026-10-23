@@ -19,6 +19,7 @@ import ReceiverNotificationsTable, {
 import { useAction } from "../hooks/useAction";
 import { useDebounced } from "../hooks/useDebounced";
 import { useSession } from "../hooks/useSession";
+import { severityLabel } from "../lib/format";
 import { MEMBER_ROLES, hasRole } from "../lib/roles";
 import { SEVERITY_SOURCE_LABELS } from "../lib/severitySource";
 
@@ -223,7 +224,7 @@ export default function NotificationsPage() {
               <option value="">Qualsiasi severity</option>
               {SEVERITIES.map((s) => (
                 <option key={s} value={s}>
-                  {s}
+                  {severityLabel(s)}
                 </option>
               ))}
             </select>

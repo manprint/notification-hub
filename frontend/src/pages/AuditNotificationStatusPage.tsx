@@ -14,7 +14,7 @@ import {
   shortLabel,
   startOfDay,
 } from "../lib/audit";
-import { formatDate, formatTime } from "../lib/format";
+import { formatDate, formatTime, roleLabel } from "../lib/format";
 
 /** Vista dedicata a "segna come letta" e "segna come verificata": la stessa
  * tabella dell'audit, filtrata sulle azioni che rispondono alla domanda
@@ -65,7 +65,7 @@ export default function AuditNotificationStatusPage() {
         <div className="cell-preview">
           {event.actor_email}
           <div className="cell-diagnostics">
-            {event.actor_role}
+            {roleLabel(event.actor_role)}
             {event.ip ? ` · ${event.ip}` : ""}
           </div>
         </div>
@@ -194,6 +194,7 @@ export default function AuditNotificationStatusPage() {
         rows={rows}
         rowKey={(event) => event.id}
         loading={isLoading}
+        error={error}
         emptyMessage="Nessuna lettura o verifica con questi filtri."
         hasMore={hasNextPage}
         onLoadMore={() => void fetchNextPage()}

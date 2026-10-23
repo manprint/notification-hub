@@ -1,13 +1,6 @@
 import type { Severity } from "../api/types";
-
-const LABELS: Record<Severity, string> = {
-  critical: "Critica",
-  error: "Errore",
-  warning: "Attenzione",
-  info: "Info",
-  debug: "Debug",
-};
+import { severityLabel } from "../lib/format";
 
 export default function SeverityBadge({ severity }: { severity: Severity }) {
-  return <span className={`severity-badge severity-${severity}`}>{LABELS[severity]}</span>;
+  return <span className={`severity-badge severity-${severity}`}>{severityLabel(severity)}</span>;
 }

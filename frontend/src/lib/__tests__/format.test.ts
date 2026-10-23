@@ -10,6 +10,7 @@ import {
   formatInstantOr,
   formatTime,
   roleLabel,
+  severityLabel,
   userStatusLabel,
 } from "../format";
 
@@ -57,6 +58,21 @@ describe("format", () => {
   it("arrotonda a un decimale sopra il byte", () => {
     expect(formatBytes(1536)).toBe("1,5 kB");
     expect(formatBytes(1500)).toBe("1,5 kB");
+  });
+
+  it("appena sotto un confine l'arrotondamento passa all'unità successiva", () => {
+    // 1048575 byte sono 1023,999 kB: arrotondati non devono diventare "1024 kB".
+    expect(formatBytes(1048575)).toBe("1 MB");
+    expect(formatBytes(1073741823)).toBe("1 GB");
+    expect(formatBytes(1023)).toBe("1023 byte");
+    expect(formatBytes(1024 * 1024 - 1)).toBe("1 MB");
+  });
+
+  it("le severity si leggono con l'etichetta del badge, i valori ignoti passano", () => {
+    expect(severityLabel("critical")).toBe("Critica");
+    expect(severityLabel("warning")).toBe("Attenzione");
+    expect(severityLabel("debug")).toBe("Debug");
+    expect(severityLabel("nuova")).toBe("nuova");
   });
 
   it("ruoli e stati si leggono in italiano, i valori sconosciuti passano così come sono", () => {

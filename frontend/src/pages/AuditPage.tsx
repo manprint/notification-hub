@@ -14,7 +14,7 @@ import {
   resourceLabel,
   startOfDay,
 } from "../lib/audit";
-import { formatDate, formatTime } from "../lib/format";
+import { formatDate, formatTime, roleLabel } from "../lib/format";
 
 export default function AuditPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -62,7 +62,7 @@ export default function AuditPage() {
         <div className="cell-preview">
           {event.actor_email}
           <div className="cell-diagnostics">
-            {event.actor_role}
+            {roleLabel(event.actor_role)}
             {event.ip ? ` · ${event.ip}` : ""}
           </div>
         </div>
@@ -190,6 +190,7 @@ export default function AuditPage() {
         rows={rows}
         rowKey={(event) => event.id}
         loading={isLoading}
+        error={error}
         emptyMessage="Nessun evento con questi filtri."
         hasMore={hasNextPage}
         onLoadMore={() => void fetchNextPage()}

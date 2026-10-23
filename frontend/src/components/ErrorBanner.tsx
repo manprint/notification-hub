@@ -1,4 +1,5 @@
 import type { ApiError } from "../api/types";
+import { problemText, validationMessage } from "../lib/problemMessages";
 
 /** Un errore di validazione come lo scrive il backend in `extra.errors` di un
  *  422 (RequestValidationError di FastAPI, reso serializzabile da
@@ -21,7 +22,7 @@ function validationIssues(error: ApiError): ValidationIssue[] {
     if (typeof msg !== "string" || msg === "") return [];
     const parts = Array.isArray(loc) ? loc.map(String) : [];
     const path = parts.length > 1 && LOCATION_PREFIXES.has(parts[0]) ? parts.slice(1) : parts;
-    return [{ field: path.join("."), message: msg }];
+    return [{ field: path.join("."), message: validationMessage(msg) }];
   });
 }
 
@@ -29,9 +30,11 @@ export default function ErrorBanner({ error }: { error: ApiError }) {
   // Senza i dettagli un 422 diceva solo "Request validation failed.": vero, ma
   // non dice quale campo correggere.
   const issues = validationIssues(error);
+  const { message, detail } = problemText(error);
   return (
     <div className="error-banner" role="alert" aria-live="assertive">
-      {error.detail || error.title}
+      {message}
+      {detail && <span className="error-detail"> {detail}</span>}
       {issues.length > 0 && (
         <ul className="error-details">
           {issues.map((issue, index) => (

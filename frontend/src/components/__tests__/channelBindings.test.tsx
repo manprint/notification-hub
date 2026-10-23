@@ -116,7 +116,7 @@ describe("ChannelBindings", () => {
     const tendina = await within(await screen.findByRole("table")).findByLabelText(
       "Soglia di Slack #ops",
     );
-    expect(tendina).toHaveDisplayValue("Disattivato (soglia error)");
+    expect(tendina).toHaveDisplayValue("Disattivato (soglia Errore)");
     expect(within(rigaDi("Slack #ops")).getByText(/nessun inoltro/)).toBeInTheDocument();
 
     // Scegliere una soglia lo riattiva.
@@ -183,6 +183,8 @@ describe("ChannelBindings", () => {
     await waitFor(() => expect(inviato).not.toBeNull());
     expect(metodo).toBe("POST");
     expect(inviato).toEqual({ channel_id: "c1", min_severity: "critical" });
+    // L'avviso di esito dice la severity con la stessa parola del badge.
+    expect(await screen.findByText(/inoltro da Critica in su/)).toBeInTheDocument();
   });
 
   it("cambiare la soglia di un canale gia collegato usa PUT, non un secondo POST", async () => {

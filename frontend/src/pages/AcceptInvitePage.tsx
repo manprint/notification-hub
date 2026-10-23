@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { apiPost } from "../api/client";
+import { apiPost, asApiError } from "../api/client";
 import type { ApiError } from "../api/types";
 import ErrorBanner from "../components/ErrorBanner";
 import Field, { RequiredLegend, fieldAria } from "../components/Field";
 import { useToast } from "../hooks/useToast";
+import { problemMessage } from "../lib/problemMessages";
 
 function readTokenFromHash(): string | null {
   const hash = window.location.hash.replace(/^#/, "");
@@ -58,9 +59,9 @@ export default function AcceptInvitePage() {
       toast.success("Account attivato: ora puoi accedere.");
       navigate("/login", { replace: true });
     } catch (err) {
-      const apiError = err as ApiError;
+      const apiError = asApiError(err);
       setError(apiError);
-      toast.error(apiError.detail || apiError.title || "Attivazione non riuscita.");
+      toast.error(problemMessage(apiError));
     } finally {
       setSubmitting(false);
     }

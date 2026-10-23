@@ -1,5 +1,6 @@
 import { lazy, Suspense, type ReactNode } from "react";
 import { Link, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import ErrorBoundary from "./components/ErrorBoundary";
 import Layout from "./components/Layout";
 import RequireRole from "./components/RequireRole";
 import { SessionProvider, useSession } from "./hooks/useSession";
@@ -20,11 +21,29 @@ const ReceiverDetailPage = lazy(() => import("./pages/ReceiverDetailPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 const UsersPage = lazy(() => import("./pages/UsersPage"));
 
+/** Il server non ha risposto all'avvio: la sessione salvata resta, e chi la
+ *  possiede può riprovare senza rifare il login. */
+function ServerUnreachable({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="app-fallback" role="alert">
+      <h1>Server non raggiungibile</h1>
+      <p>
+        NotifyHub non risponde in questo momento. La sessione non è scaduta: riprova tra un
+        istante.
+      </p>
+      <button type="button" className="primary" onClick={onRetry}>
+        Riprova
+      </button>
+    </div>
+  );
+}
+
 function RequireAuth({ children }: { children: ReactNode }) {
-  const { user, loading } = useSession();
+  const { user, loading, unreachable, retryProfile } = useSession();
   const location = useLocation();
 
   if (loading) return <div className="empty-state">Caricamento…</div>;
+  if (!user && unreachable) return <ServerUnreachable onRetry={retryProfile} />;
   if (!user) {
     // La pagina chiesta viaggia con il redirect: un link a una notifica aperto
     // da una mail deve portare lì dopo il login, non al riepilogo.
@@ -50,8 +69,12 @@ function NotFound() {
 }
 
 export default function App() {
+  const location = useLocation();
   return (
     <SessionProvider>
+      {/* Un errore su una schermata non si porta dietro la successiva: al cambio
+          di indirizzo il confine riparte pulito (senza smontare il layout). */}
+      <ErrorBoundary resetKey={location.pathname}>
       <Suspense fallback={<div className="empty-state">Caricamento…</div>}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -145,6 +168,7 @@ export default function App() {
           </Route>
         </Routes>
       </Suspense>
+      </ErrorBoundary>
     </SessionProvider>
   );
 }

@@ -101,6 +101,7 @@ export default function GroupDetailPage() {
           rows={receivers ?? []}
           rowKey={(r) => r.id}
           loading={receiversLoading}
+          error={receiversError}
           emptyMessage="Nessun receiver in questo gruppo."
         />
       </div>

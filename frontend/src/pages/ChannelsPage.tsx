@@ -17,6 +17,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import ErrorBanner from "../components/ErrorBanner";
 import Field, { RequiredLegend, fieldAria } from "../components/Field";
 import Modal from "../components/Modal";
+import SeverityBadge from "../components/SeverityBadge";
 import { useAction } from "../hooks/useAction";
 import { useSession } from "../hooks/useSession";
 import { channelTypeLabel, formatDateTime } from "../lib/format";
@@ -379,7 +380,7 @@ function ReceiverOverridesPanel({
             <tr key={o.id}>
               <td>{channelName(o.channel_id)}</td>
               <td>{o.mode === "mute" ? "silenziato" : "soglia sostituita"}</td>
-              <td>{o.min_severity ?? "—"}</td>
+              <td>{o.min_severity ? <SeverityBadge severity={o.min_severity} /> : "—"}</td>
               <td>
                 <div className="row-actions">
                   <button
