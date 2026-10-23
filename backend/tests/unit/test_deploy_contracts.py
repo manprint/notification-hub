@@ -2,6 +2,7 @@
 
 import asyncio
 import ipaddress
+import re
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,10 @@ REPO = Path(__file__).resolve().parents[3]
 
 
 def _compose() -> dict:
-    return yaml.safe_load((REPO / "docker-compose.yml").read_text(encoding="utf-8"))
+    # Come `docker compose config` senza variabili nell'ambiente: ${VAR:-default} vale il default.
+    testo = (REPO / "docker-compose.yml").read_text(encoding="utf-8")
+    testo = re.sub(r"\$\{NOTIFYHUB_(?:NGINX_IP|SUBNET):-([^}]*)\}", r"\1", testo)
+    return yaml.safe_load(testo)
 
 
 async def _client_visto_dall_app(trusted_hosts: str, peer: str, xff: str) -> str:
