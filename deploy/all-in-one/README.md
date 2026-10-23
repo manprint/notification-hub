@@ -337,6 +337,8 @@ manuali sul database.
 - Nessun servizio applicativo gira da root: API, worker, beat, Redis, MinIO e i worker nginx
   girano come `notifyhub` (uid 1000), PostgreSQL come `postgres`. Restano root solo l'entrypoint,
   supervisord e il master nginx (per la porta 80).
+- nginx aggiunge a ogni risposta della SPA `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`
+  e `Referrer-Policy`, come nello stack Compose (`deploy/all-in-one/tests/test_nginx_headers.sh`).
 - I segreti generati stanno in `/data/config/secrets.env` con permessi `0600`, mai nell'immagine.
 - HTTPS non e' incluso: davanti al container va messo un reverse proxy con i certificati, e in quel
   caso vanno valorizzate `TRUSTED_PROXIES` e `NOTIFYHUB_PUBLIC_BASE_URL`.
