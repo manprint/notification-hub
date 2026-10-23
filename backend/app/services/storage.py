@@ -9,7 +9,7 @@ import aioboto3
 from aiobotocore.config import AioConfig
 from botocore.exceptions import ClientError
 
-from app.core.config import get_settings
+from app.core.config import get_settings, s3_timeouts
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -42,11 +42,7 @@ def _client_kwargs() -> dict:
         "aws_access_key_id": settings.notifyhub_s3_access_key,
         "aws_secret_access_key": settings.notifyhub_s3_secret_key,
         "region_name": settings.notifyhub_s3_region,
-        "config": AioConfig(
-            connect_timeout=settings.notifyhub_s3_connect_timeout_seconds,
-            read_timeout=settings.notifyhub_s3_read_timeout_seconds,
-            retries={"max_attempts": settings.notifyhub_s3_max_attempts},
-        ),
+        "config": AioConfig(**s3_timeouts(settings)),
     }
 
 

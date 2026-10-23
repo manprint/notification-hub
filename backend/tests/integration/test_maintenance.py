@@ -511,6 +511,8 @@ class _S3Finto:
 def test_drain_object_deletions_configura_timeout_e_tentativi_del_client_s3(monkeypatch):
     import boto3
 
+    from app.core.config import get_settings
+
     creati: list[dict] = []
 
     def client_finto(service: str, **kwargs: object) -> _S3Finto:
@@ -520,10 +522,47 @@ def test_drain_object_deletions_configura_timeout_e_tentativi_del_client_s3(monk
     monkeypatch.setattr(boto3, "client", client_finto)
     drain_object_deletions()
 
+    # Il drain legge le impostazioni NOTIFYHUB_S3_*, come il PUT in ingestion: nessun
+    # valore fisso nel job.
+    settings = get_settings()
     config = creati[0]["config"]
-    assert config.connect_timeout == 5
-    assert config.read_timeout == 15
-    assert config.retries["max_attempts"] == 2
+    assert config.connect_timeout == settings.notifyhub_s3_connect_timeout_seconds
+    assert config.read_timeout == settings.notifyhub_s3_read_timeout_seconds
+    assert config.retries["max_attempts"] == settings.notifyhub_s3_max_attempts
+
+
+@pytest.mark.integration
+def test_il_timeout_s3_segue_la_variabile_d_ambiente_nel_drain_e_nella_purge(monkeypatch):
+    """Un operatore che tara NOTIFYHUB_S3_READ_TIMEOUT_SECONDS deve vederlo applicato
+    sia al drain sia alla purge degli orfani (c-be-infra-06)."""
+    import boto3
+
+    from app.core.config import get_settings
+
+    creati: list[dict] = []
+
+    class _Interrotto(Exception):
+        pass
+
+    def client_finto(service: str, **kwargs: object):  # noqa: ANN202
+        creati.append(kwargs)
+        # La purge non serve oltre la creazione del client: basta fermarla qui.
+        raise _Interrotto()
+
+    monkeypatch.setattr(boto3, "client", client_finto)
+    monkeypatch.setenv("NOTIFYHUB_S3_READ_TIMEOUT_SECONDS", "42")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(_Interrotto):
+            purge_orphan_objects()
+        with pytest.raises(_Interrotto):
+            drain_object_deletions()
+    finally:
+        get_settings.cache_clear()
+
+    assert len(creati) == 2
+    for kwargs in creati:
+        assert kwargs["config"].read_timeout == 42
 
 
 @pytest.mark.integration

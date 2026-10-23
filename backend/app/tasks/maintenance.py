@@ -264,7 +264,7 @@ def drain_object_deletions() -> None:
     import boto3
     from botocore.config import Config
 
-    from app.core.config import get_settings
+    from app.core.config import get_settings, s3_timeouts
 
     settings = get_settings()
     s3 = boto3.client(
@@ -273,9 +273,10 @@ def drain_object_deletions() -> None:
         aws_access_key_id=settings.notifyhub_s3_access_key,
         aws_secret_access_key=settings.notifyhub_s3_secret_key,
         region_name=settings.notifyhub_s3_region,
-        # Timeout e tentativi espliciti: con MinIO irraggiungibile i default di
-        # botocore (60s per tentativo) tenevano la transazione aperta per ore.
-        config=Config(connect_timeout=5, read_timeout=15, retries={"max_attempts": 2}),
+        # Timeout e tentativi espliciti, dalle impostazioni NOTIFYHUB_S3_*: con MinIO
+        # irraggiungibile i default di botocore (60s per tentativo) tenevano la
+        # transazione aperta per ore.
+        config=Config(**s3_timeouts()),
     )
 
     with sync_session_factory() as session:
@@ -341,8 +342,9 @@ def purge_orphan_objects() -> None:
     corrispondente in notifications.storage_key: recupera i PUT riusciti con
     commit fallito (spec 6.5, 11)."""
     import boto3
+    from botocore.config import Config
 
-    from app.core.config import get_settings
+    from app.core.config import get_settings, s3_timeouts
 
     settings = get_settings()
     s3 = boto3.client(
@@ -351,6 +353,9 @@ def purge_orphan_objects() -> None:
         aws_access_key_id=settings.notifyhub_s3_access_key,
         aws_secret_access_key=settings.notifyhub_s3_secret_key,
         region_name=settings.notifyhub_s3_region,
+        # Stessi timeout del drain e del PUT: un MinIO lento non deve tenere il job appeso
+        # per i 60 s di botocore a tentativo.
+        config=Config(**s3_timeouts()),
     )
 
     cutoff = datetime.now(UTC) - timedelta(hours=24)
@@ -639,9 +644,19 @@ def check_expected_schedules() -> None:
 
         # Accodamento fuori dalla transazione: commit-poi-enqueue come
         # nell'ingestion (spec 8.3). Se il processo muore qui le righe restano
-        # `pending` e le ripesca reconcile_deliveries.
+        # `pending` e le ripesca reconcile_deliveries. Un broker che rifiuta un
+        # messaggio non deve fermare i tenant successivi di questo giro: la riga e'
+        # gia committata e il giro dopo o reconcile la riprende.
         for delivery_id in pending:
-            enqueue_delivery(str(delivery_id), str(tenant_id))
+            try:
+                enqueue_delivery(str(delivery_id), str(tenant_id))
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "expected_schedule_enqueue_failed",
+                    tenant_id=str(tenant_id),
+                    delivery_id=str(delivery_id),
+                    exc_info=True,
+                )
 
     logger.info("check_expected_schedules_done", missing=missing_total, recovered=recovered_total)
     maintenance_job_runs_total.labels(job="check_expected_schedules", outcome="success").inc()

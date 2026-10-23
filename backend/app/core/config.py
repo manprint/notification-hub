@@ -1,6 +1,7 @@
 import ipaddress
 import os
 from functools import lru_cache
+from typing import Any
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -117,3 +118,15 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]
+
+
+def s3_timeouts(settings: Settings | None = None) -> dict[str, Any]:
+    """Timeout e tentativi del client S3, dalle impostazioni NOTIFYHUB_S3_*: una sola
+    fonte per il PUT in ingestion, il drain e la purge degli orfani (spec 6.5)."""
+    if settings is None:
+        settings = get_settings()
+    return {
+        "connect_timeout": settings.notifyhub_s3_connect_timeout_seconds,
+        "read_timeout": settings.notifyhub_s3_read_timeout_seconds,
+        "retries": {"max_attempts": settings.notifyhub_s3_max_attempts},
+    }
