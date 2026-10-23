@@ -98,4 +98,52 @@ describe("GroupList", () => {
     expect(screen.getByText("Nessun gruppo corrisponde alla ricerca.")).not.toBeNull();
     expect(screen.queryByRole("button", { name: /server produzione/i })).toBeNull();
   });
+
+  it("il nome e la descrizione troncati dicono il testo intero nel titolo", () => {
+    const lungo = "Gruppo con un nome molto lungo che la scheda taglia a due righe";
+    render(
+      <GroupList
+        groups={[{ ...groups[0], name: lungo, description: "Descrizione intera e lunga" }]}
+        onSelect={() => {}}
+      />,
+    );
+
+    expect(screen.getByText(lungo)).toHaveAttribute("title", lungo);
+    expect(screen.getByText("Descrizione intera e lunga")).toHaveAttribute(
+      "title",
+      "Descrizione intera e lunga",
+    );
+  });
+
+  it("un solo messaggio non letto dice «1 non letta», al plurale «non lette»", () => {
+    const { unmount } = render(
+      <GroupList
+        groups={[{ ...groups[0], notification_count: 4, unread_count: 1 }]}
+        onSelect={() => {}}
+      />,
+    );
+    expect(screen.getByText("1 non letta")).toBeInTheDocument();
+    expect(screen.getByText("3 lette")).toBeInTheDocument();
+    unmount();
+
+    render(
+      <GroupList
+        groups={[{ ...groups[0], notification_count: 4, unread_count: 2 }]}
+        onSelect={() => {}}
+      />,
+    );
+    expect(screen.getByText("2 non lette")).toBeInTheDocument();
+  });
+
+  it("i contatori stanno dentro il bottone come span, non come div", () => {
+    render(
+      <GroupList
+        groups={[{ ...groups[0], notification_count: 4, unread_count: 1 }]}
+        onSelect={() => {}}
+      />,
+    );
+
+    const bottone = screen.getByRole("button", { name: /Server Produzione/ });
+    expect(bottone.querySelector("div")).toBeNull();
+  });
 });

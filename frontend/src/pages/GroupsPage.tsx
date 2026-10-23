@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { apiDelete, apiGet, apiPatch, apiPost } from "../api/client";
 import type { ApiError, DeleteImpactOut, GroupOut } from "../api/types";
 import ConfirmDialog from "../components/ConfirmDialog";
@@ -52,7 +52,7 @@ function EditGroupForm({ group, onDone }: { group: GroupOut; onDone: () => void 
   const descriptionId = `group-edit-description-${group.id}`;
 
   return (
-    <Modal title={`Modifica "${group.name}"`} onClose={onDone} busy={busy !== null}>
+    <Modal title={`Modifica «${group.name}»`} onClose={onDone} busy={busy !== null}>
       <form onSubmit={(event) => void handleSubmit(event)}>
         {error && <ErrorBanner error={error} />}
         <RequiredLegend />
@@ -126,7 +126,7 @@ function GroupRowActions({
         await apiDelete(`/api/v1/groups/${group.id}?confirm=${encodeURIComponent(group.name)}`);
         await queryClient.invalidateQueries({ queryKey: ["groups"] });
       },
-      { success: `Gruppo "${group.name}" eliminato.` },
+      { success: `Gruppo «${group.name}» eliminato.` },
     );
     if (ok) setOpen(false);
   }
@@ -149,7 +149,7 @@ function GroupRowActions({
       {impactError && <ErrorBanner error={impactError} />}
       {open && impact && (
         <ConfirmDialog
-          title={`Elimina gruppo "${group.name}"`}
+          title={`Elimina gruppo «${group.name}»`}
           expectedText={group.name}
           confirmLabel="Elimina gruppo"
           // La promessa, non `void`: il dialogo resta occupato fino alla risposta,
@@ -193,7 +193,7 @@ function NewGroupForm() {
         });
         await queryClient.invalidateQueries({ queryKey: ["groups"] });
       },
-      { success: `Gruppo "${newName.trim()}" creato.` },
+      { success: `Gruppo «${newName.trim()}» creato.` },
     );
     if (ok) {
       setNewName("");
