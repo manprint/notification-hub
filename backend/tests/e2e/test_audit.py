@@ -817,3 +817,106 @@ async def test_periodo_fuori_dall_intervallo_supportato_e_422(api_client, two_te
     )
 
     assert resp.status_code == 422
+
+
+async def _eventi_marked_read(tenant_id: uuid.UUID, quanti: int) -> None:
+    """Eventi con lo stesso occurred_at: l'ordine di export dipende solo da id."""
+    istante = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+    async with tenant_session(tenant_id) as session:
+        session.add_all(
+            [
+                AuditEvent(
+                    tenant_id=tenant_id,
+                    occurred_at=istante,
+                    actor_email="owner@test.com",
+                    actor_role=UserRole.OWNER,
+                    action="notification.marked_read",
+                    resource_type="notification",
+                    outcome=AuditOutcome.SUCCESS,
+                )
+                for _ in range(quanti)
+            ]
+        )
+
+
+@pytest.mark.e2e
+async def test_export_a_blocchi_non_perde_ne_duplica_righe(
+    api_client, two_tenants, owner_token, monkeypatch
+):
+    """Con blocchi da due righe e cinque eventi, lo stesso istante fra blocchi
+    diversi: l'export li da' tutti, una volta, nell'ordine di /audit/events."""
+    from app.api.v1 import audit as audit_api
+
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    await _eventi_marked_read(tenant_id, 5)
+    monkeypatch.setattr(audit_api, "EXPORT_BATCH_ROWS", 2)
+    filtri = {"action": "notification.marked_read"}
+
+    json_resp = await api_client.get(
+        "/api/v1/audit/export", params={**filtri, "format": "json"}, headers=owner
+    )
+    csv_resp = await api_client.get(
+        "/api/v1/audit/export", params={**filtri, "format": "csv"}, headers=owner
+    )
+
+    ids = [evento["id"] for evento in json_resp.json()]
+    assert len(ids) == 5
+    assert len(set(ids)) == 5
+    assert ids == sorted(ids, reverse=True)
+    righe_csv = list(csv.DictReader(io.StringIO(csv_resp.text)))
+    assert [riga["resource_id"] for riga in righe_csv] == [
+        evento["resource_id"] or "" for evento in json_resp.json()
+    ]
+
+
+@pytest.mark.e2e
+async def test_export_oltre_il_tetto_di_righe_e_422(
+    api_client, two_tenants, owner_token, monkeypatch
+):
+    from app.api.v1 import audit as audit_api
+
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    await _eventi_marked_read(tenant_id, 4)
+    monkeypatch.setattr(audit_api, "EXPORT_MAX_ROWS", 3)
+
+    resp = await api_client.get(
+        "/api/v1/audit/export",
+        params={"action": "notification.marked_read", "format": "json"},
+        headers=owner,
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["max_rows"] == 3
+
+
+@pytest.mark.e2e
+async def test_bulk_read_oltre_il_tetto_di_id_registra_solo_il_conteggio(
+    api_client, two_tenants, owner_token, monkeypatch
+):
+    from app.api.v1 import notifications as notifications_api
+
+    tenant_id, _ = two_tenants
+    owner = {"Authorization": f"Bearer {await owner_token(api_client, tenant_id)}"}
+    slug = uuid.uuid4().hex[:22]
+    receiver_id = await create_receiver(tenant_id, slug)
+    for indice in range(3):
+        await api_client.post(f"/ingest/{slug}", content=f"coda {indice}")
+    monkeypatch.setattr(notifications_api, "BULK_IDS_CAP", 2)
+
+    bulk = await api_client.post(
+        "/api/v1/notifications/bulk-read", json={"receiver_id": str(receiver_id)}, headers=owner
+    )
+
+    assert bulk.json() == {"marked_read": 3}
+    evento = (
+        await api_client.get(
+            "/api/v1/audit/events",
+            params={"action": "notification.bulk_marked_read"},
+            headers=owner,
+        )
+    ).json()["events"][0]
+    assert evento["context"]["count"] == 3
+    assert evento["context"]["notification_ids_truncated"] is True
+    assert "notification_ids" not in evento["context"]

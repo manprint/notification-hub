@@ -38,6 +38,9 @@ router = APIRouter(prefix="/audit", tags=["audit"])
 # Tetto all'export: un CSV e' un file che qualcuno scarica ora, non un dump
 # storico. Oltre questa soglia si restringono i filtri.
 EXPORT_MAX_ROWS = 50_000
+# Righe per blocco nell'export in streaming: con id a pieno carico una riga pesa
+# ~200 KB, cento righe restano sotto i 20 MB in memoria.
+EXPORT_BATCH_ROWS = 100
 
 EXPORT_COLUMNS = [
     "occurred_at",
@@ -67,6 +70,17 @@ def _csv_cell(value: Any) -> Any:
     if isinstance(value, str) and value.startswith(CSV_FORMULA_PREFIXES):
         return f"'{value}"
     return value
+
+
+def _csv_row(record: dict[str, Any]) -> list[Any]:
+    return [
+        _csv_cell(
+            json.dumps(record[column], ensure_ascii=False)
+            if isinstance(record[column], dict)
+            else record[column]
+        )
+        for column in EXPORT_COLUMNS
+    ]
 
 
 def _encode_cursor(occurred_at: datetime, event_id: uuid.UUID) -> str:
@@ -296,13 +310,11 @@ async def export_audit_events(
         notification_id=notification_id,
         only_notification_status=notification_status_only,
     )
-    result = await session.execute(
-        query.order_by(AuditEvent.occurred_at.desc(), AuditEvent.id.desc()).limit(
-            EXPORT_MAX_ROWS + 1
-        )
+    # Il conteggio, non le righe, decide il 422: prima di inviare un byte.
+    count = await session.execute(
+        select(func.count()).select_from(query.limit(EXPORT_MAX_ROWS + 1).subquery())
     )
-    rows = result.scalars().all()
-    if len(rows) > EXPORT_MAX_ROWS:
+    if count.scalar_one() > EXPORT_MAX_ROWS:
         raise Problem(
             status=422,
             type=PROBLEM_TYPES["validation_error"],
@@ -314,46 +326,68 @@ async def export_audit_events(
             extra={"max_rows": EXPORT_MAX_ROWS},
         )
 
-    # Lo stesso contesto che si legge a schermo: un export senza gruppo e
-    # receiver costringerebbe a ritrovarli a mano nel foglio di calcolo.
-    posizioni = await resolve_locations(session, rows)
-
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")  # noqa: DTZ005
     if format == "json":
-        payload = json.dumps(
-            [_to_out(row, posizioni.get(row.id, EMPTY)).model_dump(mode="json") for row in rows],
-            ensure_ascii=False,
-        ).encode()
         media_type = "application/json"
         filename = f"audit-{stamp}.json"
     else:
-        buffer = io.StringIO()
-        writer = csv.writer(buffer)
-        writer.writerow(EXPORT_COLUMNS)
-        for row in rows:
-            record = _to_out(row, posizioni.get(row.id, EMPTY)).model_dump(mode="json")
-            writer.writerow(
-                [
-                    _csv_cell(
-                        json.dumps(record[column], ensure_ascii=False)
-                        if isinstance(record[column], dict)
-                        else record[column]
-                    )
-                    for column in EXPORT_COLUMNS
-                ]
-            )
-        payload = buffer.getvalue().encode()
         media_type = "text/csv"
         filename = f"audit-{stamp}.csv"
 
     async def _stream() -> AsyncIterator[bytes]:
-        yield payload
+        # Le righe escono a blocchi in ordine (occurred_at, id) DESC, con un
+        # cursore sull'ultima di ciascun blocco: l'export intero non sta mai in
+        # memoria. Il blocco e' piccolo perche' una riga puo' portare fino a
+        # BULK_IDS_CAP id. Lo stesso contesto che si legge a schermo: gruppo e
+        # receiver si risolvono per blocco, non per tutte le righe.
+        if format == "json":
+            yield b"["
+        else:
+            intestazione = io.StringIO()
+            csv.writer(intestazione).writerow(EXPORT_COLUMNS)
+            yield intestazione.getvalue().encode()
+
+        primo = True
+        emesse = 0
+        cursore: tuple[datetime, uuid.UUID] | None = None
+        while emesse < EXPORT_MAX_ROWS:
+            blocco = query
+            if cursore is not None:
+                blocco = blocco.where(
+                    func.row(AuditEvent.occurred_at, AuditEvent.id) < func.row(*cursore)
+                )
+            result = await session.execute(
+                blocco.order_by(AuditEvent.occurred_at.desc(), AuditEvent.id.desc()).limit(
+                    EXPORT_BATCH_ROWS
+                )
+            )
+            righe = result.scalars().all()
+            if not righe:
+                break
+            posizioni = await resolve_locations(session, righe)
+            records = [
+                _to_out(row, posizioni.get(row.id, EMPTY)).model_dump(mode="json") for row in righe
+            ]
+            if format == "json":
+                parti = [json.dumps(record, ensure_ascii=False) for record in records]
+                yield (("" if primo else ", ") + ", ".join(parti)).encode()
+            else:
+                buffer = io.StringIO()
+                writer = csv.writer(buffer)
+                for record in records:
+                    writer.writerow(_csv_row(record))
+                yield buffer.getvalue().encode()
+            primo = False
+            emesse += len(righe)
+            if len(righe) < EXPORT_BATCH_ROWS:
+                break
+            cursore = (righe[-1].occurred_at, righe[-1].id)
+
+        if format == "json":
+            yield b"]"
 
     return StreamingResponse(
         _stream(),
         media_type=media_type,
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Content-Length": str(len(payload)),
-        },
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
