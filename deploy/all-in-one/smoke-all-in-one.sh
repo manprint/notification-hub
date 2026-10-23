@@ -175,7 +175,10 @@ script_response=$(curl -s -w "\n%{http_code}" $BASE/api/v1/receivers/$receiver_i
     -H "Authorization: Bearer $access_token")
 assert_http_code 200 "$(echo "$script_response" | tail -1)" \
     "Il download dello script wrapper deve restituire 200"
-if ! echo "$script_response" | head -n -1 | grep -qF "NOTIFYHUB_SLUG:-$receiver_slug"; then
+# Con pipefail, `echo | grep -q` che esce al primo match fa morire echo di SIGPIPE
+# e il controllo fallisce a caso su un corpo di 20 KB: si passa dalla variabile.
+script_body="$(echo "$script_response" | head -n -1)"
+if ! grep -qF "NOTIFYHUB_SLUG:-$receiver_slug" <<<"$script_body"; then
     echo "Lo script wrapper scaricato deve contenere lo slug del receiver"
     exit 1
 fi
