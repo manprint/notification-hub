@@ -151,7 +151,7 @@ def _base_query(
     to: datetime | None,
     notification_id: uuid.UUID | None = None,
     only_notification_status: bool = False,
-) -> Select[tuple[AuditEvent]]:
+) -> Select[AuditEvent]:
     conditions: list[Any] = [AuditEvent.tenant_id == uuid.UUID(claims.tid)]
     if actor_user_id is not None:
         conditions.append(AuditEvent.actor_user_id == actor_user_id)
@@ -200,7 +200,7 @@ def _to_out(event: AuditEvent, location: Location = EMPTY) -> AuditEventOut:
 
 async def _paginated(
     session: AsyncSession,
-    query: Select[tuple[AuditEvent]],
+    query: Select[AuditEvent],
     cursor: str | None,
     limit: int,
 ) -> AuditEventListOut:

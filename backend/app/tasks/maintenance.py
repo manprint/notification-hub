@@ -63,6 +63,8 @@ def purge_notifications() -> None:
         ).all()
 
     for tenant_id, retention_days in tenants:
+        if retention_days is None:  # gia' escluso dalla query
+            continue
         cutoff = datetime.now(UTC) - timedelta(days=retention_days)
         deleted_total = 0
         while True:
@@ -107,6 +109,8 @@ def purge_audit_events() -> None:
         ).all()
 
     for tenant_id, retention_days in tenants:
+        if retention_days is None:  # gia' escluso dalla query
+            continue
         cutoff = datetime.now(UTC) - timedelta(days=retention_days)
         deleted_total = 0
         while True:

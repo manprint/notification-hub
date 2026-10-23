@@ -83,15 +83,15 @@ async def load_evaluation_chain(
             )
         )
 
-    for rule, preset_id, preset_name in preset_result.all():
+    for preset_rule, preset_id, preset_name in preset_result.all():
         chain.append(
             EvaluableRule(
-                pattern=rule.pattern,
-                severity=rule.severity,
+                pattern=preset_rule.pattern,
+                severity=preset_rule.severity,
                 priority=len(chain),
-                case_insensitive=rule.case_insensitive,
+                case_insensitive=preset_rule.case_insensitive,
                 enabled=True,
-                id=str(rule.id),
+                id=str(preset_rule.id),
                 preset_id=str(preset_id),
                 preset_name=preset_name,
             )
