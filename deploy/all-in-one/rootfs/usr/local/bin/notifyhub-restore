@@ -15,8 +15,8 @@
 #   - rifiuta se NOTIFYHUB_SECRET_KEY e' fissata nell'ambiente del container o in
 #     overrides.env con un valore diverso da quello del backup;
 #   - riscrive in secrets.env la sola chiave del backup, se diversa.
-# Il container va riavviato dopo un ripristino che cambia la chiave: l'API e i
-# worker hanno ancora in memoria quella vecchia.
+# Con una chiave cambiata i servizi applicativi restano fermi finche' il container
+# non viene riavviato: con la chiave vecchia le delivery ripristinate finirebbero dead.
 #
 # Gli oggetti MinIO non sono nel dump: se il backup e' stato preso in un momento
 # diverso dallo stato di /data/minio, alcune notifiche possono riferirsi a
@@ -41,9 +41,17 @@ SERVICES_STOPPED=0
 
 # Riavvia i servizi applicativi se li abbiamo fermati, anche quando il ripristino
 # esce per un errore: altrimenti un die lascerebbe l'applicazione spenta.
+# Con una chiave cambiata non si riavviano: un programma ripartito qui erediterebbe
+# la chiave vecchia dall'ambiente di supervisord, e il worker marcherebbe dead le
+# delivery ripristinate (webhook non decifrabile). Ripartono col container, che
+# rilegge secrets.env all'avvio.
 restart_services() {
     [ "${SERVICES_STOPPED}" = "1" ] || return 0
     SERVICES_STOPPED=0
+    if [ "${KEY_CHANGE:-0}" = "1" ]; then
+        log_warn "servizi applicativi lasciati fermi: riavviare il container per caricare la chiave ripristinata"
+        return 0
+    fi
     log_info "riavvio i servizi applicativi"
     # shellcheck disable=SC2086
     ${SUPERVISORCTL} start ${APP_PROGRAMS} >/dev/null 2>&1 \
@@ -215,6 +223,6 @@ if [ "${RESTORE_ERRORS}" -gt 0 ]; then
 fi
 
 if [ "${RESTART_REQUIRED}" = "1" ]; then
-    log_warn "riavviare il container: l'API e i worker usano ancora la chiave precedente, e finche' non ripartono i canali non si decifrano"
+    log_warn "riavviare il container: API, worker e beat sono fermi e ripartono con la chiave del backup; finche' non ripartono i canali non si decifrano"
 fi
 log_info "ripristino completato. Un riavvio del container riallinea anche lo schema (alembic upgrade head)."

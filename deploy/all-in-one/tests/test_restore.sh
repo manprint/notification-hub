@@ -54,12 +54,32 @@ secret_is() {
 }
 
 # --- supervisord con un programma FATAL: i servizi devono fermarsi comunque --
+# Chiave invariata: il caso con chiave cambiata e' piu' sotto.
 reset_case
+write_secrets "${K0}"
 "${RESTORE}" "${DUMP}" --yes >/dev/null 2>&1
 check "supervisord degradato: servizi fermati prima del ripristino" \
     grep -q ' stop nginx api metrics worker beat$' "${SANDBOX}/supervisor.calls"
 check "supervisord degradato: servizi riavviati dopo il ripristino" \
     grep -q ' start nginx api metrics worker beat$' "${SANDBOX}/supervisor.calls"
+
+# --- chiave cambiata: i servizi restano fermi fino al riavvio del container ---
+# Un programma ripartito qui avrebbe la chiave vecchia e renderebbe dead le delivery.
+reset_case
+"${RESTORE}" "${DUMP}" --yes > "${SANDBOX}/restore.out" 2>&1
+check "chiave cambiata: servizi fermati prima del ripristino" \
+    grep -q ' stop nginx api metrics worker beat$' "${SANDBOX}/supervisor.calls"
+check "chiave cambiata: nessun programma riavviato, worker e beat compresi" \
+    none_match ' start .*(worker|beat)' "${SANDBOX}/supervisor.calls"
+check "chiave cambiata: il ripristino avvisa di riavviare il container" \
+    grep -q 'riavviare il container' "${SANDBOX}/restore.out"
+
+# Errore SQL inatteso con chiave cambiata: anche sul percorso d'errore non si riparte.
+reset_case
+STUB_PSQL_STDERR='ERROR:  relation "t_demo" already exists' \
+    "${RESTORE}" "${DUMP}" --yes >/dev/null 2>&1
+check "chiave cambiata ed errore SQL: nessun programma riavviato" \
+    none_match ' start ' "${SANDBOX}/supervisor.calls"
 
 # --- errore SQL inatteso: il ripristino non deve dichiararsi riuscito --------
 reset_case
