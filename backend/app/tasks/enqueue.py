@@ -11,6 +11,10 @@ from collections.abc import Callable
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 EnqueueFn = Callable[[str, str], None]
 
 
@@ -53,4 +57,16 @@ def register_after_commit_enqueue(session: AsyncSession, pending: list[tuple[str
     @event.listens_for(session.sync_session, "after_commit")
     def _enqueue(_: object) -> None:
         for delivery_id, tenant_id in pending:
-            enqueue_delivery(delivery_id, tenant_id)
+            # Il commit e gia avvenuto: un errore del broker qui non deve propagarsi
+            # fino al chiamante. Propagato, farebbe rispondere 500 a una richiesta
+            # il cui contenuto e' salvato, e il retry creerebbe un doppione (spec
+            # 6.3, 8.3). La riga resta `pending`: reconcile_deliveries la riaccoda.
+            try:
+                enqueue_delivery(delivery_id, tenant_id)
+            except Exception:
+                logger.warning(
+                    "delivery_enqueue_failed",
+                    delivery_id=delivery_id,
+                    tenant_id=tenant_id,
+                    exc_info=True,
+                )

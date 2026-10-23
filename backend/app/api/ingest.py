@@ -266,17 +266,25 @@ async def _ingest(
                 "forwarded_to": forwarded_to,
                 "storage_backend": "object" if prepared.use_object_storage else "inline",
             }
-
-        await store_response(str(receiver.id), x_request_id, reservation.owner_token, body)
     except BaseException:
         # Solo il proprietario puo eliminare la sentinella: una richiesta
         # subentrata dopo la scadenza non viene mai cancellata da quella vecchia.
         # Il cleanup e' best effort: un secondo guasto Redis non deve mascherare
         # il Problem originale. shield prova a completarlo anche su cancellazione.
+        # Questo ramo vale solo per i fallimenti PRIMA del commit: dopo il commit la
+        # notifica esiste e rilasciare la chiave farebbe duplicare il retry (spec 6.3).
         try:
             await asyncio.shield(release(str(receiver.id), x_request_id, reservation.owner_token))
         except Exception:
             logger.warning("idempotency_release_failed", exc_info=True)
         raise
+
+    # Commit riuscito: la chiave resta. Se il salvataggio del replay fallisce, la
+    # sentinella resta `in elaborazione` fino alla scadenza della finestra: un retry
+    # in quel tempo riceve 409, non un doppione. La risposta resta 201.
+    try:
+        await store_response(str(receiver.id), x_request_id, reservation.owner_token, body)
+    except Exception:
+        logger.warning("idempotency_store_failed", receiver_id=str(receiver.id), exc_info=True)
 
     return JSONResponse(status_code=201, content=body)
