@@ -228,51 +228,70 @@ async def login(body: LoginIn, request: Request) -> TokenPairOut:
             detail="Invalid credentials.",
         )
 
+    utente_disattivato = False
     async with tenant_session(tenant_id) as session:
+        # Lock prima di rileggere lo stato: quello letto da find_user_by_email e'
+        # vecchio di tutto il tempo speso in argon2. Il lock attende una disabilitazione
+        # in corso, e il token non nasce dopo di lei. Stesso ordine di refresh, logout
+        # e rimozione: prima il tenant, poi l'utente.
+        await lock_user_token_scope(session, tenant_id, uuid.UUID(user_identity.id))
         user_result = await session.execute(
             select(User).where(User.id == uuid.UUID(user_identity.id))
         )
         user = user_result.scalar_one()
-        user.last_login_at = datetime.now(UTC)
+        if user.status != UserStatus.ACTIVE:
+            utente_disattivato = True
+        else:
+            user.last_login_at = datetime.now(UTC)
 
-        settings = get_settings()
-        refresh_plain, refresh_hash = new_refresh_token()
-        # Una famiglia nuova per ogni login: sessioni su dispositivi diversi
-        # non condividono la stessa famiglia, cosi il riuso rilevato su una
-        # non revoca le altre (spec 4.1, contrariamente al bug descritto in
-        # docs/REVIEW.md S4, dove family_id coincideva con lo user_id).
-        family_id = uuid.uuid4()
+            settings = get_settings()
+            refresh_plain, refresh_hash = new_refresh_token()
+            # Una famiglia nuova per ogni login: sessioni su dispositivi diversi
+            # non condividono la stessa famiglia, cosi il riuso rilevato su una
+            # non revoca le altre (spec 4.1, contrariamente al bug descritto in
+            # docs/REVIEW.md S4, dove family_id coincideva con lo user_id).
+            family_id = uuid.uuid4()
 
-        refresh_token_row = RefreshToken(
-            tenant_id=tenant_id,
-            user_id=user.id,
-            token_hash=refresh_hash,
-            jti=str(uuid.uuid4()),
-            family_id=family_id,
-            expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_ttl_days),
-            revoked_at=None,
-            user_agent=None,
-            ip=None,
+            refresh_token_row = RefreshToken(
+                tenant_id=tenant_id,
+                user_id=user.id,
+                token_hash=refresh_hash,
+                jti=str(uuid.uuid4()),
+                family_id=family_id,
+                expires_at=datetime.now(UTC) + timedelta(days=settings.refresh_token_ttl_days),
+                revoked_at=None,
+                user_agent=None,
+                ip=None,
+            )
+            session.add(refresh_token_row)
+            await session.flush()
+
+            record_event(
+                session,
+                tenant_id=tenant_id,
+                actor_user_id=user.id,
+                actor_email=user.email,
+                actor_role=user.role,
+                action=ACTION_LOGIN,
+                resource_type="session",
+                resource_id=user.id,
+                resource_label=user.email,
+                ip=client_ip(request),
+                user_agent=request.headers.get("user-agent"),
+                request_id=current_request_id(),
+            )
+
+            access_token, expires_in = create_access_token(str(user.id), str(tenant_id), user.role)
+
+    if utente_disattivato:
+        # Fuori dalla sessione sopra, come il rifiuto per tenant sospeso.
+        await _record_login_failure(user_identity, request, "user_disabled")
+        raise Problem(
+            status=401,
+            type=PROBLEM_TYPES["unauthorized"],
+            title="Unauthorized",
+            detail="Invalid credentials.",
         )
-        session.add(refresh_token_row)
-        await session.flush()
-
-        record_event(
-            session,
-            tenant_id=tenant_id,
-            actor_user_id=user.id,
-            actor_email=user.email,
-            actor_role=user.role,
-            action=ACTION_LOGIN,
-            resource_type="session",
-            resource_id=user.id,
-            resource_label=user.email,
-            ip=client_ip(request),
-            user_agent=request.headers.get("user-agent"),
-            request_id=current_request_id(),
-        )
-
-        access_token, expires_in = create_access_token(str(user.id), str(tenant_id), user.role)
 
     return TokenPairOut(
         access_token=access_token,

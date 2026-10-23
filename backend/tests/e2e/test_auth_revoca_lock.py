@@ -10,8 +10,9 @@ import asyncio
 import uuid
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
+from app.api.v1 import auth as auth_module
 from app.core.security import hash_password, hash_token, new_refresh_token
 from app.db.session import tenant_session
 from app.db.types import UserRole, UserStatus
@@ -139,3 +140,59 @@ async def test_refresh_e_rimozione_concorrenti_non_si_bloccano_a_vicenda(api_cli
         )
     resp = await refresh
     assert resp.status_code == 200
+
+
+@pytest.mark.e2e
+async def test_login_con_disabilitazione_in_corso_non_emette_token(
+    api_client, two_tenants, monkeypatch
+):
+    """Lo stato letto prima di argon2 e vecchio: una disabilitazione committata nel
+    frattempo deve impedire il login, senza lasciare un refresh token vivo."""
+    tenant_id, _ = two_tenants
+    user_id, email = await _utente(tenant_id, UserRole.MEMBER)
+    letto_prima = auth_module.find_user_by_email
+
+    async def letto_poi_disabilitato(email_letta: str):
+        identity = await letto_prima(email_letta)
+        async with tenant_session(tenant_id) as session:
+            await session.execute(
+                update(User).where(User.id == user_id).values(status=UserStatus.DISABLED)
+            )
+        return identity
+
+    monkeypatch.setattr(auth_module, "find_user_by_email", letto_poi_disabilitato)
+    resp = await api_client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
+    assert resp.status_code == 401
+
+    async with tenant_session(tenant_id) as session:
+        vivi = await session.execute(
+            select(func.count()).select_from(RefreshToken).where(RefreshToken.user_id == user_id)
+        )
+        assert vivi.scalar_one() == 0
+
+
+@pytest.mark.e2e
+async def test_login_in_attesa_di_una_disabilitazione_non_emette_token(api_client, two_tenants):
+    """Una disabilitazione in corso tiene il lock sull'utente: il login deve
+    attendere il commit e rileggere lo stato sotto lock, senza emettere un token."""
+    tenant_id, _ = two_tenants
+    user_id, email = await _utente(tenant_id, UserRole.MEMBER)
+
+    async with tenant_session(tenant_id) as disabilitazione:
+        await disabilitazione.execute(select(User.id).where(User.id == user_id).with_for_update())
+        login = asyncio.create_task(
+            api_client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
+        )
+        await asyncio.sleep(1.5)
+        assert not login.done()
+        await disabilitazione.execute(
+            update(User).where(User.id == user_id).values(status=UserStatus.DISABLED)
+        )
+    resp = await login
+    assert resp.status_code == 401
+
+    async with tenant_session(tenant_id) as session:
+        vivi = await session.execute(
+            select(func.count()).select_from(RefreshToken).where(RefreshToken.user_id == user_id)
+        )
+        assert vivi.scalar_one() == 0
