@@ -2,8 +2,11 @@
 content_size: il worker non legge mai content ne oggetti MinIO (invariante I-4)."""
 
 from app.outbound.formatters.duration import duration_note
+from app.outbound.formatters.text import fit_escaped, is_stored_truncation
 
 SLACK_BODY_LIMIT = 2800
+# Il testo dell'header block di Slack e' limitato a 150 caratteri.
+SLACK_HEADER_LIMIT = 150
 
 _COLOR_MAP = {
     "critical": "#990000",
@@ -24,17 +27,20 @@ def build_slack_payload(
     duration_ms: int | None = None,
     duration_threshold_seconds: int | None = None,
 ) -> dict:
-    truncated = len(content_preview) > SLACK_BODY_LIMIT or content_size > len(
-        content_preview.encode()
-    )
-    body = content_preview[:SLACK_BODY_LIMIT]
-    if truncated:
+    body, cut = fit_escaped(content_preview, SLACK_BODY_LIMIT)
+    if cut or is_stored_truncation(content_preview, content_size):
         body += f"\n… [troncato, {content_size // 1024} KB totali]"
+    # Una section con testo vuoto e' rifiutata da Slack: il corpo vuoto resta visibile.
+    body = body or "(corpo vuoto)"
+
+    header = f"{severity.upper()} — {receiver_name}"
+    if len(header) > SLACK_HEADER_LIMIT:
+        header = header[: SLACK_HEADER_LIMIT - 1] + "…"
 
     blocks: list[dict] = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": f"{severity.upper()} — {receiver_name}"},
+            "text": {"type": "plain_text", "text": header},
         },
     ]
 

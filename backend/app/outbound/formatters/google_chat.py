@@ -2,6 +2,7 @@
 e content_size, mai MinIO (invariante I-4)."""
 
 from app.outbound.formatters.duration import duration_note
+from app.outbound.formatters.text import fit_escaped, is_stored_truncation
 
 GOOGLE_CHAT_BODY_LIMIT = 3800
 
@@ -16,11 +17,9 @@ def build_google_chat_payload(
     duration_ms: int | None = None,
     duration_threshold_seconds: int | None = None,
 ) -> dict:
-    truncated = len(content_preview) > GOOGLE_CHAT_BODY_LIMIT or content_size > len(
-        content_preview.encode()
-    )
-    body = content_preview[:GOOGLE_CHAT_BODY_LIMIT]
-    if truncated:
+    # Google Chat legge il testo come HTML semplice: il corpo va escapato.
+    body, cut = fit_escaped(content_preview, GOOGLE_CHAT_BODY_LIMIT)
+    if cut or is_stored_truncation(content_preview, content_size):
         body += f"\n… [troncato, {content_size // 1024} KB totali]"
 
     # Il sottotitolo della card e' il posto dove Google Chat mette il contesto:

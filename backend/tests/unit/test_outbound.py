@@ -82,6 +82,122 @@ def test_google_chat_payload_tronca_oltre_il_limite():
     )
 
 
+def _slack_section(payload: dict) -> str:
+    return next(b for b in payload["blocks"] if b["type"] == "section")["text"]["text"]
+
+
+def _slack_kwargs(**overrides: object) -> dict:
+    kwargs: dict = {
+        "receiver_name": "R",
+        "severity": "error",
+        "content_preview": "corpo",
+        "content_size": len("corpo"),
+        "notification_url": "https://notifyhub.example.com/notifications/abc",
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+@pytest.mark.unit
+def test_slack_header_non_supera_i_150_caratteri_e_conserva_la_severita():
+    """L'header block di Slack e' limitato a 150 caratteri: un nome receiver lungo
+    (fino a 255 nello schema) farebbe rifiutare l'intero messaggio."""
+    payload = build_slack_payload(**_slack_kwargs(receiver_name="n" * 255))
+    header = payload["blocks"][0]["text"]["text"]
+    assert len(header) <= 150
+    assert header.startswith("ERROR — ")
+    assert header.endswith("…")
+
+
+@pytest.mark.unit
+def test_slack_corpo_vuoto_produce_una_section_con_testo():
+    """Slack rifiuta una section con testo vuoto: un corpo vuoto ha un segnaposto."""
+    payload = build_slack_payload(**_slack_kwargs(content_preview="", content_size=0))
+    assert _slack_section(payload) != ""
+
+
+@pytest.mark.unit
+def test_slack_escapa_mrkdwn_per_non_pingare_il_canale_ne_creare_link():
+    """`<!channel>`, `<url|label>` e `&` sono markup per Slack: vanno escapati."""
+    payload = build_slack_payload(
+        **_slack_kwargs(
+            content_preview="<!channel> a & <https://x|y>",
+            content_size=len("<!channel> a & <https://x|y>"),
+        )
+    )
+    assert _slack_section(payload) == "&lt;!channel&gt; a &amp; &lt;https://x|y&gt;"
+
+
+@pytest.mark.unit
+def test_slack_il_limite_vale_sul_testo_escapato_e_non_taglia_entita():
+    """4096 `&` escapati diventano 5 caratteri ciascuno: il tetto della section
+    (3000) deve valere sull'output, e il taglio non cade dentro `&amp;`."""
+    body = "&" * 4096
+    payload = build_slack_payload(
+        **_slack_kwargs(content_preview=body, content_size=len(body))
+    )
+    text = _slack_section(payload)
+    assert len(text) <= 3000
+    main, notice = text.split("\n… [troncato", 1)
+    assert main == "&amp;" * (SLACK_BODY_LIMIT // 5)
+    assert notice.startswith(", 4 KB totali]")
+
+
+@pytest.mark.unit
+def test_slack_nessun_falso_troncato_quando_la_normalizzazione_rimuove_nul():
+    """Il corpo `hello\\x00 world` (12 byte) e' intero: la preview 'hello world' e'
+    piu' corta dei byte originali, ma non e' un troncamento."""
+    payload = build_slack_payload(
+        **_slack_kwargs(content_preview="hello world", content_size=12)
+    )
+    assert _slack_section(payload) == "hello world"
+
+
+@pytest.mark.unit
+def test_google_chat_nessun_falso_troncato_quando_la_normalizzazione_rimuove_nul():
+    payload = build_google_chat_payload(
+        receiver_name="R",
+        severity="error",
+        content_preview="hello world",
+        content_size=12,
+        notification_url="https://notifyhub.example.com/notifications/abc",
+    )
+    text = payload["cardsV2"][0]["card"]["sections"][0]["widgets"][0]["textParagraph"]["text"]
+    assert text == "hello world"
+
+
+@pytest.mark.unit
+def test_google_chat_preview_salvata_troncata_dichiara_il_troncamento():
+    """Una preview al tetto di salvataggio (4096) con byte originali in più è un
+    troncamento reale: la segnalazione resta."""
+    body = "x" * 4096
+    payload = build_google_chat_payload(
+        receiver_name="R",
+        severity="error",
+        content_preview=body,
+        content_size=5000,
+        notification_url="https://notifyhub.example.com/notifications/abc",
+    )
+    text = payload["cardsV2"][0]["card"]["sections"][0]["widgets"][0]["textParagraph"]["text"]
+    assert "troncato, 4 KB totali" in text
+
+
+@pytest.mark.unit
+def test_google_chat_escapa_il_markup_del_corpo():
+    """Google Chat renderizza il testo come HTML semplice: `<a href>` ingerito non
+    deve diventare un link con testo scelto dal mittente."""
+    body = '<a href="https://evil">x</a> & <b>'
+    payload = build_google_chat_payload(
+        receiver_name="R",
+        severity="error",
+        content_preview=body,
+        content_size=len(body),
+        notification_url="https://notifyhub.example.com/notifications/abc",
+    )
+    text = payload["cardsV2"][0]["card"]["sections"][0]["widgets"][0]["textParagraph"]["text"]
+    assert text == '&lt;a href="https://evil"&gt;x&lt;/a&gt; &amp; &lt;b&gt;'
+
+
 # --- durata nei messaggi ----------------------------------------------------
 
 
