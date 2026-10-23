@@ -383,7 +383,7 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
           <input
             {...fieldAria("receiver-edit-name", { error: nameError })}
             required
-            maxLength={120}
+            maxLength={255}
             value={name}
             onChange={(event) => setName(event.target.value)}
           />
@@ -900,8 +900,9 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
             </p>
             {disabled && (
               <div className="warning-banner" role="status">
-                Receiver disabilitato: {receiver.rejected_last_24h ?? 0} richieste rifiutate nelle
-                ultime 24 ore.
+                Receiver disabilitato: {receiver.rejected_last_24h ?? 0}{" "}
+                {(receiver.rejected_last_24h ?? 0) === 1 ? "richiesta rifiutata" : "richieste rifiutate"}{" "}
+                nelle ultime 24 ore.
               </div>
             )}
           </div>

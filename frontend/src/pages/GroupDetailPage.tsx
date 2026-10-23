@@ -94,7 +94,7 @@ export default function GroupDetailPage() {
           <h3>Receiver del gruppo</h3>
           {receivers !== undefined && (
             <span className="card-header-actions text-muted text-sm">
-              {receivers.length} configurati
+              {receivers.length} {receivers.length === 1 ? "configurato" : "configurati"}
             </span>
           )}
         </div>
