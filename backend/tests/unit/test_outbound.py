@@ -148,9 +148,7 @@ def test_slack_il_limite_vale_sul_testo_escapato_e_non_taglia_entita():
     """4096 `&` escapati diventano 5 caratteri ciascuno: il tetto della section
     (3000) deve valere sull'output, e il taglio non cade dentro `&amp;`."""
     body = "&" * 4096
-    payload = build_slack_payload(
-        **_slack_kwargs(content_preview=body, content_size=len(body))
-    )
+    payload = build_slack_payload(**_slack_kwargs(content_preview=body, content_size=len(body)))
     text = _slack_section(payload)
     assert len(text) <= 3000
     main, notice = text.split("\n… [troncato", 1)
@@ -162,9 +160,7 @@ def test_slack_il_limite_vale_sul_testo_escapato_e_non_taglia_entita():
 def test_slack_nessun_falso_troncato_quando_la_normalizzazione_rimuove_nul():
     """Il corpo `hello\\x00 world` (12 byte) e' intero: la preview 'hello world' e'
     piu' corta dei byte originali, ma non e' un troncamento."""
-    payload = build_slack_payload(
-        **_slack_kwargs(content_preview="hello world", content_size=12)
-    )
+    payload = build_slack_payload(**_slack_kwargs(content_preview="hello world", content_size=12))
     assert _slack_section(payload) == "hello world"
 
 

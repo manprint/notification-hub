@@ -3,6 +3,7 @@ notifyhub_app, senza privilegi di bypass: quelli che toccano dati di tenant
 iterano i tenant e impostano app.tenant_id per ciascuno (spec 5.3)."""
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -224,7 +225,7 @@ def reconcile_deliveries() -> None:
             # riga corrente. Se il proprietario ha committato `sent` dopo la SELECT,
             # la riga non viene toccata e non viene riaccodata: riscriverla a
             # `failed` la farebbe consegnare due volte.
-            reclaimed = []
+            reclaimed: Sequence[uuid.UUID] = []
             if stuck:
                 reclaimed = (
                     session.execute(

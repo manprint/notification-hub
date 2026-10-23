@@ -886,7 +886,7 @@ Job Celery Beat. Tutti girano con il ruolo `notifyhub_app`, senza alcun privileg
 |---|---|
 | `nginx` | Reverse proxy, TLS, `client_max_body_size`, `proxy_request_buffering off` su `/ingest/`, serve la SPA buildata |
 | `api` | FastAPI su uvicorn/gunicorn. Porta 8000 pubblica, 9100 interna per `/metrics` |
-| `worker` | Celery worker (coda `delivery`), engine SQLAlchemy sincrono |
+| `worker` | Celery worker (code `delivery` e `maintenance`), engine SQLAlchemy sincrono |
 | `beat` | Celery Beat (purge, riconciliazione, manutenzione oggetti) |
 | `postgres` | PostgreSQL 16 con volume persistente |
 | `redis` | Broker Celery + rate limiting + idempotenza + (v2) pub/sub SSE |
