@@ -37,6 +37,9 @@ from app.services.severity import InvalidPatternError, compile_pattern
 from app.services.severity_presets import (
     BUILTIN_PRESETS,
     PRIORITY_STEP,
+    BuiltinNameTakenError,
+    BuiltinRetiredError,
+    builtin_keys_con_nome_occupato,
     reset_preset_to_builtin,
     sync_builtin_presets,
 )
@@ -203,14 +206,17 @@ async def sync_builtin(
     """Installa i preset del catalogo che mancano a questo tenant.
 
     Non tocca le copie gia presenti, nemmeno se modificate: e un'operazione
-    additiva, ripetibile senza effetti collaterali.
+    additiva, ripetibile senza effetti collaterali. Un predefinito il cui nome
+    e gia usato da un preset del tenant viene saltato e segnalato in `skipped`.
     """
     tenant_id = uuid.UUID(claims.tid)
     before = {spec.key for spec in BUILTIN_PRESETS}
+    saltati = await builtin_keys_con_nome_occupato(session, tenant_id)
     installed = await sync_builtin_presets(session, tenant_id)
     return SyncBuiltinPresetsOut(
         installed=installed,
-        already_present=sorted(before - set(installed)),
+        already_present=sorted(before - set(installed) - set(saltati)),
+        skipped=saltati,
     )
 
 
@@ -296,6 +302,23 @@ async def reset_preset(
             type=PROBLEM_TYPES["conflict"],
             title="Conflict",
             detail="This preset was not created from a builtin one: there is nothing to restore.",
+        ) from exc
+    except BuiltinRetiredError as exc:
+        raise Problem(
+            status=409,
+            type=PROBLEM_TYPES["conflict"],
+            title="Conflict",
+            detail=(
+                f"The builtin preset '{exc.args[0]}' is no longer in the catalog: "
+                "there is nothing to restore."
+            ),
+        ) from exc
+    except BuiltinNameTakenError as exc:
+        raise Problem(
+            status=409,
+            type=PROBLEM_TYPES["conflict"],
+            title="Conflict",
+            detail=f"A preset named '{exc.args[0]}' already exists.",
         ) from exc
     return await _detail(session, preset)
 

@@ -86,6 +86,8 @@ class BuiltinPresetOut(BaseModel):
 class SyncBuiltinPresetsOut(BaseModel):
     installed: list[str]
     already_present: list[str]
+    # Predefiniti saltati perche il loro nome e gia usato da un preset del tenant.
+    skipped: list[str] = Field(default_factory=list)
 
 
 class ReceiverPresetOut(BaseModel):

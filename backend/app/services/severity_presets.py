@@ -383,6 +383,28 @@ async def install_builtin_preset(
     return preset
 
 
+async def _chiavi_e_nomi_del_tenant(
+    session: AsyncSession, tenant_id: uuid.UUID
+) -> tuple[set[str], set[str]]:
+    """Chiavi dei predefiniti gia installati e nomi di tutti i preset del tenant."""
+    result = await session.execute(
+        select(SeverityPreset.builtin_key, SeverityPreset.name).where(
+            SeverityPreset.tenant_id == tenant_id
+        )
+    )
+    righe = result.all()
+    chiavi = {chiave for chiave, _ in righe if chiave is not None}
+    nomi = {nome for _, nome in righe}
+    return chiavi, nomi
+
+
+async def builtin_keys_con_nome_occupato(session: AsyncSession, tenant_id: uuid.UUID) -> list[str]:
+    """Predefiniti mancanti che il sync salta perche il loro nome e gia usato nel
+    tenant, di solito da una copia personalizzata con lo stesso nome."""
+    chiavi, nomi = await _chiavi_e_nomi_del_tenant(session, tenant_id)
+    return [spec.key for spec in BUILTIN_PRESETS if spec.key not in chiavi and spec.name in nomi]
+
+
 async def sync_builtin_presets(session: AsyncSession, tenant_id: uuid.UUID) -> list[str]:
     """Installa i preset del catalogo che questo tenant non ha ancora.
 
@@ -391,19 +413,17 @@ async def sync_builtin_presets(session: AsyncSession, tenant_id: uuid.UUID) -> l
     utenti valgono piu del catalogo; per tornare ai valori di fabbrica c'e il
     ripristino esplicito (`reset_preset_to_builtin`).
 
+    Un predefinito il cui nome e gia usato da un preset del tenant viene saltato,
+    non installato a meta: il vincolo di unicita sul nome farebbe fallire l'intero
+    lotto. Si installa al primo sync utile, dopo che il nome si e liberato.
+
     Restituisce le chiavi installate ora.
     """
-    result = await session.execute(
-        select(SeverityPreset.builtin_key).where(
-            SeverityPreset.tenant_id == tenant_id,
-            SeverityPreset.builtin_key.is_not(None),
-        )
-    )
-    already = {row[0] for row in result.all()}
+    chiavi, nomi = await _chiavi_e_nomi_del_tenant(session, tenant_id)
 
     installed: list[str] = []
     for spec in BUILTIN_PRESETS:
-        if spec.key in already:
+        if spec.key in chiavi or spec.name in nomi:
             continue
         await install_builtin_preset(session, tenant_id, spec)
         installed.append(spec.key)
@@ -421,16 +441,38 @@ async def missing_builtin_keys(session: AsyncSession, tenant_id: uuid.UUID) -> l
     return [spec.key for spec in BUILTIN_PRESETS if spec.key not in already]
 
 
+class BuiltinRetiredError(Exception):
+    """La chiave del preset non esiste piu nel catalogo: nulla a cui tornare."""
+
+
+class BuiltinNameTakenError(Exception):
+    """Il nome di fabbrica e gia usato da un altro preset del tenant."""
+
+
 async def reset_preset_to_builtin(session: AsyncSession, preset: SeverityPreset) -> PresetSpec:
     """Riporta le regole di un preset ai valori del catalogo, buttando via le
     modifiche locali. Nome e descrizione tornano anch'essi ai valori di fabbrica.
 
-    Solleva KeyError se il preset non viene da un preset predefinito: e il
-    chiamante a doverlo tradurre nella risposta HTTP giusta.
+    Solleva KeyError se il preset non viene da un preset predefinito, e
+    BuiltinRetiredError o BuiltinNameTakenError se il ripristino non e possibile.
+    Tutti i controlli stanno prima di qualunque scrittura: il chiamante puo
+    tradurli in 409 senza lasciare modifiche a meta.
     """
     if preset.builtin_key is None:
         raise KeyError("preset non predefinito")
-    spec = BUILTIN_BY_KEY[preset.builtin_key]
+    spec = BUILTIN_BY_KEY.get(preset.builtin_key)
+    if spec is None:
+        raise BuiltinRetiredError(preset.builtin_key)
+
+    altro_preset_con_il_nome = await session.scalar(
+        select(SeverityPreset.id).where(
+            SeverityPreset.tenant_id == preset.tenant_id,
+            SeverityPreset.name == spec.name,
+            SeverityPreset.id != preset.id,
+        )
+    )
+    if altro_preset_con_il_nome is not None:
+        raise BuiltinNameTakenError(spec.name)
 
     await session.execute(
         delete(SeverityPresetRule).where(SeverityPresetRule.preset_id == preset.id)
