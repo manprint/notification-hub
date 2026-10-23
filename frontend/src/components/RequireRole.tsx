@@ -11,7 +11,16 @@ export default function RequireRole({ allowed, children }: RequireRoleProps) {
   const { role } = useSession();
 
   if (role === null || !allowed.includes(role)) {
-    return <div className="access-denied">Accesso negato: il tuo ruolo non può vedere questa pagina.</div>;
+    // Il titolo c'è come in ogni altra schermata: senza, la pagina non ha un h1
+    // e chi usa lo schermo lettore non sa dove si trova.
+    return (
+      <div className="access-denied">
+        <div className="page-header">
+          <h1>Accesso negato</h1>
+        </div>
+        <p className="page-subtitle">Il tuo ruolo non può vedere questa pagina.</p>
+      </div>
+    );
   }
 
   return <>{children}</>;

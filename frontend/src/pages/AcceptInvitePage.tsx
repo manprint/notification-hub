@@ -71,9 +71,13 @@ export default function AcceptInvitePage() {
     <main className="auth-shell">
       <div className="card auth-card">
         <h1 className="auth-title">Accetta invito</h1>
-        <p className="auth-subtitle">
-          Scegli la password del tuo account: da qui in poi si entra con quella.
-        </p>
+        {/* Senza token la pagina non chiede nessuna password: il sottotitolo lo
+            prometterebbe. */}
+        {token && (
+          <p className="auth-subtitle">
+            Scegli la password del tuo account: da qui in poi si entra con quella.
+          </p>
+        )}
         {error && <ErrorBanner error={error} />}
         {validationError && (
           <div className="error-banner" role="alert">
