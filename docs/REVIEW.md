@@ -824,7 +824,6 @@ delle librerie; test mancanti; nessuna regressione. Branch
 | Consegne | Un broker che rifiuta un accodamento fermava sorveglianza e riconciliazione per i tenant successivi | Errore registrato per singola delivery, il giro continua |
 | All-in-one | Backup che dichiarava successo senza l'archivio della configurazione; restore che perdeva o non applicava `NOTIFYHUB_SECRET_KEY` | Esito del backup verificato; con una chiave cambiata i servizi restano fermi fino al riavvio |
 | All-in-one | Metriche di API e worker invisibili al server 9100; nginx senza le intestazioni di sicurezza di compose | `PROMETHEUS_MULTIPROC_DIR` comune; intestazioni ripetute nelle location che ne aggiungono |
-| Configurazione | `.env` versionato con la chiave segnaposto pubblica | Chiave di sviluppo propria; il validatore rifiuta il prefisso `change-me` |
 | Interfaccia | Pagine che scorrevano in orizzontale a 375-1024 px (canali, utenze, consegne): gli `.sr-only` assoluti sfuggivano al `.table-wrap` | `.table-wrap { position: relative }` |
 | Interfaccia | Slug a una lettera per riga, colonne delle azioni fuori schermo, pattern RE2 schiacciati, menu mobile che nascondeva le voci | Regole di a-capo per colonna, larghezza minima del pattern, voce attiva centrata |
 | Interfaccia | Riordino di regole e preset costruito dalla cache: un riordino concorrente veniva annullato in silenzio | Lettura fresca dal server prima di ogni PUT; se la schermata e' smentita il PUT non parte |
@@ -845,6 +844,7 @@ branch.
 | Filtro di visibilita' del member risolto con subquery | Correzione affidabile solo con una riscrittura LATERAL, da misurare su dati reali |
 | Differenza di tempi residua nel login con email nota e password errata | La scrittura dell'audit del fallimento resta; l'email sconosciuta esegue gia' argon2 |
 | Utente MinIO di servizio separato da root | Richiede il provisioning di un utente con policy sul bucket |
+| `.env` versionato con una chiave di cifratura nota | Parzialmente: il validatore rifiuta le chiavi `change-me…` e `.env` porta ora una chiave di solo sviluppo, ma resta pubblica come il file. Chi installa deve generarne una (`openssl rand -hex 32`, README e OPERAZIONI.md); togliere `.env` dal repository cambierebbe l'avvio documentato di compose |
 | Lock del refresh fra schede su origini non sicure | Nessun primitivo atomico lato client senza Web Locks; una finestra di grazia lato server contraddice la spec 4.1 |
 | Contatori di caratteri sui campi nome/descrizione, banner unificati in un componente, tutte le tabelle scritte a mano portate su `DataTable` | Coerenza estetica, nessun difetto funzionale; i limiti sono gia' applicati da `maxLength` e dal server |
 
