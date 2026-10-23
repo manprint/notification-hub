@@ -18,9 +18,21 @@
   --color-text-muted: #9aa1ac;
   --color-accent: #4f8cff;
   --color-accent-soft: rgba(79, 140, 255, 0.14);
+  /* Sfondi pieni con testo bianco (pulsanti principali, pillola "Verificata"):
+     piu' scuri dell'accento, perche' il bianco su #4f8cff sta a 3.22:1 e lo
+     standard WCAG AA ne chiede 4.5:1. Rapporti con #fff: accent-fill 4.95:1,
+     accent-fill-hover 6.43:1. */
+  --color-accent-fill: #2b6ae0;
+  --color-accent-fill-hover: #2358c4;
 
   --color-critical: #e5484d;
-  --color-error: #e5484d;
+  /* Rosso come sfondo pieno (badge critici, conferma distruttiva) e come
+     testo su superfici scure. Rapporti: critical-fill 5.25:1 con #fff,
+     critical-fill-hover 6.02:1; critical-text 5.75:1 su surface-alt e 6.29:1 su
+     surface (il rosso di --color-critical su surface sta a 4.45:1). */
+  --color-critical-fill: #c93238;
+  --color-critical-fill-hover: #b92d33;
+  --color-critical-text: #ff6b6f;
   --color-warning: #f5b544;
   --color-info: #8a94a6;
   --color-debug: #8a94a6;
@@ -217,21 +229,21 @@ button:disabled {
 }
 
 button.primary {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
+  background: var(--color-accent-fill);
+  border-color: var(--color-accent-fill);
   color: #fff;
   font-weight: 600;
 }
 
 button.primary:hover:not(:disabled) {
-  background: #3f7cf0;
-  border-color: #3f7cf0;
+  background: var(--color-accent-fill-hover);
+  border-color: var(--color-accent-fill-hover);
 }
 
 /* Azioni che tolgono qualcosa: rosse solo sul bordo e sul testo, così una
    riga di tabella non diventa un semaforo. */
 button.danger {
-  color: var(--color-critical);
+  color: var(--color-critical-text);
   border-color: rgba(229, 72, 77, 0.45);
 }
 
@@ -243,14 +255,14 @@ button.danger:hover:not(:disabled) {
 /* La conferma di un dialogo distruttivo: piena, perché è l'azione principale
    di quella finestra, ma rossa perché toglie dati. */
 button.primary.danger {
-  background: var(--color-critical);
-  border-color: var(--color-critical);
+  background: var(--color-critical-fill);
+  border-color: var(--color-critical-fill);
   color: #fff;
 }
 
 button.primary.danger:hover:not(:disabled) {
-  background: #d13a3f;
-  border-color: #d13a3f;
+  background: var(--color-critical-fill-hover);
+  border-color: var(--color-critical-fill-hover);
 }
 
 /* Azione secondaria dentro una riga o accanto a un campo. */
@@ -739,13 +751,13 @@ tbody tr:last-child td {
 /* Obbligatorio e facoltativo si leggono sull'etichetta, non si indovinano dal
    messaggio del server dopo aver premuto Salva. */
 .required-mark {
-  color: var(--color-critical);
+  color: var(--color-critical-text);
   margin-left: 2px;
 }
 
 .form-row > label.is-required::after {
   content: " *";
-  color: var(--color-critical);
+  color: var(--color-critical-text);
 }
 
 .form-row > label.is-optional::after {
@@ -768,7 +780,7 @@ tbody tr:last-child td {
 
 .field-error {
   font-size: var(--text-xs);
-  color: var(--color-critical);
+  color: var(--color-critical-text);
 }
 
 .form-legend {
@@ -970,7 +982,7 @@ tbody tr:last-child td {
 
 .severity-critical,
 .severity-error {
-  background: var(--color-critical);
+  background: var(--color-critical-fill);
 }
 
 .severity-warning {
@@ -1009,7 +1021,7 @@ tbody tr:last-child td {
 }
 
 .status-pill.danger {
-  color: var(--color-critical);
+  color: var(--color-critical-text);
   border-color: rgba(229, 72, 77, 0.5);
   background: var(--color-danger-soft);
 }
@@ -1021,8 +1033,8 @@ tbody tr:last-child td {
 }
 
 .status-pill.verified {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
+  background: var(--color-accent-fill);
+  border-color: var(--color-accent-fill);
   color: #fff;
 }
 
@@ -1116,7 +1128,7 @@ tbody tr:last-child td {
 }
 
 .toast-error .toast-icon {
-  color: var(--color-critical);
+  color: var(--color-critical-text);
 }
 
 .toast-info .toast-icon {
@@ -1160,7 +1172,7 @@ tbody tr:last-child td {
 }
 
 .save-state.failed {
-  color: var(--color-critical);
+  color: var(--color-critical-text);
 }
 
 /* --- dialogo di conferma -------------------------------------------------- */
