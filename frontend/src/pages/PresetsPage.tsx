@@ -167,7 +167,7 @@ function PresetRules({ presetId, canManage }: { presetId: string; canManage: boo
   return (
     <div>
       {loadError && <ErrorBanner error={loadError} />}
-      {error && <ErrorBanner error={error} />}
+      {error && !deletingRule && <ErrorBanner error={error} />}
 
       {!loaded && isLoading && <p className="card-hint">Caricamento delle regole…</p>}
       {loaded && rules.length === 0 && (
@@ -302,6 +302,9 @@ function PresetRules({ presetId, canManage }: { presetId: string; canManage: boo
           }}
           onCancel={() => setDeletingRule(null)}
         >
+          {/* Il motivo del rifiuto resta nel dialogo: il toast scompare dopo pochi secondi
+              e il banner di pagina sta sotto il velo del dialogo. */}
+          {error && <ErrorBanner error={error} />}
           <p>
             La regola sparisce da <strong>tutti</strong> i receiver che usano questo preset.
           </p>
@@ -378,7 +381,7 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
 
   return (
     <div className="card">
-      {error && <ErrorBanner error={error} />}
+      {error && !confirmReset && !confirmDelete && <ErrorBanner error={error} />}
 
       {renaming ? (
         <form onSubmit={(event) => void saveRename(event)}>
@@ -452,7 +455,7 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
 
       {confirmReset && (
         <ConfirmDialog
-          title={`Ripristina "${preset.name}"`}
+          title={`Ripristina «${preset.name}»`}
           confirmLabel="Ripristina"
           // Il dialogo resta aperto e occupato finché la richiesta non risponde.
           onConfirm={async () => {
@@ -464,20 +467,39 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
           }}
           onCancel={() => setConfirmReset(false)}
         >
+          {/* Il motivo del rifiuto resta nel dialogo: il toast scompare dopo pochi secondi
+              e il banner di pagina sta sotto il velo del dialogo. */}
+          {error && <ErrorBanner error={error} />}
           <p>
-            Vanno perse le <strong>{preset.rules_count}</strong> regole attuali di questo preset,
-            comprese quelle che hai scritto tu: vengono sostituite dalle regole predefinite. Anche
+            {preset.rules_count === 1 ? (
+              <>La regola attuale di questo preset va persa</>
+            ) : (
+              <>
+                Vanno perse le <strong>{preset.rules_count}</strong> regole attuali di questo
+                preset
+              </>
+            )}
+            , comprese quelle che hai scritto tu: vengono sostituite dalle regole predefinite. Anche
             nome e descrizione tornano quelli del catalogo.
           </p>
-          <p>
-            I {preset.receivers_count} receiver che lo usano applicheranno subito le regole nuove.
-          </p>
+          {preset.receivers_count > 0 && (
+            <p>
+              {preset.receivers_count === 1 ? (
+                <>Il receiver che lo usa applicherà subito le regole nuove.</>
+              ) : (
+                <>
+                  I {preset.receivers_count} receiver che lo usano applicheranno subito le regole
+                  nuove.
+                </>
+              )}
+            </p>
+          )}
         </ConfirmDialog>
       )}
 
       {confirmDelete && (
         <ConfirmDialog
-          title={`Elimina preset "${preset.name}"`}
+          title={`Elimina preset «${preset.name}»`}
           expectedText={preset.name}
           confirmLabel="Elimina preset"
           // Come per le regole: il dialogo resta aperto e occupato finché la
@@ -491,10 +513,22 @@ function PresetCard({ preset, canManage }: { preset: SeverityPresetOut; canManag
           }}
           onCancel={() => setConfirmDelete(false)}
         >
-          <p>
-            Il preset viene tolto dai {preset.receivers_count} receiver che lo usano: quei receiver
-            continueranno a valutare solo le proprie regole.
-          </p>
+          {/* Il motivo del rifiuto resta nel dialogo: il toast scompare dopo pochi secondi
+              e il banner di pagina sta sotto il velo del dialogo. */}
+          {error && <ErrorBanner error={error} />}
+          {preset.receivers_count === 0 ? (
+            <p>Nessun receiver usa questo preset.</p>
+          ) : preset.receivers_count === 1 ? (
+            <p>
+              Il preset viene tolto dal receiver che lo usa: quel receiver continuerà a valutare
+              solo le proprie regole.
+            </p>
+          ) : (
+            <p>
+              Il preset viene tolto dai {preset.receivers_count} receiver che lo usano: quei
+              receiver continueranno a valutare solo le proprie regole.
+            </p>
+          )}
         </ConfirmDialog>
       )}
 

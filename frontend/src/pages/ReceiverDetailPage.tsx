@@ -1019,7 +1019,7 @@ function ReceiverDetail({ id }: { id: string | undefined }) {
 
       {confirming === "delete" && (
         <ConfirmDialog
-          title={`Elimina receiver "${receiver.name}"`}
+          title={`Elimina receiver «${receiver.name}»`}
           confirmLabel="Elimina receiver"
           expectedText={receiver.name}
           onConfirm={() => void removeReceiver()}

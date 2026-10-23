@@ -393,4 +393,115 @@ describe("PresetsPage", () => {
     expect(pattern).toHaveAttribute("aria-invalid", "true");
     expect(pattern).toHaveAttribute("aria-describedby", messaggio.id);
   });
+
+  it("T-PST9a il rifiuto del ripristino resta nel dialogo aperto", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.post("/api/v1/severity-presets/p1/reset", () =>
+        HttpResponse.json(
+          {
+            type: "/problems/unprocessable",
+            title: "Unprocessable",
+            status: 422,
+            detail: "MOTIVO_RESET",
+          },
+          { status: 422 },
+        ),
+      ),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Bash generico")).toBeInTheDocument());
+    const card = screen.getByText("Bash generico").closest<HTMLElement>(".card")!;
+    await user.click(within(card).getByRole("button", { name: /Ripristina i valori predefiniti/ }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Ripristina" }));
+
+    expect(await within(dialog).findByText(/MOTIVO_RESET/)).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Ripristina" })).toBeEnabled();
+  });
+
+  it("T-PST9b il rifiuto dell'eliminazione del preset resta nel dialogo aperto", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.delete("/api/v1/severity-presets/p2", () =>
+        HttpResponse.json(
+          {
+            type: "/problems/unprocessable",
+            title: "Unprocessable",
+            status: 422,
+            detail: "MOTIVO_PRESET",
+          },
+          { status: 422 },
+        ),
+      ),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Backup interni")).toBeInTheDocument());
+    const card = screen.getByText("Backup interni").closest<HTMLElement>(".card")!;
+    await user.click(within(card).getByRole("button", { name: "Elimina preset" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText(/Digita/), "Backup interni");
+    await user.click(within(dialog).getByRole("button", { name: "Elimina preset" }));
+
+    expect(await within(dialog).findByText(/MOTIVO_PRESET/)).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("T-PST9c il rifiuto dell'eliminazione di una regola resta nel dialogo aperto", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.delete("/api/v1/severity-preset-rules/pr1", () =>
+        HttpResponse.json(
+          {
+            type: "/problems/unprocessable",
+            title: "Unprocessable",
+            status: 422,
+            detail: "MOTIVO_REGOLA",
+          },
+          { status: 422 },
+        ),
+      ),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Bash generico")).toBeInTheDocument());
+    const card = screen.getByText("Bash generico").closest<HTMLElement>(".card")!;
+    await user.click(within(card).getByRole("button", { name: "Mostra regole" }));
+    await user.click((await within(card).findAllByRole("button", { name: "Elimina" }))[0]);
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Elimina regola" }));
+
+    expect(await within(dialog).findByText(/MOTIVO_REGOLA/)).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("T-PST10 le conferme usano il singolare con un solo receiver e senza receiver", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/v1/severity-presets", () =>
+        HttpResponse.json([
+          { ...fixturePresets[0], rules_count: 1, receivers_count: 1 },
+          fixturePresets[1],
+        ]),
+      ),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Bash generico")).toBeInTheDocument());
+    const card = screen.getByText("Bash generico").closest<HTMLElement>(".card")!;
+    await user.click(within(card).getByRole("button", { name: /Ripristina i valori predefiniti/ }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/La regola attuale di questo preset va persa/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Il receiver che lo usa applicherà/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Annulla" }));
+
+    const altra = screen.getByText("Backup interni").closest<HTMLElement>(".card")!;
+    await user.click(within(altra).getByRole("button", { name: "Elimina preset" }));
+    const dialogoElimina = await screen.findByRole("dialog");
+    expect(within(dialogoElimina).getByText("Nessun receiver usa questo preset.")).toBeInTheDocument();
+    expect(within(dialogoElimina).getByText(/Elimina preset «Backup interni»/)).toBeInTheDocument();
+  });
 });

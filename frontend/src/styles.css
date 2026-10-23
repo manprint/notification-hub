@@ -914,7 +914,6 @@ tbody tr:last-child td {
   margin-top: var(--space-2);
 }
 
-
 /* Barra di filtri e azioni: le voci hanno la propria etichetta, così una
    tendina "Tutti gli stati" si capisce anche quando è su un valore. */
 .toolbar {

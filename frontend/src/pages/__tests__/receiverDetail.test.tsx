@@ -792,6 +792,38 @@ describe("ReceiverDetailPage", () => {
     expect(inviati[0]).toEqual({ name: "Backup rinominato" });
   });
 
+  it("T-CAP1 il tetto del tenant rifiuta il limite corpo e il motivo resta nel form", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.patch("/api/v1/receivers/r1", () =>
+        HttpResponse.json(
+          {
+            type: "/problems/unprocessable",
+            title: "Unprocessable",
+            status: 422,
+            detail: "MOTIVO_CAP",
+          },
+          { status: 422 },
+        ),
+      ),
+    );
+
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+    await user.clear(screen.getByLabelText("Limite corpo (byte)"));
+    await user.type(screen.getByLabelText("Limite corpo (byte)"), "2048");
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+
+    // Toast e banner dicono entrambi il motivo: si controlla il banner, che resta.
+    await waitFor(() =>
+      expect(document.querySelector(".error-banner")).toHaveTextContent("MOTIVO_CAP"),
+    );
+    expect(screen.getByLabelText("Limite corpo (byte)")).toHaveValue(2048);
+  });
+
   it("T-REP2 salvare il receiver ricalcola la prova sulle ultime notifiche", async () => {
     const user = userEvent.setup();
     let ricalcoli = 0;

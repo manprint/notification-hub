@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { apiDelete, apiGet, apiPost, apiPut } from "../api/client";
 import type { ApiError, GroupChannelBindingOut, DeliveryChannelOut, Severity } from "../api/types";
-import DataTable, { type DataTableColumn } from "../components/DataTable";
+import DataTable, { type DataTableColumn } from "./DataTable";
 import ErrorBanner from "../components/ErrorBanner";
 import SaveIndicator from "./SaveIndicator";
 import { useAction } from "../hooks/useAction";
