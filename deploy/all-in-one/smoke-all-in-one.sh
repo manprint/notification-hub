@@ -115,7 +115,7 @@ echo -e "${COLOR_GREEN}✓${COLOR_NC} Container healthy: tutti i servizi sono su
 echo ""
 echo "Step 2: bootstrap del tenant..."
 USER_EMAIL="owner@acme-notifyhub-smoke.io"
-USER_PASSWORD="password123"
+USER_PASSWORD="smoke-password-123"
 
 bootstrap_output=$(docker exec "$CONTAINER" notifyhub-cli bootstrap \
     --tenant-name "Test Tenant" \

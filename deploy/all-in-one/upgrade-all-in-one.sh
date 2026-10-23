@@ -37,7 +37,7 @@ KEEP=0
 [ "${1:-}" = "--keep" ] && KEEP=1
 
 USER_EMAIL="owner@acme-notifyhub-upgrade.io"
-USER_PASSWORD="password123"
+USER_PASSWORD="smoke-password-123"
 
 assert_eq() {
     local expected="$1" actual="$2" msg="$3"

@@ -142,7 +142,7 @@ echo "Step 2: Bootstrap tenant..."
 # verificata). Da quando API e CLI condividono la validazione (app/core/emails.py)
 # anche "@...local" e "@...test" sarebbero accettati.
 USER_EMAIL="owner@acme-notifyhub-smoke.io"
-USER_PASSWORD="password123"
+USER_PASSWORD="smoke-password-123"
 
 bootstrap_output=$("${COMPOSE[@]}" run --rm -T migrate \
     python -m app.cli bootstrap \
@@ -169,7 +169,7 @@ echo ""
 echo "Step 3: Login..."
 login_response=$(curl -s -w "\n%{http_code}" -X POST ${BASE}/api/v1/auth/login \
     -H "Content-Type: application/json" \
-    -d "{\"email\": \"$USER_EMAIL\", \"password\": \"password123\"}")
+    -d "{\"email\": \"$USER_EMAIL\", \"password\": \"$USER_PASSWORD\"}")
 
 http_code=$(echo "$login_response" | tail -1)
 body=$(echo "$login_response" | head -n -1)
@@ -264,7 +264,8 @@ if ! grep -qF "SLUG=\"\${NOTIFYHUB_SLUG:-$receiver_slug}\"" <<<"$script_body"; t
     exit 1
 fi
 
-if ! grep -qF 'URL="${NOTIFYHUB_URL:-http://localhost}"' <<<"$script_body"; then
+# URL pubblica di loopback in .env: vince quella della richiesta, porta compresa.
+if ! grep -qF "URL=\"\${NOTIFYHUB_URL:-$BASE}\"" <<<"$script_body"; then
     echo -e "${COLOR_RED}✗${COLOR_NC} Wrapper script should carry the public base URL"
     exit 1
 fi
