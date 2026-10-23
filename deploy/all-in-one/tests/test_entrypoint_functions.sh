@@ -58,4 +58,18 @@ check "nginx: sotto 1 MiB il limite resta quello del backend (524288 byte)" [ "$
 limit="$(render_body_limit 20971520)"
 check "nginx: default di 20 MiB invariato" [ "${limit}" = "20971520" ]
 
+# --- metriche multiprocess: la directory si svuota a ogni avvio ---------------
+# lib.sh deve esportare la directory, e l'entrypoint deve svuotarla: un file di un
+# run precedente (pid morto) non deve finire nei valori sommati dal server 9100.
+check "metriche: lib.sh esporta PROMETHEUS_MULTIPROC_DIR sotto /run/notifyhub" \
+    grep -Fq 'export PROMETHEUS_MULTIPROC_DIR="${RUN_DIR}/metrics"' "${SANDBOX}/lib/lib.sh"
+PROMETHEUS_MULTIPROC_DIR="${SANDBOX}/run/metrics"
+mkdir -p "${PROMETHEUS_MULTIPROC_DIR}"
+: > "${PROMETHEUS_MULTIPROC_DIR}/counter_1111.db"
+eval "$(extract_fn metrics_prepare "${ENTRY}")"
+metrics_prepare
+check "metriche: i file di un run precedente vengono rimossi" \
+    none "${PROMETHEUS_MULTIPROC_DIR}/*.db"
+check "metriche: la directory esiste dopo la preparazione" [ -d "${PROMETHEUS_MULTIPROC_DIR}" ]
+
 summary

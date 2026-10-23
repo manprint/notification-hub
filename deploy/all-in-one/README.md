@@ -95,6 +95,9 @@ segreti persistiti e ricompone l'ambiente prima di eseguire il comando (`bootstr
 | 5432 / 6379 | PostgreSQL e Redis | mai raggiungibili da fuori dal container |
 
 nginx non instrada `/metrics`: come nello stack Compose, le metriche restano su una porta separata.
+La porta 9100 somma i valori di API e worker (`PROMETHEUS_MULTIPROC_DIR=/run/notifyhub/metrics`).
+Quella directory si svuota a ogni avvio del container: i contatori ripartono da zero dopo un riavvio,
+come per ogni esportatore Prometheus.
 
 ## Persistenza: un solo volume `/data`
 

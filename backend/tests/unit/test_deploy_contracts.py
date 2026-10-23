@@ -152,3 +152,23 @@ def test_immagine_api_senza_compilatore_nello_stadio_finale():
     assert "gcc" not in stadio_finale
     assert "libpq-dev" not in stadio_finale
     assert "COPY --from=builder /opt/venv /opt/venv" in stadio_finale
+
+
+@pytest.mark.unit
+def test_all_in_one_metriche_multiprocess_pulite_all_avvio():
+    # Come nel compose, API, worker e beat scrivono in una directory multiprocess che il 9100
+    # somma. Nell'all-in-one la esporta lib.sh (i programmi di supervisord la ereditano, quindi
+    # supervisord.conf non la ridefinisce) e l'entrypoint la svuota prima di qualunque processo.
+    radice = REPO / "deploy/all-in-one"
+    lib = (radice / "rootfs/usr/local/lib/notifyhub/lib.sh").read_text(encoding="utf-8")
+    entrypoint = (radice / "rootfs/usr/local/bin/notifyhub-entrypoint").read_text(encoding="utf-8")
+    supervisord = (radice / "config/supervisord.conf").read_text(encoding="utf-8")
+    boot = entrypoint[entrypoint.index("boot() {") :]
+
+    assert 'export PROMETHEUS_MULTIPROC_DIR="${RUN_DIR}/metrics"' in lib
+    assert "PROMETHEUS_MULTIPROC_DIR" not in supervisord
+    assert (
+        boot.index("export_runtime_env")
+        < boot.index("metrics_prepare")
+        < boot.index('exec "${VENV_BIN}/supervisord"')
+    )
