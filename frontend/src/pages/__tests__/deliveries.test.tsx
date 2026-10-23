@@ -50,6 +50,8 @@ describe("DeliveriesPage errori", () => {
     renderWithProviders(<DeliveriesPage />);
 
     await screen.findByText("Elenco non disponibile per un errore di caricamento.");
+    // Il banner dell'errore c'è accanto al messaggio della tabella, non al suo posto.
+    expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(screen.queryByText(/Nessuna consegna trovata/)).toBeNull();
   });
 });
@@ -419,5 +421,82 @@ describe("DeliveriesPage stati e azioni", () => {
     expect(screen.queryByText("Morta", { selector: ".status-pill" })).not.toBeInTheDocument();
     // Il dato arriva dalla risposta: nessuna lettura in più dell'elenco.
     expect(elenco).toBe(1);
+  });
+});
+
+describe("DeliveriesPage esito e motivo", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setRefreshToken("refresh-token-fixture");
+  });
+
+  it("una morta per 4xx dice che il webhook l'ha rifiutata, non che i tentativi sono finiti", async () => {
+    server.use(
+      http.get("/api/v1/deliveries", () =>
+        HttpResponse.json({
+          deliveries: [
+            {
+              ...fixtureDeliveries[0],
+              id: "r4",
+              status: "dead",
+              attempts: 0,
+              response_code: 404,
+              last_error: "HTTP 404: no_team",
+            },
+            { ...fixtureDeliveries[0], id: "r5", status: "dead", attempts: 5, response_code: 503 },
+            {
+              ...fixtureDeliveries[0],
+              id: "r429",
+              status: "dead",
+              attempts: 5,
+              response_code: 429,
+            },
+          ],
+          next_cursor: null,
+        }),
+      ),
+    );
+    renderWithProviders(<DeliveriesPage />);
+
+    expect(
+      await screen.findByText(/rifiutata dal webhook \(HTTP 404\), nessun tentativo ripetuto/),
+    ).toBeInTheDocument();
+    // Le morte per 5xx e per 429 hanno esaurito i tentativi, come prima.
+    expect(screen.getAllByText(/esauriti i tentativi/)).toHaveLength(2);
+  });
+
+  it("il codice HTTP non si ripete quando il messaggio del backend lo contiene già", async () => {
+    server.use(
+      http.get("/api/v1/deliveries", () =>
+        HttpResponse.json({
+          deliveries: [
+            {
+              ...fixtureDeliveries[0],
+              id: "r4",
+              status: "dead",
+              attempts: 0,
+              response_code: 404,
+              last_error: "HTTP 404: no_team",
+            },
+            {
+              ...fixtureDeliveries[0],
+              id: "r429",
+              status: "failed",
+              attempts: 1,
+              response_code: 429,
+              last_error: "rate limited",
+            },
+          ],
+          next_cursor: null,
+        }),
+      ),
+    );
+    renderWithProviders(<DeliveriesPage />);
+
+    const conMessaggio = await screen.findByText("HTTP 404: no_team");
+    expect(conMessaggio.closest(".cell-diagnostics")?.textContent).toBe("HTTP 404: no_team");
+    // Senza un messaggio che lo ripeta, il codice resta in colonna.
+    const senzaCodiceNelMessaggio = screen.getByText("rate limited").closest(".cell-diagnostics");
+    expect(senzaCodiceNelMessaggio?.textContent).toBe("HTTP 429rate limited");
   });
 });
