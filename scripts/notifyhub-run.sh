@@ -60,7 +60,7 @@
 
 set -uo pipefail
 
-VERSION="1.5.0"
+VERSION="1.5.1"
 
 # --- configurazione --------------------------------------------------------
 # Le due righe qui sotto sono le uniche da toccare per mettere in funzione lo
@@ -343,24 +343,47 @@ output_file="$(mktemp "${TMPDIR:-/tmp}/notifyhub-run.XXXXXX")" \
 trap 'rm -f "$output_file"' EXIT
 
 # Un SIGTERM (systemd che ferma il servizio, kill dell'operatore) o un Ctrl-C
-# arrivano di solito anche al comando, che termina. Senza trap lo script moriva
-# con lui senza inviare niente; cosi' invece l'esecuzione si conclude e la
-# notifica dice che e' stata interrotta. Il trap non ignora il segnale: il
-# comando eseguito lo riceve con la disposizione predefinita.
+# arrivano al wrapper. Il comando gira in background, cosi' il wrapper resta
+# libero di reagire mentre e' in corso (bash rimanda i trap a fine comando in
+# primo piano). A ogni segnale il comando riceve SIGTERM dal wrapper: un
+# comando in background ignora SIGINT, quindi il SIGINT del Ctrl-C va
+# convertito. L'esecuzione si conclude e la notifica dice che e' stata
+# interrotta; il wrapper aspetta la fine del comando prima di inviare.
 INTERRUPTED=""
-trap 'INTERRUPTED=SIGTERM' TERM
-trap 'INTERRUPTED=SIGINT' INT
-trap 'INTERRUPTED=SIGHUP' HUP
+CHILD_PID=""
+on_signal() {
+    INTERRUPTED="$1"
+    if [ -n "$CHILD_PID" ]; then
+        kill -TERM "$CHILD_PID" 2>/dev/null || true
+    fi
+}
+trap 'on_signal SIGTERM' TERM
+trap 'on_signal SIGINT' INT
+trap 'on_signal SIGHUP' HUP
 
 start_ms="$(now_ms)"
 
+# stdin esplicito: senza job control un comando in background legge /dev/null.
 if [ -n "$TIMEOUT" ]; then
-    timeout -k "$KILL_AFTER" "$TIMEOUT" "$@" >"$output_file" 2>&1
-    rc=$?
+    timeout -k "$KILL_AFTER" "$TIMEOUT" "$@" <&0 >"$output_file" 2>&1 &
 else
-    "$@" >"$output_file" 2>&1
-    rc=$?
+    "$@" <&0 >"$output_file" 2>&1 &
 fi
+CHILD_PID=$!
+# Un segnale arrivato prima che il PID fosse noto va inoltrato adesso.
+if [ -n "$INTERRUPTED" ]; then
+    kill -TERM "$CHILD_PID" 2>/dev/null || true
+fi
+
+# wait torna subito a ogni segnale intercettato dal trap: si ripete finche' il
+# comando non e' davvero terminato, cosi' rc e' il suo exit status.
+wait "$CHILD_PID"
+rc=$?
+while kill -0 "$CHILD_PID" 2>/dev/null; do
+    wait "$CHILD_PID"
+    rc=$?
+done
+CHILD_PID=""
 
 duration_ms=$(( $(now_ms) - start_ms ))
 # Un orologio spostato indietro durante l'esecuzione (ntp, correzione manuale)

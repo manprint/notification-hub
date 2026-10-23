@@ -62,8 +62,26 @@ if ! as_postgres "${PG_BIN}/pg_dumpall" -h "${PG_SOCKET_DIR}" -U postgres --clea
 fi
 mv "${DUMP_FILE}.tmp" "${DUMP_FILE}"
 
+# L'archivio di configurazione contiene secrets.env, cioe' NOTIFYHUB_SECRET_KEY,
+# che cifra i webhook nel dump: senza di lui il backup non serve a niente. Se non
+# si crea o non contiene il file, il backup fallisce e il dump appena scritto va
+# via, altrimenti resterebbe in rotazione come se fosse completo.
 CONFIG_ARCHIVE="${OUTPUT_DIR}/${BASENAME}.config.tar.gz"
-tar -czf "${CONFIG_ARCHIVE}" -C "${DATA_DIR}" config 2>/dev/null || true
+CONFIG_TMP="${CONFIG_ARCHIVE}.tmp"
+config_fail() {
+    rm -f "${DUMP_FILE}" "${CONFIG_TMP}"
+    die "$1"
+}
+if ! tar -czf "${CONFIG_TMP}" -C "${DATA_DIR}" config; then
+    config_fail "archivio della configurazione non creato: backup annullato"
+fi
+if ! listing="$(tar -tzf "${CONFIG_TMP}")"; then
+    config_fail "archivio della configurazione illeggibile: backup annullato"
+fi
+if ! grep -qx 'config/secrets.env' <<<"${listing}"; then
+    config_fail "archivio della configurazione senza secrets.env: backup annullato"
+fi
+mv "${CONFIG_TMP}" "${CONFIG_ARCHIVE}"
 
 cat > "${OUTPUT_DIR}/${BASENAME}.manifest" <<EOF
 app_version=${IMAGE_VERSION}
@@ -78,13 +96,31 @@ umask 022
 
 log_info "backup completato: $(du -h "${DUMP_FILE}" | cut -f1) in ${DUMP_FILE}"
 
-# Rotazione: si tengono gli ultimi KEEP set completi.
-if [ "${KEEP}" -gt 0 ] 2>/dev/null; then
-    mapfile -t obsolete < <(ls -1t "${OUTPUT_DIR}"/notifyhub-*.sql.gz 2>/dev/null | tail -n "+$((KEEP + 1))")
-    for old in "${obsolete[@]:-}"; do
-        [ -n "${old}" ] || continue
+# Rotazione: si tengono gli ultimi KEEP set completi di ciascun pool. I backup
+# pre-aggiornamento (etichetta pre-*) sono il punto di ritorno di un upgrade
+# fallito: stanno in un pool a parte, cosi' i backup manuali non li spingono via.
+rotate_pool() {
+    local keep="$1"; shift
+    local -a sets=("$@")
+    local i old base
+    for ((i = keep; i < ${#sets[@]}; i++)); do
+        old="${sets[i]}"
         base="${old%.sql.gz}"
         log_info "rimuovo il backup scaduto $(basename "${base}")"
         rm -f "${base}.sql.gz" "${base}.config.tar.gz" "${base}.manifest"
     done
+}
+
+if [ "${KEEP}" -gt 0 ] 2>/dev/null; then
+    manual=()
+    pre=()
+    while IFS= read -r f; do
+        [ -n "${f}" ] || continue
+        case "$(basename "${f}")" in
+            notifyhub-pre-*) pre+=("${f}") ;;
+            *) manual+=("${f}") ;;
+        esac
+    done < <(ls -1t "${OUTPUT_DIR}"/notifyhub-*.sql.gz 2>/dev/null || true)
+    rotate_pool "${KEEP}" "${manual[@]}"
+    rotate_pool "${KEEP}" "${pre[@]}"
 fi

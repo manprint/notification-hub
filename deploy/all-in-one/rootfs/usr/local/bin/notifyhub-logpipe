@@ -47,11 +47,20 @@ class RotatingLog:
             # /logs non montato o non scrivibile: resta comunque lo stdout.
             self.handle = None
 
+    def _discard(self) -> None:
+        """Chiude il file dopo un errore, senza rilanciare un eventuale secondo errore."""
+        handle, self.handle = self.handle, None
+        if handle is None:
+            return
+        try:
+            handle.close()
+        except OSError:
+            pass
+
     def _rotate(self) -> None:
         if self.handle is None:
             return
-        self.handle.close()
-        self.handle = None
+        self._discard()
         try:
             for index in range(self.backups - 1, 0, -1):
                 src = f"{self.path}.{index}"
@@ -69,7 +78,12 @@ class RotatingLog:
 
     def write(self, line: str) -> None:
         if self.handle is None:
-            return
+            # Dopo un errore (disco pieno, I/O) il file si riapre alla riga
+            # successiva: un guasto di un minuto non deve togliere il file log
+            # per tutta la vita del container. Lo stdout resta comunque.
+            self._open()
+            if self.handle is None:
+                return
         data = line + "\n"
         encoded = len(data.encode("utf-8", "replace"))
         if self.max_bytes > 0 and self.size + encoded > self.max_bytes:
@@ -81,7 +95,7 @@ class RotatingLog:
             self.handle.flush()
             self.size += encoded
         except OSError:
-            self.handle = None
+            self._discard()
 
 
 def main() -> int:
