@@ -94,7 +94,12 @@ export function problemText(error: ApiError): ProblemText {
 
   const detail = error.detail?.trim() ?? "";
   if (detail === "") {
-    return { message: TYPE_MESSAGES[error.type] ?? GENERIC_MESSAGE, detail: "" };
+    // Una pagina d'errore del proxy (502, 504, 413) non ha un detail: lo stato
+    // HTTP è l'unica cosa che dice cos'è successo, e resta nel messaggio.
+    const typed = TYPE_MESSAGES[error.type];
+    if (typed) return { message: typed, detail: "" };
+    const status = error.status > 0 ? ` (HTTP ${error.status})` : "";
+    return { message: `${GENERIC_MESSAGE}${status}`, detail: "" };
   }
   const known = KNOWN_DETAILS[detail];
   if (known) return { message: known, detail: "" };

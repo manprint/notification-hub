@@ -31,9 +31,14 @@ describe("problemMessages", () => {
   });
 
   it("senza dettaglio né tipo noto la frase è generica, non il titolo inglese", () => {
-    expect(problemMessage(errore({ status: 418, title: "I'm a teapot" }))).toBe(
+    expect(problemMessage(errore({ status: 0, title: "I'm a teapot" }))).toBe(
       "Operazione non riuscita.",
     );
+  });
+
+  it("una pagina d'errore del proxy senza detail dice lo stato HTTP", () => {
+    const e = errore({ status: 502, type: "/problems/generic", title: "Errore HTTP 502", detail: "" });
+    expect(problemMessage(e)).toBe("Operazione non riuscita. (HTTP 502)");
   });
 
   it("l'errore di rete, già in italiano, passa com'è", () => {

@@ -71,7 +71,10 @@ export default function ChannelBindings({ groupId, channels }: ChannelBindingsPr
         }
         await queryClient.invalidateQueries({ queryKey: ["group-channel-bindings", groupId] });
       },
-      { name: channelId, success: `«${channelName}»: inoltro da ${minSeverity} in su.` },
+      {
+        name: channelId,
+        success: `«${channelName}»: inoltro da ${severityLabel(minSeverity)} in su.`,
+      },
     );
   }
 

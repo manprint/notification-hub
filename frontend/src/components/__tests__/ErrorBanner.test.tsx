@@ -64,6 +64,16 @@ describe("ErrorBanner", () => {
     expect(banner).not.toHaveTextContent("Invalid credentials");
   });
 
+  it("T-ERR6 una pagina d'errore del proxy, senza detail, dice almeno lo stato", () => {
+    render(
+      <ErrorBanner
+        error={{ status: 502, type: "/problems/generic", title: "Errore HTTP 502", detail: "", extra: {} }}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("502");
+  });
+
   it("T-ERR5 un dettaglio non tradotto resta visibile, dopo una frase in italiano", () => {
     render(
       <ErrorBanner

@@ -183,6 +183,8 @@ describe("ChannelBindings", () => {
     await waitFor(() => expect(inviato).not.toBeNull());
     expect(metodo).toBe("POST");
     expect(inviato).toEqual({ channel_id: "c1", min_severity: "critical" });
+    // L'avviso di esito dice la severity con la stessa parola del badge.
+    expect(await screen.findByText(/inoltro da Critica in su/)).toBeInTheDocument();
   });
 
   it("cambiare la soglia di un canale gia collegato usa PUT, non un secondo POST", async () => {
