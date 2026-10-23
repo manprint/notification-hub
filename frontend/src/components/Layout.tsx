@@ -33,6 +33,10 @@ const MENU_ITEMS: MenuItem[] = [
   { to: "/settings", label: "Impostazioni", allowed: ["owner", "admin"] },
 ];
 
+/** Il menu diventa una riga a scorrimento sotto questa larghezza: stesso punto
+ *  di rottura della barra laterale in styles.css (`@media (max-width: 1000px)`). */
+const MENU_A_RIGA = "(max-width: 1000px)";
+
 export default function Layout() {
   const { user, role, logout } = useSession();
   const location = useLocation();
@@ -40,16 +44,18 @@ export default function Layout() {
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
-    if (!window.matchMedia("(max-width: 760px)").matches) return;
+    if (!window.matchMedia(MENU_A_RIGA).matches) return;
     const navigation = navigationRef.current;
     const activeLink = navigation?.querySelector<HTMLElement>('a[aria-current="page"]');
     if (!navigation || !activeLink) return;
 
-    // Allinea la voce attiva al margine del menu senza lasciare a sinistra
-    // frammenti della voce precedente (un glitch evidente sui telefoni stretti).
-    const offset = activeLink.getBoundingClientRect().left - navigation.getBoundingClientRect().left;
-    navigation.scrollLeft += offset - 8;
-  }, [location.pathname]);
+    // Centra la voce attiva nel menu: così si vedono anche le voci vicine, a
+    // destra e a sinistra, e la voce non finisce nella sfumatura del bordo.
+    // Allinearla al bordo sinistro nascondeva tutto ciò che la precede.
+    const menu = navigation.getBoundingClientRect();
+    const voce = activeLink.getBoundingClientRect();
+    navigation.scrollLeft += voce.left - menu.left + voce.width / 2 - menu.width / 2;
+  }, [location.pathname, role]);
 
   return (
     <div className="app-shell">

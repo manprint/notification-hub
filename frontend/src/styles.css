@@ -1713,9 +1713,8 @@ button.stats-toggle:hover:not(:disabled) {
   .app-sidebar nav ul {
     width: max-content;
     flex-direction: row;
-    /* Coda di scorrimento: permette anche alle ultime voci di allinearsi al
-       bordo sinistro, senza lasciare visibile una parola tagliata prima della
-       voce attiva. */
+    /* Coda di scorrimento: permette anche all'ultima voce di centrarsi nel
+       menu (Layout.tsx), senza che la sfumatura del bordo destro la tagli. */
     padding-right: calc(100vw - 8rem);
   }
 
