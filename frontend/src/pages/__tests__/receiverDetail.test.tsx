@@ -762,6 +762,32 @@ describe("ReceiverDetailPage", () => {
     }
   });
 
+  it("una rinomina manda solo il nome, non i campi che il form non ha toccato", async () => {
+    const user = userEvent.setup();
+    const inviati: Record<string, unknown>[] = [];
+    server.use(
+      http.patch("/api/v1/receivers/r1", async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        inviati.push(body);
+        return HttpResponse.json({ ...fixtureReceiver, ...body });
+      }),
+    );
+
+    setRefreshToken("refresh-token-fixture");
+    renderReceiverDetail();
+    await waitFor(() => expect(screen.getByText("Slug")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Modifica receiver" }));
+    await user.clear(screen.getByLabelText("Nome"));
+    await user.type(screen.getByLabelText("Nome"), "Backup rinominato");
+    await user.click(screen.getByRole("button", { name: "Salva" }));
+
+    // Un salvataggio con il solo nome non riscrive severity, limiti, exit code
+    // e soglia di durata: se un altro admin li ha cambiati, quei valori restano.
+    await waitFor(() => expect(inviati).toHaveLength(1));
+    expect(inviati[0]).toEqual({ name: "Backup rinominato" });
+  });
+
   it("T-REP2 salvare il receiver ricalcola la prova sulle ultime notifiche", async () => {
     const user = userEvent.setup();
     let ricalcoli = 0;

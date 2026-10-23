@@ -181,6 +181,11 @@ function describeExpectation(receiver: ReceiverOut): string {
 function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone: () => void }) {
   const queryClient = useQueryClient();
   const { busy, error, run } = useAction();
+  // Lo stato letto all'apertura del form: la PATCH manda solo ciò che l'utente
+  // ha cambiato rispetto a questo, non il receiver com'è adesso sul server.
+  // Rimandare i campi non toccati riscriverebbe una modifica fatta da un altro
+  // nel frattempo (severity di default, soglia, exit code...).
+  const [initial] = useState(receiver);
   const [name, setName] = useState(receiver.name);
   const [defaultSeverity, setDefaultSeverity] = useState<Severity>(receiver.default_severity);
   // Testo e non numero: con `Number(value)` nello stato, svuotare il campo lo
@@ -323,20 +328,34 @@ function EditReceiverForm({ receiver, onDone }: { receiver: ReceiverOut; onDone:
     // ogni rinomina riscriverebbe il fuso di un cron salvato senza fuso e
     // farebbe fallire il salvataggio di un nome per un cron salvato con regole
     // piu' vecchie di quelle attuali.
-    const expectedChanges = sameExpectation(expected, storedExpectation(receiver)) ? {} : expected;
+    const expectedChanges = sameExpectation(expected, storedExpectation(initial)) ? {} : expected;
+    // null e' un valore, non "campo assente": disattiva la politica.
+    const exitCodeValue = exitCodeSeverity === EXIT_CODE_DISABLED ? null : exitCodeSeverity;
+    const durationSeverityValue = hasSeverity ? durationSeverity : null;
+    const fieldChanges = {
+      ...(name.trim() !== initial.name ? { name: name.trim() } : {}),
+      ...(defaultSeverity !== initial.default_severity
+        ? { default_severity: defaultSeverity }
+        : {}),
+      ...(body.value !== initial.max_body_bytes ? { max_body_bytes: body.value } : {}),
+      ...(rate.value !== initial.rate_limit_per_min
+        ? { rate_limit_per_min: rate.value }
+        : {}),
+      ...(exitCodeValue !== initial.exit_code_severity
+        ? { exit_code_severity: exitCodeValue }
+        : {}),
+      ...(thresholdSeconds !== initial.duration_threshold_seconds
+        ? { duration_threshold_seconds: thresholdSeconds }
+        : {}),
+      ...(durationSeverityValue !== initial.duration_severity
+        ? { duration_severity: durationSeverityValue }
+        : {}),
+    };
 
     const ok = await run(
       async () => {
         await apiPatch(`/api/v1/receivers/${receiver.id}`, {
-          name: name.trim(),
-          default_severity: defaultSeverity,
-          max_body_bytes: body.value,
-          rate_limit_per_min: rate.value,
-          // null e' un valore, non "campo assente": disattiva la politica.
-          exit_code_severity:
-            exitCodeSeverity === EXIT_CODE_DISABLED ? null : exitCodeSeverity,
-          duration_threshold_seconds: thresholdSeconds,
-          duration_severity: hasSeverity ? durationSeverity : null,
+          ...fieldChanges,
           ...expectedChanges,
         });
         await queryClient.invalidateQueries({ queryKey: ["receiver", receiver.id] });
