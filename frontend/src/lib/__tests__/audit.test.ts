@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RESOURCE_TYPES, endOfDay, shortLabel, startOfDay } from "../audit";
+import { RESOURCE_TYPES, actionLabel, endOfDay, shortLabel, startOfDay } from "../audit";
 
 const ISO_CON_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/;
 
@@ -55,5 +55,31 @@ describe("RESOURCE_TYPES", () => {
     ]) {
       expect(RESOURCE_TYPES).toContain(tipo);
     }
+  });
+});
+
+describe("actionLabel", () => {
+  it("le azioni esplicite (notifiche, accessi) hanno la loro etichetta", () => {
+    expect(actionLabel("auth.login")).toBe("Accesso");
+    expect(actionLabel("notification.marked_read")).toBe("Segnata come letta");
+  });
+
+  it("le azioni generiche `<risorsa>.<tipo>` si leggono in italiano", () => {
+    expect(actionLabel("group.created")).toBe("Creazione: Gruppo");
+    expect(actionLabel("receiver.updated")).toBe("Modifica: Receiver");
+    expect(actionLabel("severity_preset_rule.deleted")).toBe("Eliminazione: Regola di preset");
+  });
+
+  it("ogni risorsa scritta dal backend ha un'etichetta per creazione, modifica ed eliminazione", () => {
+    for (const tipo of RESOURCE_TYPES) {
+      for (const tipoAzione of ["created", "updated", "deleted"]) {
+        const azione = `${tipo}.${tipoAzione}`;
+        expect(actionLabel(azione), azione).not.toBe(azione);
+      }
+    }
+  });
+
+  it("un'azione sconosciuta resta leggibile come codice", () => {
+    expect(actionLabel("cosa.nuova")).toBe("cosa.nuova");
   });
 });

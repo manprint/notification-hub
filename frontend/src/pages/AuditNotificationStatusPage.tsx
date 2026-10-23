@@ -14,7 +14,7 @@ import {
   shortLabel,
   startOfDay,
 } from "../lib/audit";
-import { formatDateTime } from "../lib/format";
+import { formatDateTime, roleLabel } from "../lib/format";
 
 /** Vista dedicata a "segna come letta" e "segna come verificata": la stessa
  * tabella dell'audit, filtrata sulle azioni che rispondono alla domanda
@@ -60,7 +60,7 @@ export default function AuditNotificationStatusPage() {
         <div className="cell-preview">
           {event.actor_email}
           <div className="cell-diagnostics">
-            {event.actor_role}
+            {roleLabel(event.actor_role)}
             {event.ip ? ` · ${event.ip}` : ""}
           </div>
         </div>

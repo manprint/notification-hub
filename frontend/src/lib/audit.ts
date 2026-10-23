@@ -49,8 +49,26 @@ export const RESOURCE_LABELS: Record<string, string> = {
 /** I tipi di risorsa filtrabili, nello stesso ordine delle etichette. */
 export const RESOURCE_TYPES: string[] = Object.keys(RESOURCE_LABELS);
 
+/** Il verbo delle azioni generiche `<risorsa>.<tipo>` (backend/app/services/audit.py,
+ *  un evento per ogni INSERT, UPDATE o DELETE). Il nome della risorsa viene dopo
+ *  i due punti, così il genere non va concordato con il verbo. */
+const KIND_LABELS: Record<string, string> = {
+  created: "Creazione",
+  updated: "Modifica",
+  deleted: "Eliminazione",
+};
+
 export function actionLabel(action: string): string {
-  return ACTION_LABELS[action] ?? action;
+  const explicit = ACTION_LABELS[action];
+  if (explicit) return explicit;
+  const dot = action.lastIndexOf(".");
+  if (dot > 0) {
+    const resource = RESOURCE_LABELS[action.slice(0, dot)];
+    const kind = KIND_LABELS[action.slice(dot + 1)];
+    if (resource && kind) return `${kind}: ${resource}`;
+  }
+  // Un'azione che il backend non ha ancora descritto resta leggibile com'è.
+  return action;
 }
 
 export function resourceLabel(resourceType: string): string {

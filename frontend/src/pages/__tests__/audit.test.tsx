@@ -54,6 +54,16 @@ describe("AuditPage", () => {
     expect(screen.getByText("Backup notturno fallito")).toBeInTheDocument();
   });
 
+  it("la colonna Chi stampa il ruolo in italiano, non il codice", async () => {
+    renderWithProviders(<AuditPage />);
+    await waitFor(() => expect(screen.getByText("mario@acme.test")).toBeInTheDocument());
+
+    // La prima riga della fixture è di un operatore: il ruolo è la sua etichetta.
+    const chi = cella(1, "Chi");
+    expect(within(chi).getByText(/Operatore/)).toBeInTheDocument();
+    expect(chi.textContent).not.toMatch(/\bmember\b/);
+  });
+
   it("ogni riga dice in quale gruppo e su quale receiver è avvenuta", async () => {
     renderWithProviders(<AuditPage />);
     await waitFor(() => expect(screen.getByText("mario@acme.test")).toBeInTheDocument());

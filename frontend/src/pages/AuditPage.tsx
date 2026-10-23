@@ -14,7 +14,7 @@ import {
   resourceLabel,
   startOfDay,
 } from "../lib/audit";
-import { formatDateTime } from "../lib/format";
+import { formatDateTime, roleLabel } from "../lib/format";
 
 export default function AuditPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -57,7 +57,7 @@ export default function AuditPage() {
         <div className="cell-preview">
           {event.actor_email}
           <div className="cell-diagnostics">
-            {event.actor_role}
+            {roleLabel(event.actor_role)}
             {event.ip ? ` · ${event.ip}` : ""}
           </div>
         </div>
