@@ -5,16 +5,22 @@ interface ModalProps {
   title: string;
   onClose: () => void;
   children: ReactNode;
+  /** Un salvataggio è in volo: il modulo non si chiude (×, Escape, sfondo)
+   *  finché non finisce, altrimenti il suo esito e l'errore sparirebbero. */
+  busy?: boolean;
 }
 
 /** Finestra per un modulo che interrompe la lettura della pagina (modifica di
  *  una riga): stessa cornice del dialogo di conferma, senza l'azione decisa
  *  dentro. Prima questi moduli comparivano in fondo alla pagina, lontano dalla
  *  riga su cui si era appena premuto "Modifica". */
-export default function Modal({ title, onClose, children }: ModalProps) {
+export default function Modal({ title, onClose, children, busy = false }: ModalProps) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
-  useDialogKeyboard(dialogRef, onClose);
+  const requestClose = () => {
+    if (!busy) onClose();
+  };
+  useDialogKeyboard(dialogRef, requestClose);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -32,7 +38,7 @@ export default function Modal({ title, onClose, children }: ModalProps) {
     <div
       className="confirm-backdrop"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget) requestClose();
       }}
     >
       {/* tabIndex -1: un click su un testo del dialogo lascia il fuoco sul
@@ -47,7 +53,13 @@ export default function Modal({ title, onClose, children }: ModalProps) {
       >
         <div className="card-header">
           <h2 id={titleId}>{title}</h2>
-          <button type="button" className="ghost" aria-label="Chiudi" onClick={onClose}>
+          <button
+            type="button"
+            className="ghost"
+            aria-label="Chiudi"
+            disabled={busy}
+            onClick={requestClose}
+          >
             ×
           </button>
         </div>
