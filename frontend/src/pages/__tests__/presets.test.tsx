@@ -113,7 +113,7 @@ describe("PresetsPage", () => {
     const card = screen.getByText("Bash generico").closest<HTMLElement>(".card")!;
     await user.click(within(card).getByRole("button", { name: "Mostra regole" }));
 
-    const campi = await within(card).findAllByLabelText("Pattern RE2 del preset");
+    const campi = await within(card).findAllByLabelText("Pattern");
     await user.type(campi[campi.length - 1], "PANIC");
     await user.click(within(card).getByRole("button", { name: "Aggiungi regola" }));
 
@@ -218,6 +218,7 @@ describe("PresetsPage", () => {
     // Dopo il ripristino la bozza riparte dai valori nuovi, non da quelli letti
     // al primo caricamento della pagina.
     await user.click(within(card).getByRole("button", { name: /Ripristina i valori predefiniti/ }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Ripristina" }));
     expect(await within(card).findByText("Descrizione ripristinata.")).toBeInTheDocument();
     await user.click(within(card).getByRole("button", { name: "Rinomina" }));
     expect(within(card).getByLabelText("Descrizione")).toHaveValue("Descrizione ripristinata.");
@@ -300,5 +301,96 @@ describe("PresetsPage", () => {
     expect(screen.queryByRole("button", { name: "Rinomina" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Crea preset" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /preset mancanti/ })).not.toBeInTheDocument();
+  });
+  it("T-PST5 Ripristina chiede conferma: annullando non tocca il preset", async () => {
+    const user = userEvent.setup();
+    const chiamate: string[] = [];
+    server.use(
+      http.post("/api/v1/severity-presets/p1/reset", () => {
+        chiamate.push("reset");
+        return HttpResponse.json({});
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Bash generico")).toBeInTheDocument());
+    const card = screen.getByText("Bash generico").closest<HTMLElement>(".card")!;
+    await user.click(within(card).getByRole("button", { name: /Ripristina i valori predefiniti/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/regole attuali/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Annulla" }));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(chiamate).toHaveLength(0);
+  });
+
+  it("T-PST6 eliminare un preset tiene il dialogo occupato finché la richiesta risponde", async () => {
+    const user = userEvent.setup();
+    let rispondi: () => void = () => undefined;
+    let chiamate = 0;
+    server.use(
+      http.delete("/api/v1/severity-presets/p2", async () => {
+        chiamate += 1;
+        await new Promise<void>((resolve) => {
+          rispondi = resolve;
+        });
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Bash generico")).toBeInTheDocument());
+    const card = screen.getByText("Backup interni").closest<HTMLElement>(".card")!;
+    await user.click(within(card).getByRole("button", { name: "Elimina preset" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByLabelText(/Digita/), "Backup interni");
+    await user.click(within(dialog).getByRole("button", { name: "Elimina preset" }));
+
+    expect(within(dialog).getByRole("button", { name: "Elimina preset" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Annulla" })).toBeDisabled();
+    rispondi();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(chiamate).toBe(1);
+  });
+
+  it("T-PST7 la lista delle regole non dice 'non ha ancora regole' mentre si carica o dopo un errore", async () => {
+    const user = userEvent.setup();
+    let rispondi: () => void = () => undefined;
+    server.use(
+      http.get("/api/v1/severity-presets/p1", async () => {
+        await new Promise<void>((resolve) => {
+          rispondi = resolve;
+        });
+        return HttpResponse.json({ ...fixturePresets[0], rules: [] });
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Bash generico")).toBeInTheDocument());
+    const card = screen.getByText("Bash generico").closest<HTMLElement>(".card")!;
+    await user.click(within(card).getByRole("button", { name: "Mostra regole" }));
+
+    expect(await within(card).findByText("Caricamento delle regole…")).toBeInTheDocument();
+    expect(within(card).queryByText(/non ha ancora regole/)).not.toBeInTheDocument();
+    rispondi();
+    expect(await within(card).findByText(/non ha ancora regole/)).toBeInTheDocument();
+  });
+
+  it("T-PST8 la regola ha etichette visibili e l'errore è collegato al campo", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Bash generico")).toBeInTheDocument());
+    const card = screen.getByText("Bash generico").closest<HTMLElement>(".card")!;
+    await user.click(within(card).getByRole("button", { name: "Mostra regole" }));
+
+    const pattern = await within(card).findByLabelText("Pattern");
+    expect(within(card).getByLabelText("Severity", { selector: "select" })).toBeInTheDocument();
+    await user.click(within(card).getByRole("button", { name: "Aggiungi regola" }));
+
+    const messaggio = await within(card).findByText("Il pattern è obbligatorio.");
+    expect(pattern).toHaveAttribute("aria-invalid", "true");
+    expect(pattern).toHaveAttribute("aria-describedby", messaggio.id);
   });
 });
