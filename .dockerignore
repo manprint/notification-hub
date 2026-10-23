@@ -3,7 +3,10 @@ node_modules
 .git
 __pycache__
 **/__pycache__
+# .venv nel sottoalbero backend/ non e' coperto da una regola senza '**': l'immagine lo
+# copierebbe (314 MB) e il chown ricorsivo lo duplicherebbe in un secondo layer.
 .venv
+**/.venv
 frontend/dist
 *.md
 .env
@@ -15,6 +18,15 @@ frontend/dist
 .mypy_cache
 **/.mypy_cache
 .coverage
+**/.coverage
+**/.ruff_cache
+# Ambienti di test e cache degli strumenti di sviluppo: non vanno nelle immagini.
+**/.env.test*
+**/.env.migration.test
+.claude
+.tokensave
+.serena
+.planning
 .DS_Store
 *.egg-info
 dist

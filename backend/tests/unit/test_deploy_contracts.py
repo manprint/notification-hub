@@ -1,4 +1,4 @@
-"""Contratti dei file di deploy (compose, nginx, Dockerfile, env): letti come testo o YAML, senza Docker."""
+"""Contratti dei file di deploy (compose, nginx, Dockerfile, env), letti come testo o YAML."""
 
 import asyncio
 import ipaddress
@@ -89,7 +89,7 @@ def test_api_e_worker_condividono_la_directory_delle_metriche(servizio):
     ],
 )
 def test_nginx_spa_ha_cache_e_intestazioni(frammento):
-    # Il comportamento reale lo verifica deploy/nginx/test-headers.sh con nginx; qui il contratto testuale.
+    # Il comportamento reale lo verifica deploy/nginx/test-headers.sh; qui il contratto testuale.
     nginx = (REPO / "deploy/nginx/nginx.conf").read_text(encoding="utf-8")
     assert frammento in nginx
 
@@ -123,3 +123,13 @@ def test_solo_le_migrazioni_ricevono_il_ruolo_owner(servizio):
 def test_migrate_ha_la_url_del_ruolo_owner():
     env = _compose()["services"]["migrate"]["environment"]
     assert env["DATABASE_URL_OWNER"].startswith("postgresql+asyncpg://notifyhub_owner:")
+
+
+@pytest.mark.unit
+def test_immagine_api_senza_compilatore_nello_stadio_finale():
+    dockerfile = (REPO / "deploy/api/Dockerfile").read_text(encoding="utf-8")
+    stadio_finale = dockerfile.split("\nFROM ")[-1]
+
+    assert "gcc" not in stadio_finale
+    assert "libpq-dev" not in stadio_finale
+    assert "COPY --from=builder /opt/venv /opt/venv" in stadio_finale
