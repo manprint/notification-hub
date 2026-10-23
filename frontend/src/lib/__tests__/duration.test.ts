@@ -66,6 +66,7 @@ describe("splitDuration e toSeconds", () => {
     [7200, "2", "h"],
     [86_400, "1", "g"],
     [90, "90", "s"], // non divisibile per 60: resta in secondi
+    [0, "0", "s"], // zero non è "0 giorni": si legge come zero secondi
   ])("%s secondi -> %s %s", (secondi, amount, unit) => {
     expect(splitDuration(secondi as number | null)).toEqual({ amount, unit });
   });
