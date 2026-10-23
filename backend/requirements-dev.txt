@@ -4,7 +4,7 @@ pytest-asyncio~=1.4.0
 pytest-cov~=6.3.0
 respx~=0.23.1
 freezegun~=1.5.5
-ruff~=0.16.10
+ruff~=0.17.2
 mypy~=2.4.0
 # croniter non spedisce annotazioni: senza gli stub mypy si fermerebbe
 # sull'import in app/services/surveillance.py.
