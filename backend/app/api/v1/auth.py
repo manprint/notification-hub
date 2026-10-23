@@ -10,6 +10,7 @@ from app.api.deps import client_ip, current_claims, db, require_admin
 from app.core.config import get_settings
 from app.core.errors import PROBLEM_TYPES, Problem
 from app.core.security import (
+    DUMMY_PASSWORD_HASH,
     AccessClaims,
     create_access_token,
     hash_password,
@@ -82,31 +83,33 @@ async def register(body: RegisterIn) -> dict:
             detail="Email already registered.",
         )
 
-    from app.db.session import async_session_factory_app
-
     tenant_id = uuid.uuid4()
-    async with async_session_factory_app() as session:
-        tenant = Tenant(
-            id=tenant_id,
-            name=body.tenant_name,
-            slug=f"{body.tenant_name.lower().replace(' ', '-')}-{tenant_id.hex[:8]}",
-            status=TenantStatus.ACTIVE,
-        )
-        session.add(tenant)
-        await session.commit()
-
-    password_hash = await asyncio.to_thread(hash_password, body.password)
     user_id = uuid.uuid4()
+    password_hash = await asyncio.to_thread(hash_password, body.password)
+
+    # Tenant e owner nella stessa transazione: se l'INSERT dell'owner fallisce (corsa
+    # su users.email), il tenant torna indietro con lui e non resta senza utenti.
+    # tenants non ha RLS, quindi si inserisce sulla sessione gia legata al tenant.
     async with tenant_session(tenant_id) as session:
-        user = User(
-            id=user_id,
-            tenant_id=tenant_id,
-            email=body.email,
-            password_hash=password_hash,
-            role=UserRole.OWNER,
-            status=UserStatus.ACTIVE,
+        session.add(
+            Tenant(
+                id=tenant_id,
+                name=body.tenant_name,
+                slug=f"{body.tenant_name.lower().replace(' ', '-')}-{tenant_id.hex[:8]}",
+                status=TenantStatus.ACTIVE,
+            )
         )
-        session.add(user)
+        await session.flush()
+        session.add(
+            User(
+                id=user_id,
+                tenant_id=tenant_id,
+                email=body.email,
+                password_hash=password_hash,
+                role=UserRole.OWNER,
+                status=UserStatus.ACTIVE,
+            )
+        )
 
     # Come nel bootstrap da CLI: un tenant nuovo trova i preset predefiniti gia
     # installati e modificabili, invece di una sezione Preset vuota.
@@ -163,7 +166,10 @@ async def login(body: LoginIn, request: Request) -> TokenPairOut:
     # chiave si riduce di fatto alla sola email ed e' di nuovo possibile bloccare
     # un account noto con dieci tentativi sbagliati — esattamente cio' che questa
     # chiave composta doveva impedire.
-    rate_limit_key = f"login_attempts:{body.email}:{client_ip(request)}"
+    # L'email si confronta in citext, quindi le grafie che differiscono solo per
+    # maiuscole sono lo stesso account: la chiave deve normalizzarle tutte (anche
+    # la parte locale, che normalize_email non tocca).
+    rate_limit_key = f"login_attempts:{body.email.lower()}:{client_ip(request)}"
     rate_limit = await sliding_window_hit(rate_limit_key, 10, 900)
 
     if not rate_limit.allowed:
@@ -177,10 +183,15 @@ async def login(body: LoginIn, request: Request) -> TokenPairOut:
 
     user_identity = await find_user_by_email(body.email)
 
-    password_matches = bool(
-        user_identity
-        and await asyncio.to_thread(verify_password, body.password, user_identity.password_hash)
-    )
+    if user_identity is None:
+        # Stesso lavoro di una verifica reale: senza, il 401 dell'email sconosciuta
+        # arriverebbe in pochi ms e quello dell'email registrata in centinaia.
+        await asyncio.to_thread(verify_password, body.password, DUMMY_PASSWORD_HASH)
+        password_matches = False
+    else:
+        password_matches = await asyncio.to_thread(
+            verify_password, body.password, user_identity.password_hash
+        )
     if not password_matches or user_identity is None:
         if user_identity is not None:
             await _record_login_failure(user_identity, request, "invalid_password")
@@ -203,17 +214,20 @@ async def login(body: LoginIn, request: Request) -> TokenPairOut:
     tenant_id = uuid.UUID(user_identity.tenant_id)
     async with tenant_session(tenant_id) as session:
         tenant_result = await session.execute(select(Tenant).where(Tenant.id == tenant_id))
-        tenant = tenant_result.scalar_one()
+        tenant_active = tenant_result.scalar_one().status == "active"
 
-        if tenant.status != "active":
-            await _record_login_failure(user_identity, request, "tenant_suspended")
-            raise Problem(
-                status=401,
-                type=PROBLEM_TYPES["unauthorized"],
-                title="Unauthorized",
-                detail="Invalid credentials.",
-            )
+    if not tenant_active:
+        # Fuori dalla sessione sopra: l'audit apre una connessione sua, e tenerne una
+        # in attesa di un'altra esaurirebbe il pool sotto carico.
+        await _record_login_failure(user_identity, request, "tenant_suspended")
+        raise Problem(
+            status=401,
+            type=PROBLEM_TYPES["unauthorized"],
+            title="Unauthorized",
+            detail="Invalid credentials.",
+        )
 
+    async with tenant_session(tenant_id) as session:
         user_result = await session.execute(
             select(User).where(User.id == uuid.UUID(user_identity.id))
         )

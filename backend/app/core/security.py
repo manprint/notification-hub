@@ -23,6 +23,11 @@ class AccessClaims(BaseModel):
 
 _ph = PasswordHasher()
 
+# Hash di una password casuale: il login lo verifica quando l'email non esiste,
+# cosi i due rami spendono lo stesso tempo e il 401 uniforme non rivela se un
+# account esiste (spec 10.2).
+DUMMY_PASSWORD_HASH = _ph.hash(secrets.token_urlsafe(32))
+
 
 def hash_password(password: str) -> str:
     return _ph.hash(password)
