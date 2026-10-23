@@ -546,7 +546,7 @@ describe("NotificationsPage", () => {
     renderWithProviders(<NotificationsPage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Errore interno/)).toBeInTheDocument();
+      expect(screen.getByText("Errore interno nel caricamento dei gruppi")).toBeInTheDocument();
     });
   });
 

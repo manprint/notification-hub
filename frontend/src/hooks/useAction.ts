@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { asApiError } from "../api/client";
 import type { ApiError } from "../api/types";
 import type { SaveState } from "../components/SaveIndicator";
+import { problemMessage } from "../lib/problemMessages";
 import { useToast } from "./useToast";
 
 interface RunOptions {
@@ -62,10 +64,10 @@ export function useAction() {
         if (options.success) toast.success(options.success);
         return true;
       } catch (err) {
-        const apiError = err as ApiError;
+        const apiError = asApiError(err);
         batchFailed.current = true;
         setError(apiError);
-        toast.error(apiError.detail || apiError.title || "Operazione non riuscita.");
+        toast.error(problemMessage(apiError));
         return false;
       } finally {
         pending.current -= 1;

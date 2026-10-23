@@ -122,4 +122,24 @@ describe("AcceptInvitePage", () => {
     expect(await screen.findByText(/almeno 12 caratteri\./)).toBeInTheDocument();
     expect(chiamate).toBe(0);
   });
+
+  it("un invito scaduto si dice in italiano, nel banner e nell'avviso", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.post("/api/v1/invitations/accept", () =>
+        HttpResponse.json(
+          { type: "/problems/unauthorized", title: "Unauthorized", status: 401, detail: "Invitation expired." },
+          { status: 401, headers: { "Content-Type": "application/problem+json" } },
+        ),
+      ),
+    );
+    renderWithProviders(<AcceptInvitePage />);
+    const password = "abcdefghijkl";
+    await user.type(screen.getByLabelText("Scegli una password"), password);
+    await user.type(screen.getByLabelText("Ripeti la password"), password);
+    await user.click(screen.getByRole("button", { name: "Attiva account" }));
+
+    expect(await screen.findAllByText(/Invito scaduto: chiedine uno nuovo\./)).toHaveLength(2);
+    expect(screen.queryByText(/Invitation expired/)).toBeNull();
+  });
 });

@@ -35,14 +35,45 @@ describe("ErrorBanner", () => {
     render(<ErrorBanner error={errore422} />);
 
     const banner = screen.getByRole("alert");
-    expect(banner).toHaveTextContent("Request validation failed.");
+    expect(banner).toHaveTextContent("Alcuni campi non sono validi.");
     const voci = within(banner).getAllByRole("listitem");
     expect(voci).toHaveLength(2);
-    // "body" dice solo dove stava il campo: si mostra il nome del campo.
+    // "body" dice solo dove stava il campo: si mostra il nome del campo, e il
+    // motivo di pydantic è in italiano.
     expect(voci[0]).toHaveTextContent(
-      "rate_limit_per_min: Input should be less than or equal to 2147483647",
+      "rate_limit_per_min: Il valore deve essere al massimo 2147483647.",
     );
-    expect(voci[1]).toHaveTextContent("channel.name: Field required");
+    expect(voci[1]).toHaveTextContent("channel.name: Campo obbligatorio.");
+  });
+
+  it("T-ERR4 traduce in italiano i messaggi noti del backend, non l'inglese", () => {
+    render(
+      <ErrorBanner
+        error={{
+          status: 401,
+          type: "/problems/unauthorized",
+          title: "Unauthorized",
+          detail: "Invalid credentials.",
+          extra: {},
+        }}
+      />,
+    );
+
+    const banner = screen.getByRole("alert");
+    expect(banner).toHaveTextContent("Email o password non corrette.");
+    expect(banner).not.toHaveTextContent("Invalid credentials");
+  });
+
+  it("T-ERR5 un dettaglio non tradotto resta visibile, dopo una frase in italiano", () => {
+    render(
+      <ErrorBanner
+        error={{ status: 500, type: "/problems/internal-error", title: "Internal", detail: "Disco pieno.", extra: {} }}
+      />,
+    );
+
+    const banner = screen.getByRole("alert");
+    expect(banner).toHaveTextContent("Errore interno del server: riprova tra poco.");
+    expect(within(banner).getByText("Disco pieno.")).toBeInTheDocument();
   });
 
   it("T-ERR2 senza dettagli mostra solo il messaggio", () => {

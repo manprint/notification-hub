@@ -67,7 +67,7 @@ describe("LoginPage", () => {
     renderWithProviders(<LoginPage />);
     await compilaEInvia(user);
 
-    expect(await screen.findByText(/Invalid credentials/)).toBeInTheDocument();
+    expect(await screen.findByText(/Email o password non corrette/)).toBeInTheDocument();
     expect(getRefreshToken()).toBeNull();
     // Il pulsante torna disponibile: un errore non deve lasciare il form bloccato.
     expect(screen.getByRole("button", { name: "Accedi" })).toBeEnabled();
