@@ -489,6 +489,35 @@ async def test_priorita_assegnata_e_riordino(api_client, two_tenants, owner_toke
     assert [r["priority"] for r in riordino.json()] == [10, 20]
 
 
+@pytest.mark.e2e
+async def test_riordino_preset_rifiuta_gli_id_ripetuti_senza_toccare_le_priorita(
+    api_client, two_tenants, owner_token
+):
+    """Come per i receiver: stesso insieme di id, ma una regola due volte, deve essere 422."""
+    tenant_id, _ = two_tenants
+    headers = await _headers(api_client, tenant_id, owner_token)
+    preset = await _new_preset(
+        api_client,
+        headers,
+        f"p-{uuid.uuid4().hex[:6]}",
+        [
+            {"pattern": "ALFA", "severity": "error"},
+            {"pattern": "BETA", "severity": "warning"},
+        ],
+    )
+    url = f"/api/v1/severity-presets/{preset['id']}"
+    prima = (await api_client.get(url, headers=headers)).json()["rules"]
+    alfa, beta = prima[0]["id"], prima[1]["id"]
+
+    resp = await api_client.put(
+        f"{url}/rules/order",
+        json={"rule_ids": [alfa, beta, alfa]},
+        headers=headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert (await api_client.get(url, headers=headers)).json()["rules"] == prima
+
+
 # --- permessi e isolamento -------------------------------------------------
 
 
