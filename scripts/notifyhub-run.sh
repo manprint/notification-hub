@@ -60,7 +60,7 @@
 
 set -uo pipefail
 
-VERSION="1.5.1"
+VERSION="1.5.2"
 
 # --- configurazione --------------------------------------------------------
 # Le due righe qui sotto sono le uniche da toccare per mettere in funzione lo
@@ -351,10 +351,45 @@ trap 'rm -f "$output_file"' EXIT
 # interrotta; il wrapper aspetta la fine del comando prima di inviare.
 INTERRUPTED=""
 CHILD_PID=""
+# I figli diretti di un PID: pgrep dove c'e', altrimenti il ppid da /proc
+# (campo 4 di stat, letto dopo l'ultima parentesi perche' il nome puo'
+# contenere spazi e parentesi).
+child_pids() {
+    if command -v pgrep >/dev/null 2>&1; then
+        pgrep -P "$1" 2>/dev/null || true
+        return
+    fi
+    local parent="$1" stat line rest
+    for stat in /proc/[0-9]*/stat; do
+        read -r line <"$stat" 2>/dev/null || continue
+        rest="${line##*) }"
+        set -- $rest
+        [ "${2:-}" = "$parent" ] || continue
+        line="${stat#/proc/}"
+        echo "${line%/stat}"
+    done
+}
+descendant_pids() {
+    local child
+    for child in $(child_pids "$1"); do
+        echo "$child"
+        descendant_pids "$child"
+    done
+}
+# SIGTERM al comando e a tutti i suoi discendenti. Senza --timeout il comando
+# non ha un process group suo: colpire solo il figlio diretto lasciava orfani
+# i nipoti (lo script avvolto muore, il suo sleep o rsync continua). L'elenco
+# si raccoglie prima di inviare il segnale, finche' i legami padre-figlio
+# esistono ancora.
+kill_tree() {
+    local pids
+    pids="$(descendant_pids "$1")"
+    kill -TERM "$1" $pids 2>/dev/null || true
+}
 on_signal() {
     INTERRUPTED="$1"
     if [ -n "$CHILD_PID" ]; then
-        kill -TERM "$CHILD_PID" 2>/dev/null || true
+        kill_tree "$CHILD_PID"
     fi
 }
 trap 'on_signal SIGTERM' TERM
@@ -372,7 +407,7 @@ fi
 CHILD_PID=$!
 # Un segnale arrivato prima che il PID fosse noto va inoltrato adesso.
 if [ -n "$INTERRUPTED" ]; then
-    kill -TERM "$CHILD_PID" 2>/dev/null || true
+    kill_tree "$CHILD_PID"
 fi
 
 # wait torna subito a ogni segnale intercettato dal trap: si ripete finche' il
@@ -510,6 +545,12 @@ curl_args=(
 # corpo troppo grande) fallirebbe identico. Lo stesso X-Request-Id su ogni
 # tentativo rende la ripetizione sicura: se il primo invio era arrivato e si e'
 # persa solo la risposta, il server risponde col risultato gia' registrato.
+# Un segnale durante l'invio (systemd che ferma il servizio) chiude i ritentativi:
+# il tentativo in corso finisce, i successivi non partono. L'attesa gira in
+# background perche' wait, a differenza di sleep in primo piano, torna subito
+# al segnale.
+SEND_STOP=""
+trap 'SEND_STOP=1' TERM INT HUP
 attempt=0
 while :; do
     attempt=$((attempt + 1))
@@ -527,15 +568,20 @@ while :; do
         000|5??|429|409) retryable=1 ;;
         *) retryable=0 ;;
     esac
-    if [ "$retryable" -eq 0 ] || [ "$attempt" -gt "$RETRIES" ]; then
+    if [ "$retryable" -eq 0 ] || [ "$attempt" -gt "$RETRIES" ] || [ -n "$SEND_STOP" ]; then
         break
     fi
     # 2, 4, 8... secondi, al massimo 30: pochi tentativi ravvicinati coprono un
     # riavvio o un errore di rete senza tenere occupato il job a lungo.
-    delay=$((1 << attempt))
-    [ "$delay" -le 30 ] || delay=30
+    # Lo shift si ferma prima di 1 << 63, che in bash diventa negativo.
+    if [ "$attempt" -ge 5 ]; then delay=30; else delay=$((1 << attempt)); fi
     echo "notifyhub-run: invio fallito (curl=${curl_rc} http=${http_code}), nuovo tentativo fra ${delay}s" >&2
-    sleep "$delay"
+    sleep "$delay" &
+    wait $! 2>/dev/null || true
+    if [ -n "$SEND_STOP" ]; then
+        kill $! 2>/dev/null || true
+        break
+    fi
 done
 
 if [ "$curl_rc" -ne 0 ] || [ "${http_code:0:1}" != "2" ]; then
