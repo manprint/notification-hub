@@ -8,6 +8,7 @@ import type {
   ReceiverOut,
 } from "../api/types";
 import { useAction } from "../hooks/useAction";
+import { useCursorPages } from "../hooks/useCursorPages";
 import { type NotificationFilters, useNotifications } from "../hooks/useNotifications";
 import { useSession } from "../hooks/useSession";
 import { formatBytes, formatDate, formatTime, severityLabel } from "../lib/format";
@@ -25,7 +26,7 @@ export type ReceiverTableFilters = Omit<NotificationFilters, "receiver_id">;
  * Le notifiche di UN receiver del gruppo.
  *
  * Una tabella per receiver e non una tabella sola raggruppata a video: ogni
- * tabella ha il proprio cursore e il proprio "Carica altri", quindi la prima
+ * tabella ha il proprio cursore e le proprie pagine, quindi la prima
  * pagina di un receiver e' davvero la sua. Con un cursore unico di gruppo, un
  * receiver molto attivo riempirebbe la pagina e gli altri resterebbero vuoti
  * pur avendo notifiche piu' vecchie da mostrare.
@@ -53,7 +54,18 @@ export default function ReceiverNotificationsTable({
   const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useNotifications({ ...filters, receiver_id: receiver.id });
 
-  const rows = data?.pages.flatMap((page: NotificationListOut) => page.notifications) ?? [];
+  // La pagina di ogni receiver sta nell'URL con la sua chiave: tornando dal
+  // dettaglio ciascuna tabella riapre la pagina che mostrava.
+  const { current, pagination } = useCursorPages<NotificationListOut>(
+    {
+      pages: data?.pages,
+      hasNextPage,
+      isFetchingNextPage,
+      fetchNextPage,
+    },
+    `page_${receiver.id}`,
+  );
+  const rows = current?.notifications ?? [];
 
   // Solo le notifiche di questo receiver: le tabelle degli altri restano com'erano.
   // La chiave parziale `{ receiver_id }` le abbraccia tutte (pagine comprese).
@@ -84,6 +96,7 @@ export default function ReceiverNotificationsTable({
       async () => {
         await apiPatch(`/api/v1/notifications/${id}`, { verified });
         await invalidaNotifiche();
+        await queryClient.invalidateQueries({ queryKey: ["stats-summary"] });
       },
       {
         name: `verified:${id}`,
@@ -257,9 +270,8 @@ export default function ReceiverNotificationsTable({
         rowKey={(n) => n.id}
         loading={isLoading}
         error={error}
-        hasMore={hasNextPage}
-        loadingMore={isFetchingNextPage}
-        onLoadMore={() => void fetchNextPage()}
+        pagination={pagination}
+        caption={`Notifiche di ${receiver.name}`}
         emptyMessage="Nessuna notifica trovata."
       />
     </section>

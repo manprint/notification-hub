@@ -1,14 +1,17 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { apiGet, apiPost } from "../api/client";
 import type {
   ApiError,
+  BulkVerifyOut,
   GroupOut,
   NotificationStatus,
   ReceiverOut,
   Severity,
   SeveritySource,
 } from "../api/types";
+import ConfirmDialog from "../components/ConfirmDialog";
 import EmptyState from "../components/EmptyState";
 import ErrorBanner from "../components/ErrorBanner";
 import GroupList from "../components/GroupList";
@@ -16,10 +19,11 @@ import ReceiverNotificationsTable, {
   type ReceiverTableFilters,
 } from "../components/ReceiverNotificationsTable";
 import { useAction } from "../hooks/useAction";
+import { isPageParam } from "../hooks/useCursorPages";
 import { useDebounced } from "../hooks/useDebounced";
 import { useSession } from "../hooks/useSession";
 import { severityLabel } from "../lib/format";
-import { MEMBER_ROLES, hasRole } from "../lib/roles";
+import { ADMIN_ROLES, MEMBER_ROLES, hasRole } from "../lib/roles";
 import { SEVERITY_SOURCE_LABELS } from "../lib/severitySource";
 
 const SEVERITIES: Severity[] = ["critical", "error", "warning", "info", "debug"];
@@ -37,6 +41,12 @@ const SOURCES: SeveritySource[] = [
   "recovered",
 ];
 
+function dropPageParams(params: URLSearchParams) {
+  for (const key of [...params.keys()]) {
+    if (isPageParam(key)) params.delete(key);
+  }
+}
+
 export default function NotificationsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   // La ricerca sta nell'URL come gli altri filtri: il campo ne è lo specchio,
@@ -48,6 +58,8 @@ export default function NotificationsPage() {
   const { busy, error: actionError, run } = useAction();
   const queryClient = useQueryClient();
   const { role } = useSession();
+  // Verifica in blocco in attesa di conferma: true = verifica, false = toglie.
+  const [pendingVerify, setPendingVerify] = useState<boolean | null>(null);
 
   const groupId = searchParams.get("group_id") ?? undefined;
   const receiverId = searchParams.get("receiver_id") ?? undefined;
@@ -61,13 +73,15 @@ export default function NotificationsPage() {
   const verified = verifiedParam === null ? undefined : verifiedParam === "true";
 
   // Il testo cercato si riscrive a ogni tasto con replace: niente voce di
-  // cronologia per ogni lettera, e la vista resta condivisibile.
+  // cronologia per ogni lettera, e la vista resta condivisibile. Un filtro
+  // nuovo riporta tutte le tabelle alla prima pagina.
   function setFilter(key: string, value: string, replace = false) {
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
         if (value) next.set(key, value);
         else next.delete(key);
+        dropPageParams(next);
         return next;
       },
       { replace },
@@ -159,8 +173,35 @@ export default function NotificationsPage() {
     );
   }
 
+  // Verificare in blocco e' da admin (backend: require_admin).
+  const canBulkVerify = hasRole(role, ADMIN_ROLES);
+
+  async function bulkVerify(markVerified: boolean) {
+    await run(
+      async () => {
+        await apiPost<BulkVerifyOut>("/api/v1/notifications/bulk-verify", {
+          ...filters,
+          receiver_id: receiverId,
+          mark_verified: markVerified,
+        });
+        await queryClient.invalidateQueries({
+          queryKey: receiverId ? ["notifications", { receiver_id: receiverId }] : ["notifications"],
+        });
+        await queryClient.invalidateQueries({ queryKey: ["stats-summary"] });
+      },
+      {
+        name: markVerified ? "verify" : "unverify",
+        success: markVerified
+          ? "Notifiche segnate come verificate."
+          : "Verifica rimossa dalle notifiche.",
+      },
+    );
+    setPendingVerify(null);
+  }
+
   function selectGroup(groupId: string) {
     const next = new URLSearchParams(searchParams);
+    dropPageParams(next);
     next.set("group_id", groupId);
     // Il receiver appartiene al gruppo che si sta lasciando: tenerlo darebbe
     // una lista vuota senza spiegare perche'.
@@ -200,16 +241,38 @@ export default function NotificationsPage() {
           Notifiche <span className="title-separator">/</span>{" "}
           <span className="title-context">{currentGroup?.name ?? "Gruppo"}</span>
         </h1>
-        {canBulkRead && (
+        {(canBulkRead || canBulkVerify) && (
           <div className="page-header-actions">
-            <button
-              className="primary"
-              disabled={busy !== null || nothingToMark}
-              title={nothingToMark ? "Il filtro mostra solo notifiche già lette" : undefined}
-              onClick={() => void bulkRead()}
-            >
-              {busy === "bulk" ? "Aggiornamento…" : "Segna tutte come lette"}
-            </button>
+            {canBulkVerify && (
+              <>
+                <button
+                  disabled={busy !== null || verified === true}
+                  title={verified === true ? "Il filtro mostra solo notifiche già verificate" : undefined}
+                  onClick={() => setPendingVerify(true)}
+                >
+                  {busy === "verify" ? "Aggiornamento…" : "Segna tutte come verificate"}
+                </button>
+                <button
+                  disabled={busy !== null || verified === false}
+                  title={
+                    verified === false ? "Il filtro mostra solo notifiche non verificate" : undefined
+                  }
+                  onClick={() => setPendingVerify(false)}
+                >
+                  {busy === "unverify" ? "Aggiornamento…" : "Segna tutte come non verificate"}
+                </button>
+              </>
+            )}
+            {canBulkRead && (
+              <button
+                className="primary"
+                disabled={busy !== null || nothingToMark}
+                title={nothingToMark ? "Il filtro mostra solo notifiche già lette" : undefined}
+                onClick={() => void bulkRead()}
+              >
+                {busy === "bulk" ? "Aggiornamento…" : "Segna tutte come lette"}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -319,6 +382,24 @@ export default function NotificationsPage() {
           )}
         </div>
       </div>
+
+      {pendingVerify !== null && (
+        <ConfirmDialog
+          title={
+            pendingVerify ? "Segnare tutte come verificate?" : "Segnare tutte come non verificate?"
+          }
+          confirmLabel={pendingVerify ? "Segna come verificate" : "Segna come non verificate"}
+          destructive={!pendingVerify}
+          onConfirm={() => bulkVerify(pendingVerify)}
+          onCancel={() => setPendingVerify(null)}
+        >
+          <p>
+            {pendingVerify ? "Verranno segnate come verificate" : "Verrà tolta la verifica a"}{" "}
+            {receiverName ? `tutte le notifiche di ${receiverName}` : "tutte le notifiche del gruppo"}
+            {filtriAttivi > 0 ? " che corrispondono ai filtri attivi" : ""}.
+          </p>
+        </ConfirmDialog>
+      )}
 
       {receiversLoading && <EmptyState message="Caricamento…" />}
       {!receiversLoading && !receiversError && visibleReceivers.length === 0 && (

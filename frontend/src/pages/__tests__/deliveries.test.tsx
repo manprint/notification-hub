@@ -70,7 +70,7 @@ describe("DeliveriesPage leggibilità", () => {
     });
 
     // canale di destinazione e receiver di origine, non solo id opachi
-    expect(screen.getAllByText("Slack #ops").length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Slack #ops")).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Backup notturno/).length).toBeGreaterThan(0);
 
     // si arriva alla notifica inoltrata, senza leggerne il corpo qui
@@ -203,7 +203,7 @@ describe("DeliveriesPage paginazione", () => {
 
   // Contratto C2: la lista nuda si fermava alle prime righe senza dirlo; ora e'
   // una pagina a cursore, e il cursore si ripassa cosi' com'e'.
-  it("«Carica altri» ripassa il cursore opaco e accoda la pagina successiva", async () => {
+  it("«Successiva» ripassa il cursore opaco e mostra la pagina seguente, «Precedente» torna indietro", async () => {
     const richieste: URLSearchParams[] = [];
     server.use(
       http.get("/api/v1/deliveries", ({ request }) => {
@@ -223,15 +223,23 @@ describe("DeliveriesPage paginazione", () => {
     );
     expect(screen.queryByText("Inviata", { selector: ".status-pill" })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Carica altri" }));
+    expect(screen.getByRole("button", { name: "‹ Precedente" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Successiva ›" }));
 
     expect(await screen.findByText("Inviata", { selector: ".status-pill" })).toBeInTheDocument();
-    // La prima pagina resta: la seconda si accoda.
-    expect(screen.getByText("Morta", { selector: ".status-pill" })).toBeInTheDocument();
+    // Una pagina per volta: la prima non resta sotto la seconda.
+    expect(screen.queryByText("Morta", { selector: ".status-pill" })).not.toBeInTheDocument();
+    expect(screen.getByText("Pagina 2")).toBeInTheDocument();
     expect(richieste[0].get("cursor")).toBeNull();
-    expect(richieste[0].get("limit")).toBe("100");
+    expect(richieste[0].get("limit")).toBe("20");
     expect(richieste[1].get("cursor")).toBe("opaco==");
-    expect(screen.queryByRole("button", { name: "Carica altri" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Successiva ›" })).toBeDisabled();
+
+    // Indietro si torna alla pagina in cache, senza una richiesta nuova.
+    await user.click(screen.getByRole("button", { name: "‹ Precedente" }));
+    expect(await screen.findByText("Morta", { selector: ".status-pill" })).toBeInTheDocument();
+    expect(screen.getByText("Pagina 1")).toBeInTheDocument();
+    expect(richieste).toHaveLength(2);
   });
 
   it("cambiare un filtro riparte dalla prima pagina", async () => {
@@ -249,7 +257,7 @@ describe("DeliveriesPage paginazione", () => {
     const user = userEvent.setup();
     renderWithProviders(<DeliveriesPage />);
 
-    await user.click(await screen.findByRole("button", { name: "Carica altri" }));
+    await user.click(await screen.findByRole("button", { name: "Successiva ›" }));
     await screen.findByText("Inviata", { selector: ".status-pill" });
 
     await user.selectOptions(screen.getByLabelText("Stato della consegna"), "dead");

@@ -1059,6 +1059,14 @@ fieldset.form-row {
   margin-top: var(--space-3);
 }
 
+.table-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
 /* --- segnali ------------------------------------------------------------- */
 
 .severity-badge {

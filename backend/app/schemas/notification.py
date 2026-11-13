@@ -138,6 +138,17 @@ class BulkReadOut(BaseModel):
     marked_read: int
 
 
+class BulkVerifyIn(BulkReadIn):
+    """Stessi filtri di bulk-read; `mark_verified` e' il valore da scrivere,
+    distinto dal filtro `verified` che restringe le righe toccate."""
+
+    mark_verified: bool
+
+
+class BulkVerifyOut(BaseModel):
+    updated: int
+
+
 class ReceiverStatsOut(BaseModel):
     """Riga per receiver dentro un gruppo del riepilogo.
 
@@ -150,6 +161,7 @@ class ReceiverStatsOut(BaseModel):
     status: str
     total: int
     unread_count: int
+    unverified_count: int = 0
 
 
 class GroupStatsOut(BaseModel):
@@ -161,6 +173,7 @@ class GroupStatsOut(BaseModel):
     group_name: str
     total: int
     unread_count: int
+    unverified_count: int = 0
     receivers: list[ReceiverStatsOut] = []
 
 

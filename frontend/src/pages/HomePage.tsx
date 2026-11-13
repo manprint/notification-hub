@@ -135,6 +135,7 @@ export default function HomePage() {
                 <th>Gruppo / Receiver</th>
                 <th className="num">Totale</th>
                 <th className="num">Non lette</th>
+                <th className="num">Non verificate</th>
               </tr>
             </thead>
             <tbody>
@@ -167,6 +168,7 @@ export default function HomePage() {
                       </td>
                       <td className="num">{group.total}</td>
                       <td className="num">{group.unread_count}</td>
+                      <td className="num">{group.unverified_count ?? 0}</td>
                     </tr>
                     {open &&
                       receivers.map((receiver) => (
@@ -186,6 +188,7 @@ export default function HomePage() {
                           </td>
                           <td className="num">{receiver.total}</td>
                           <td className="num">{receiver.unread_count}</td>
+                          <td className="num">{receiver.unverified_count ?? 0}</td>
                         </tr>
                       ))}
                   </Fragment>

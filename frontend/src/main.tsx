@@ -11,6 +11,9 @@ const queryClient = new QueryClient({
     queries: {
       retry: false,
       refetchOnWindowFocus: false,
+      // Navigando avanti e indietro i dati appena letti si riusano invece di
+      // riscaricarli a ogni montaggio; le scritture invalidano le chiavi toccate.
+      staleTime: 30_000,
     },
   },
 });

@@ -1,4 +1,4 @@
-import { type InfiniteData, useInfiniteQuery } from "@tanstack/react-query";
+import { type InfiniteData, keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { apiGet } from "../api/client";
 import type {
   ApiError,
@@ -7,6 +7,7 @@ import type {
   Severity,
   SeveritySource,
 } from "../api/types";
+import { PAGE_SIZE } from "./useCursorPages";
 
 export interface NotificationFilters {
   group_id?: string;
@@ -39,10 +40,13 @@ export function useNotifications(
       apiGet<NotificationListOut>("/api/v1/notifications", {
         ...filters,
         cursor: pageParam,
-        limit: 20,
+        limit: PAGE_SIZE,
       }),
     initialPageParam: undefined,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     enabled: options?.enabled ?? true,
+    // Cambiando filtro la tabella resta a video finche' arriva la risposta,
+    // invece di lampeggiare su "Caricamento…".
+    placeholderData: keepPreviousData,
   });
 }

@@ -108,7 +108,7 @@ describe("NotificationsPage", () => {
     expect(screen.queryByDisplayValue("Tutti i gruppi")).not.toBeInTheDocument();
   });
 
-  it("T-UI7 test_carica_altri_usa_il_cursore: il secondo caricamento usa next_cursor e accoda senza duplicati", async () => {
+  it("T-UI7 paginazione: «Successiva» usa next_cursor e mostra solo la pagina seguente", async () => {
     renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
 
     await waitFor(() => {
@@ -117,12 +117,19 @@ describe("NotificationsPage", () => {
     expect(linkApri("n3")).toBeNull();
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Carica altri" }));
+    await user.click(screen.getByRole("button", { name: "Successiva ›" }));
 
     await waitFor(() => {
       expect(linkApri("n3")).not.toBeNull();
     });
-    expect(document.querySelectorAll('a[href="/notifications/n1"]')).toHaveLength(1);
+    expect(linkApri("n1")).toBeNull();
+    expect(screen.getByText("Pagina 2")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "‹ Precedente" }));
+    await waitFor(() => {
+      expect(linkApri("n1")).not.toBeNull();
+    });
+    expect(linkApri("n3")).toBeNull();
   });
 
   it("T-UI8 test_nota_sulla_ricerca_presente: la nota dichiara la ricerca sull'intero contenuto", async () => {
@@ -766,7 +773,7 @@ describe("NotificationsPage", () => {
     expect(screen.queryByRole("link", { name: "Backup notturno" })).not.toBeInTheDocument();
   });
 
-  it("T-SPLIT3 'Carica altri' di una tabella non tocca le altre", async () => {
+  it("T-SPLIT3 la pagina di una tabella non tocca le altre", async () => {
     server.use(
       http.get("/api/v1/groups/:groupId/receivers", () =>
         HttpResponse.json([
@@ -813,8 +820,8 @@ describe("NotificationsPage", () => {
       expect(screen.getAllByRole("table")).toHaveLength(2);
     });
     // Solo la tabella di r1 ha una pagina successiva: il pulsante e' uno solo.
-    const caricaAltri = screen.getByRole("button", { name: "Carica altri" });
-    await user.click(caricaAltri);
+    const successiva = screen.getByRole("button", { name: "Successiva ›" });
+    await user.click(successiva);
 
     await waitFor(() => {
       expect(linkApri("n3")).not.toBeNull();
@@ -982,5 +989,92 @@ describe("NotificationsPage", () => {
     expect(
       await screen.findByText("Notifiche del gruppo che corrispondono ai filtri segnate come lette."),
     ).toBeInTheDocument();
+  });
+});
+
+describe("NotificationsPage verifica in blocco e pagine", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    setRefreshToken("refresh-token-fixture");
+  });
+
+  it("l'admin segna tutte come verificate, con conferma e con i filtri della vista", async () => {
+    let body: Record<string, unknown> | null = null;
+    server.use(
+      http.post("/api/v1/notifications/bulk-verify", async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ updated: 2 });
+      }),
+    );
+    renderWithProviders(<NotificationsPage />, [
+      "/notifications?group_id=g1&receiver_id=r1&verified=false",
+    ]);
+    const user = userEvent.setup();
+
+    await screen.findByRole("table");
+    // Il filtro mostra solo le non verificate: toglierle la verifica non ha senso.
+    expect(
+      await screen.findByRole("button", { name: "Segna tutte come non verificate" }),
+    ).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Segna tutte come verificate" }));
+    expect(body).toBeNull();
+    await user.click(await screen.findByRole("button", { name: "Segna come verificate" }));
+
+    await waitFor(() => expect(body).not.toBeNull());
+    expect(body).toMatchObject({
+      group_id: "g1",
+      receiver_id: "r1",
+      verified: false,
+      mark_verified: true,
+    });
+    expect(await screen.findByText("Notifiche segnate come verificate.")).toBeInTheDocument();
+  });
+
+  it("il member non vede i pulsanti di verifica in blocco", async () => {
+    comeRuolo("member");
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1"]);
+
+    await screen.findAllByRole("button", { name: /Segna tutte come lette/ });
+    expect(
+      screen.queryByRole("button", { name: "Segna tutte come verificate" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Segna tutte come non verificate" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("la pagina nell'URL si riapre: le pagine precedenti si scaricano in fila", async () => {
+    const cursori: (string | null)[] = [];
+    server.use(
+      http.get("/api/v1/notifications", ({ request }) => {
+        const cursor = new URL(request.url).searchParams.get("cursor");
+        cursori.push(cursor);
+        if (cursor === "cursor-page-2") {
+          return HttpResponse.json({
+            notifications: [{ ...fixtureNotificationsPage1.notifications[0], id: "n3" }],
+            next_cursor: null,
+            unread_count: 1,
+          });
+        }
+        return HttpResponse.json(fixtureNotificationsPage1);
+      }),
+    );
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1&page_r1=2"]);
+
+    await waitFor(() => expect(linkApri("n3")).not.toBeNull());
+    expect(linkApri("n1")).toBeNull();
+    expect(screen.getByText("Pagina 2")).toBeInTheDocument();
+    expect(cursori).toEqual([null, "cursor-page-2"]);
+  });
+
+  it("cambiare un filtro riporta la tabella alla prima pagina", async () => {
+    renderWithProviders(<NotificationsPage />, ["/notifications?group_id=g1&page_r1=2"]);
+    const user = userEvent.setup();
+
+    await waitFor(() => expect(linkApri("n3")).not.toBeNull());
+    await user.selectOptions(screen.getByLabelText("Severity minima"), "info");
+
+    await waitFor(() => expect(linkApri("n1")).not.toBeNull());
+    expect(screen.queryByText("Pagina 2")).not.toBeInTheDocument();
   });
 });

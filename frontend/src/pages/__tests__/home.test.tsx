@@ -132,11 +132,11 @@ describe("HomePage", () => {
     await screen.findByRole("link", { name: "Backup" });
     // Stessa etichetta della colonna di Audit: "Gruppo / Receiver".
     expect(screen.getByRole("columnheader", { name: "Gruppo / Receiver" })).toBeInTheDocument();
-    for (const nome of ["Totale", "Non lette"]) {
+    for (const nome of ["Totale", "Non lette", "Non verificate"]) {
       expect(screen.getByRole("columnheader", { name: nome })).toHaveClass("num");
     }
     const riga = screen.getByRole("link", { name: "Backup" }).closest("tr") as HTMLElement;
-    expect(riga.querySelectorAll("td.num")).toHaveLength(2);
+    expect(riga.querySelectorAll("td.num")).toHaveLength(3);
   });
 
   it("il titolo Riepilogo c'e' anche mentre carica", () => {

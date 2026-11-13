@@ -134,6 +134,8 @@ ACTION_MARKED_UNREAD = "notification.marked_unread"
 ACTION_MARKED_VERIFIED = "notification.marked_verified"
 ACTION_MARKED_UNVERIFIED = "notification.marked_unverified"
 ACTION_BULK_MARKED_READ = "notification.bulk_marked_read"
+ACTION_BULK_MARKED_VERIFIED = "notification.bulk_marked_verified"
+ACTION_BULK_MARKED_UNVERIFIED = "notification.bulk_marked_unverified"
 ACTION_NOTIFICATION_DELETED = "notification.deleted"
 
 # Solo letture e verifiche: la cancellazione sta nell'audit ma non in questa vista.
@@ -143,6 +145,8 @@ NOTIFICATION_STATUS_ACTIONS = (
     ACTION_MARKED_VERIFIED,
     ACTION_MARKED_UNVERIFIED,
     ACTION_BULK_MARKED_READ,
+    ACTION_BULK_MARKED_VERIFIED,
+    ACTION_BULK_MARKED_UNVERIFIED,
 )
 
 ACTION_LOGIN = "auth.login"

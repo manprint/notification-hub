@@ -10,6 +10,7 @@ import {
   NOTIFICATION_STATUS_ACTIONS,
   actionLabel,
   affectedCount,
+  isBulkAction,
   endOfDay,
   shortLabel,
   startOfDay,
@@ -85,7 +86,7 @@ export default function AuditNotificationStatusPage() {
       // l'eliminazione receiver_id torna nullo. Un link a una notifica
       // cancellata porterebbe a un 404.
       render: (event) => {
-        if (event.action === "notification.bulk_marked_read") {
+        if (isBulkAction(event.action)) {
           return (
             <div className="cell-preview">
               <span>{`${affectedCount(event)} notifiche`}</span>

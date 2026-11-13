@@ -1,4 +1,10 @@
-import { type InfiniteData, useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  type InfiniteData,
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { apiGet, apiPost } from "../api/client";
 import type {
@@ -13,6 +19,7 @@ import ErrorBanner from "../components/ErrorBanner";
 import SeverityBadge from "../components/SeverityBadge";
 import StatusPill, { statusLabel } from "../components/StatusPill";
 import { useAction } from "../hooks/useAction";
+import { PAGE_SIZE, isPageParam, useCursorPages } from "../hooks/useCursorPages";
 import { useSession } from "../hooks/useSession";
 import { formatDate, formatDateTime, formatTime } from "../lib/format";
 import { MEMBER_ROLES, hasRole } from "../lib/roles";
@@ -43,8 +50,6 @@ function motivoStato(d: DeliveryOut): string {
   }
   return STATUS_HELP[d.status] ?? "stato non riconosciuto da questa versione";
 }
-
-const PAGE_SIZE = 100;
 
 // Canali che compaiono nelle consegne caricate, per il filtro del viewer. Se il
 // filtro attivo non ha righe, il canale selezionato resta comunque nella tendina.
@@ -92,9 +97,16 @@ export default function DeliveriesPage() {
         }),
       initialPageParam: undefined,
       getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+      placeholderData: keepPreviousData,
     });
 
-  const rows = data?.pages.flatMap((page) => page.deliveries) ?? [];
+  const { current, pagination } = useCursorPages<DeliveryListOut>({
+    pages: data?.pages,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  });
+  const rows = current?.deliveries ?? [];
 
   // La lista dei canali (URL mascherato, ultimo errore) e' riservata a member e
   // superiori: il viewer non la chiede, e filtra per i canali delle consegne caricate.
@@ -106,7 +118,7 @@ export default function DeliveriesPage() {
   });
   const opzioniCanale = canVedereCanali
     ? (channels ?? []).map((c) => ({ id: c.id, name: c.name }))
-    : opzioniCanaliDelleConsegne(rows, channelId);
+    : opzioniCanaliDelleConsegne(data?.pages.flatMap((page) => page.deliveries) ?? [], channelId);
   // Un canale nell'URL senza una voce in tendina (lista non caricata, canale
   // cancellato): la tendina non deve mostrare "Tutti i canali" mentre la lista
   // resta filtrata.
@@ -119,6 +131,7 @@ export default function DeliveriesPage() {
       const next = new URLSearchParams(prev);
       if (value) next.set(key, value);
       else next.delete(key);
+      for (const k of [...next.keys()]) if (isPageParam(k)) next.delete(k);
       return next;
     });
   }
@@ -129,7 +142,7 @@ export default function DeliveriesPage() {
         const aggiornata = await apiPost<DeliveryOut>(`/api/v1/deliveries/${id}/retry`);
         // La risposta dice com'è la consegna adesso: la riga si aggiorna nelle
         // pagine già caricate. Rileggerle tutte costava una richiesta per
-        // pagina ("Carica altri" ne accumula molte). Una riga che il filtro di
+        // pagina già vista. Una riga che il filtro di
         // stato non contiene più esce dalla lista.
         const liste = queryClient.getQueriesData<InfiniteData<DeliveryListOut>>({
           queryKey: ["deliveries"],
@@ -333,9 +346,7 @@ export default function DeliveriesPage() {
               ? "Nessuna consegna con questi filtri."
               : "Nessuna consegna trovata: nessuna notifica ha ancora superato la soglia di un canale."
           }
-          hasMore={hasNextPage}
-          onLoadMore={() => void fetchNextPage()}
-          loadingMore={isFetchingNextPage}
+          pagination={pagination}
         />
       </div>
     </div>

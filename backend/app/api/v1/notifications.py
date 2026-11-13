@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 from starlette.responses import StreamingResponse
 
-from app.api.deps import current_claims, db, require_member
+from app.api.deps import current_claims, db, require_admin, require_member
 from app.core.errors import PROBLEM_TYPES, Problem
 from app.core.security import AccessClaims
 from app.core.urls import public_base_url
@@ -25,6 +25,8 @@ from app.schemas.notification import (
     LIST_PREVIEW_CHARS,
     BulkReadIn,
     BulkReadOut,
+    BulkVerifyIn,
+    BulkVerifyOut,
     MarkStatusIn,
     NotificationDetailOut,
     NotificationListItemOut,
@@ -35,6 +37,8 @@ from app.schemas.notification import (
 )
 from app.services.audit import (
     ACTION_BULK_MARKED_READ,
+    ACTION_BULK_MARKED_UNVERIFIED,
+    ACTION_BULK_MARKED_VERIFIED,
     BULK_IDS_CAP,
     record_context_event,
 )
@@ -485,27 +489,85 @@ async def bulk_mark_read(
     marked_ids = [row[0] for row in result]
 
     if marked_ids:
-        # L'UPDATE di massa non passa dall'ORM: l'hook di audit non la vede e
-        # l'evento va scritto a mano.
-        context: dict[str, Any] = {
-            "filters": body.model_dump(mode="json", by_alias=True, exclude_none=True),
-            "count": len(marked_ids),
-        }
-        if len(marked_ids) <= BULK_IDS_CAP:
-            context["notification_ids"] = [str(notification_id) for notification_id in marked_ids]
-        else:
-            # Oltre il tetto l'elenco diventa una fotografia della coda dentro
-            # una colonna jsonb: restano filtri e conteggio, che dicono cosa e'
-            # successo senza gonfiare la riga.
-            context["notification_ids_truncated"] = True
-        await record_context_event(
-            session,
-            action=ACTION_BULK_MARKED_READ,
-            resource_type="notification",
-            context=context,
-        )
+        await _record_bulk_event(session, ACTION_BULK_MARKED_READ, body, marked_ids)
 
     return BulkReadOut(marked_read=len(marked_ids))
+
+
+async def _record_bulk_event(
+    session: AsyncSession, action: str, body: BulkReadIn, ids: list[uuid.UUID]
+) -> None:
+    """L'UPDATE di massa non passa dall'ORM: l'hook di audit non la vede e
+    l'evento va scritto a mano, uno solo per l'intera operazione."""
+    context: dict[str, Any] = {
+        "filters": body.model_dump(mode="json", by_alias=True, exclude_none=True),
+        "count": len(ids),
+    }
+    if len(ids) <= BULK_IDS_CAP:
+        context["notification_ids"] = [str(notification_id) for notification_id in ids]
+    else:
+        # Oltre il tetto l'elenco diventa una fotografia della coda dentro
+        # una colonna jsonb: restano filtri e conteggio, che dicono cosa e'
+        # successo senza gonfiare la riga.
+        context["notification_ids_truncated"] = True
+    await record_context_event(
+        session,
+        action=action,
+        resource_type="notification",
+        context=context,
+    )
+
+
+@router.post("/bulk-verify", response_model=BulkVerifyOut)
+async def bulk_mark_verified(
+    body: BulkVerifyIn,
+    claims: AccessClaims = Depends(require_admin),  # noqa: B008
+    session: AsyncSession = Depends(db, scope="function"),  # noqa: B008
+) -> BulkVerifyOut:
+    """Verifica (o la toglie) in blocco sulle righe dei filtri: riservata ad
+    admin e owner, perche' annulla in un colpo la revisione di altri."""
+    conditions: list = []
+    visible, _ = await _apply_filters(
+        conditions,
+        session,
+        claims,
+        group_id=body.group_id,
+        receiver_id=body.receiver_id,
+        severity_min=body.severity_min,
+        source=body.source,
+        verified=body.verified,
+        q=body.q,
+        from_=body.from_,
+        to=body.to,
+        write=True,
+    )
+    if not visible:
+        return BulkVerifyOut(updated=0)
+    if body.status is not None:
+        conditions.append(Notification.status == body.status)
+    # Solo le righe che cambiano davvero: chi le aveva gia' verificate resta
+    # l'autore della verifica.
+    conditions.append(Notification.verified.is_(not body.mark_verified))
+
+    result = await session.execute(
+        update(Notification)
+        .where(*conditions)
+        .values(
+            verified=body.mark_verified,
+            verified_by=uuid.UUID(claims.sub) if body.mark_verified else None,
+            verified_at=datetime.now(UTC) if body.mark_verified else None,
+        )
+        .returning(Notification.id)
+    )
+    updated_ids = [row[0] for row in result]
+
+    if updated_ids:
+        action = (
+            ACTION_BULK_MARKED_VERIFIED if body.mark_verified else ACTION_BULK_MARKED_UNVERIFIED
+        )
+        await _record_bulk_event(session, action, body, updated_ids)
+
+    return BulkVerifyOut(updated=len(updated_ids))
 
 
 @router.delete("/{notification_id}", status_code=204)

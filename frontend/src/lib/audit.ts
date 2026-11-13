@@ -9,6 +9,8 @@ export const ACTION_LABELS: Record<string, string> = {
   "notification.marked_verified": "Segnata come verificata",
   "notification.marked_unverified": "Verifica annullata",
   "notification.bulk_marked_read": "Segnate come lette in blocco",
+  "notification.bulk_marked_verified": "Segnate come verificate in blocco",
+  "notification.bulk_marked_unverified": "Verifica annullata in blocco",
   "notification.deleted": "Notifica eliminata",
   "auth.login": "Accesso",
   "auth.login_failed": "Accesso rifiutato",
@@ -23,7 +25,14 @@ export const NOTIFICATION_STATUS_ACTIONS = [
   "notification.marked_verified",
   "notification.marked_unverified",
   "notification.bulk_marked_read",
+  "notification.bulk_marked_verified",
+  "notification.bulk_marked_unverified",
 ];
+
+/** Le azioni in blocco: un evento solo per N notifiche, senza resource_id. */
+export function isBulkAction(action: string): boolean {
+  return action.startsWith("notification.bulk_");
+}
 
 /** Un'etichetta per ogni `resource_type` che il backend scrive: le chiavi di
  *  RESOURCE_SPECS in backend/app/services/audit.py, piu' "session" per login e

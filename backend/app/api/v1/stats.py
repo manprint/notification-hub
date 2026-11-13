@@ -86,6 +86,7 @@ async def stats_summary(
             Receiver.status,
             func.count(Notification.id),
             func.count(Notification.id).filter(Notification.status == NotificationStatus.UNREAD),
+            func.count(Notification.id).filter(Notification.verified.is_(False)),
         )
         .select_from(Group)
         .outerjoin(
@@ -113,6 +114,7 @@ async def stats_summary(
         receiver_status,
         total,
         unread,
+        unverified,
     ) in by_group_result.all():
         group_row = by_group_index.get(group_id)
         if group_row is None:
@@ -121,6 +123,7 @@ async def stats_summary(
                 group_name=group_name,
                 total=0,
                 unread_count=0,
+                unverified_count=0,
                 receivers=[],
             )
             by_group_index[group_id] = group_row
@@ -137,12 +140,14 @@ async def stats_summary(
                 else str(receiver_status),
                 total=total,
                 unread_count=unread,
+                unverified_count=unverified,
             )
         )
         # Il totale del gruppo e' la somma dei suoi receiver: una sola scansione
         # invece di una seconda query di aggregazione.
         group_row.total += total
         group_row.unread_count += unread
+        group_row.unverified_count += unverified
     by_group = list(by_group_index.values())
 
     since = datetime.now(UTC) - timedelta(hours=24)

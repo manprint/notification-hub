@@ -31,6 +31,7 @@ export const fixtureStatsSummary = {
       group_name: "Server Produzione",
       total: 10,
       unread_count: 5,
+      unverified_count: 7,
       receivers: [
         {
           receiver_id: "r1",
@@ -38,6 +39,7 @@ export const fixtureStatsSummary = {
           status: "active",
           total: 10,
           unread_count: 5,
+          unverified_count: 7,
         },
         {
           receiver_id: "r9",
@@ -45,12 +47,20 @@ export const fixtureStatsSummary = {
           status: "disabled",
           total: 0,
           unread_count: 0,
+          unverified_count: 0,
         },
       ],
     },
     // Nessun receiver (come in fixtureGroups): niente notifiche. Il vecchio
     // `total: 4` con `receivers: []` era impossibile.
-    { group_id: "g2", group_name: "Backup", total: 0, unread_count: 0, receivers: [] },
+    {
+      group_id: "g2",
+      group_name: "Backup",
+      total: 0,
+      unread_count: 0,
+      unverified_count: 0,
+      receivers: [],
+    },
   ],
   // Non piu' delle notifiche totali (10).
   notifications_last_24h: 4,
@@ -647,6 +657,8 @@ const NOTIFICATION_STATUS_ACTIONS = new Set([
   "notification.marked_verified",
   "notification.marked_unverified",
   "notification.bulk_marked_read",
+  "notification.bulk_marked_verified",
+  "notification.bulk_marked_unverified",
 ]);
 
 /** I filtri dell'audit come in backend/app/api/v1/audit.py (`_base_query`):
@@ -758,6 +770,7 @@ export const handlers = [
     return HttpResponse.json(base);
   }),
   http.post("/api/v1/notifications/bulk-read", () => HttpResponse.json({ marked_read: 0 })),
+  http.post("/api/v1/notifications/bulk-verify", () => HttpResponse.json({ updated: 0 })),
   http.get("/api/v1/receivers", () => HttpResponse.json([fixtureReceiver])),
   http.get("/api/v1/receivers/r1", () => HttpResponse.json(fixtureReceiver)),
   http.get("/api/v1/receivers/r1/severity-rules", () => HttpResponse.json(fixtureSeverityRules)),

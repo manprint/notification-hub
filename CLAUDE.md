@@ -34,6 +34,8 @@ make gates          # fmt-check + lint + types + test + test-deploy — run befo
 
 Single test file/case: `cd backend && pytest tests/unit/path/to/test_x.py::test_name -q`
 
+Backend venv must be Python 3.12 (a venv built with a newer Python breaks deps).
+
 Frontend:
 
 ```bash
@@ -110,6 +112,10 @@ Frontend (`frontend/src/`):
 - Page tests: `pages/__tests__/` (shared render helpers in `testUtils.tsx`). API client tests:
   `api/__tests__/`.
 - No native `<select multiple>` for multi-select UI — use checkbox lists instead.
+- Numbered table pages (20 rows) sit on cursor infinite queries via `hooks/useCursorPages.ts`;
+  page lives in the URL (`page` or `page_<id>`). Filter setters must drop page params
+  (`isPageParam`), not the tables themselves.
+- Bulk verify/unverify (`POST /api/v1/notifications/bulk-verify`) is admin+ only, in UI and API.
 
 ## Conventions
 

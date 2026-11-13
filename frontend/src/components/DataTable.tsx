@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { CursorPagination } from "../hooks/useCursorPages";
 import EmptyState from "./EmptyState";
 
 export interface DataTableColumn<T> {
@@ -23,10 +24,10 @@ interface DataTableProps<T> {
   hasMore?: boolean;
   onLoadMore?: () => void;
   loadingMore?: boolean;
+  /** Pagine numerate (useCursorPages): sostituisce "Carica altri". */
+  pagination?: CursorPagination;
 }
 
-// Paginazione a cursore soltanto: l'API non supporta la pagina per numero,
-// quindi qui non compare mai un controllo "pagina N".
 export default function DataTable<T>({
   columns,
   rows,
@@ -38,6 +39,7 @@ export default function DataTable<T>({
   hasMore,
   onLoadMore,
   loadingMore,
+  pagination,
 }: DataTableProps<T>) {
   if (loading) {
     return <EmptyState message="Caricamento…" />;
@@ -73,7 +75,24 @@ export default function DataTable<T>({
           ))}
         </tbody>
       </table>
-      {hasMore && (
+      {pagination && (pagination.hasPrev || pagination.hasNext) && (
+        <nav className="table-pager" aria-label={caption ? `Pagine: ${caption}` : "Pagine"}>
+          <button
+            disabled={!pagination.hasPrev || pagination.loading}
+            onClick={pagination.onPrev}
+          >
+            ‹ Precedente
+          </button>
+          <span aria-live="polite">Pagina {pagination.page}</span>
+          <button
+            disabled={!pagination.hasNext || pagination.loading}
+            onClick={pagination.onNext}
+          >
+            {pagination.loading ? "Caricamento…" : "Successiva ›"}
+          </button>
+        </nav>
+      )}
+      {!pagination && hasMore && (
         <div className="table-more">
           <button onClick={onLoadMore} disabled={loadingMore}>
             {loadingMore ? "Caricamento…" : "Carica altri"}

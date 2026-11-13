@@ -328,6 +328,10 @@ export interface NotificationListOut {
   unread_count: number;
 }
 
+export interface BulkVerifyOut {
+  updated: number;
+}
+
 export interface NotificationDetailOut {
   id: string;
   receiver_id: string;
@@ -358,6 +362,7 @@ export interface ReceiverStatsOut {
   status: ReceiverStatus;
   total: number;
   unread_count: number;
+  unverified_count?: number;
 }
 
 export interface GroupStatsOut {
@@ -365,6 +370,7 @@ export interface GroupStatsOut {
   group_name: string;
   total: number;
   unread_count: number;
+  unverified_count?: number;
   // Righe per receiver del gruppo, compresi quelli che non hanno mai scritto
   // (total 0). Opzionale: un backend precedente alla granularita' per receiver
   // non la manda.
